@@ -15,6 +15,12 @@ const MAPS = {
 		"players": 8,
 		"size": Vector2i(100, 100),
 	},
+	"res://source/match/maps/TerminalVelocityMap.tscn":
+	{
+		"name": "Terminal Velocity",
+		"players": 8,
+		"size": Vector2i(100, 100),
+	},
 }
 
 
@@ -128,6 +134,13 @@ class Units:
 		},
 	}
 	const DEFAULT_PROPERTIES = {
+		"res://source/match/units/Che.tscn":
+		{
+			"sight_range": 8.0,
+			"hp": 10,
+			"hp_max": 10,
+			"resources_max": 2,
+		},
 		"res://source/match/units/Drone.tscn":
 		{
 			"sight_range": 10.0,

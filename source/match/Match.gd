@@ -7,6 +7,7 @@ const Human = preload("res://source/match/players/human/Human.gd")
 
 const CommandCenter = preload("res://source/match/units/CommandCenter.tscn")
 const Drone = preload("res://source/match/units/Drone.tscn")
+const Che = preload("res://source/match/units/Che.tscn")
 const Worker = preload("res://source/match/units/Worker.tscn")
 
 @export var settings: Resource = null
@@ -26,30 +27,111 @@ var visible_players = null:
 @onready var _camera = $IsometricCamera3D
 @onready var _players = $Players
 @onready var _terrain = $Terrain
+@onready var _mqtt_manager = $MqttManager
+@onready var _http_request_manager = $HTTPRequestManager
 
-
-func _enter_tree():
-	assert(settings != null, "match cannot start without settings, see examples in tests/manual/")
-	assert(map != null, "match cannot start without map, see examples in tests/manual/")
-
+var _mqtt_connected = false
+var _mqtt_initialized = false
+var _selected_location = ""
+var _ignition_connected = false
 
 func _ready():
-	MatchSignals.setup_and_spawn_unit.connect(_setup_and_spawn_unit)
+	assert(settings != null, "match cannot start without settings, see examples in tests/manual/")
+	assert(map != null, "match cannot start without map, see examples in tests/manual/")
+	assert(_mqtt_manager != null, "match cannot start without MQTT broker ready to connect")
+	# Initialize MQTT connection
+	_mqtt_manager.connect_to_broker()
+
+	MatchSignals.broker_initialized.connect(continue_match_setup)
+	MatchSignals.che_list_received.connect(_on_che_list_received)
+	MatchSignals.block_list_received.connect(_on_block_list_received)
+	MatchSignals.container_visits_list_received.connect(_on_container_visit_received)
+	MatchSignals.selected_location_id_update.connect(_request_tos_initialization_data)
+	
+	#HTTP requests for initialization.
+	
 	_setup_subsystems_dependent_on_map()
+	
+func continue_match_setup():
 	_setup_players()
-	_setup_player_units()
+	# _setup_player_units()
 	visible_player = get_tree().get_nodes_in_group("players")[settings.visible_player]
 	_move_camera_to_initial_position()
+	
 	if settings.visibility == settings.Visibility.FULL:
 		fog_of_war.reveal()
+	
+func _request_tos_initialization_data(selected_location_id):
+	_http_request_manager.RequestCheList(selected_location_id)
+	_http_request_manager.RequestBlockList(selected_location_id)
+	_http_request_manager.RequestContainerVisitList(selected_location_id)
 
+func _on_che_list_received(che_data):
+	# print("Che data received:", che_data)
+	# Parse the text data into JSON
+	var json = JSON.new()
+	var error = json.parse(che_data)
+	if error == OK:
+		var parsed_data = json.get_data()
+		_setup_location_che(parsed_data)
+	else:
+		print("Error parsing CHE data: ", json.get_error_message())
 
-func _unhandled_input(event):
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		if Input.is_action_pressed("shift_selecting"):
-			return
-		MatchSignals.deselect_all_units.emit()
+func _setup_location_che(che_list):
+	# Ensure we have valid data
+	if not che_list or not che_list is Array:
+		print("Invalid CHE list data received")
+		return
+	
+	# Create a container for CHE units if it doesn't exist
+	var che_container = find_child("CHEUnits")
+	if not che_container:
+		che_container = Node3D.new()
+		che_container.name = "CHEUnits"
+		add_child(che_container)
+	
+	# Get the human player for CHE ownership
+	var human_player = _get_human_player()
+	if not human_player:
+		print("No human player found for CHE ownership")
+		return
+	
+	# Create CHE instances for each CHE in the list
+	for che_data in che_list:
+		# Create a new CHE instance
+		var che_instance = Che.instantiate()
 
+		# Set up the CHE's transform based on its position
+		var che_transform = Transform3D()
+		if "x_position" in che_data and "y_position" in che_data:
+			che_transform = che_transform.translated(Vector3(che_data.x_position, 0, che_data.y_position))
+		else:
+			# If no position data, place at a default position
+			che_transform = che_transform.translated(Vector3(0, 0, 0))
+		
+		# Set up the CHE with the transform and player
+		_setup_and_spawn_unit(che_instance, che_transform, human_player, false)
+		
+		# Initialize the CHE with miniTOS data
+		che_instance.initialize_from_data(che_data)
+		
+		# Add the CHE to the container
+		che_container.add_child(che_instance)
+		
+		# Emit signal for CHE creation
+		MatchSignals.unit_spawned.emit(che_instance)
+		
+		print("Created CHE: ", che_instance.name, " at position: ", che_instance.global_position)
+
+func _on_block_list_received(block_data):
+	# TODO: Implement Block creation logic
+	# print("Block data received:", block_data)
+	pass
+
+func _on_container_visit_received(container_data):
+	# TODO: Implement Container Visit creation logic
+	# print("Container data received:", container_data)
+	pass
 
 func _set_map(a_map):
 	assert(get_node_or_null("Map") == null, "map already set")
@@ -125,18 +207,17 @@ func _setup_player_units():
 			_spawn_player_units(
 				player, map.find_child("SpawnPoints").get_child(player_index).global_transform
 			)
-
-
+	
 func _spawn_player_units(player, spawn_transform):
 	_setup_and_spawn_unit(CommandCenter.instantiate(), spawn_transform, player, false)
 	_setup_and_spawn_unit(
-		Drone.instantiate(), spawn_transform.translated(Vector3(-2, 0, -2)), player
+		Che.instantiate(), spawn_transform.translated(Vector3(-2, 0, 3)), player
 	)
 	_setup_and_spawn_unit(
-		Worker.instantiate(), spawn_transform.translated(Vector3(-3, 0, 3)), player
+		Che.instantiate(), spawn_transform.translated(Vector3(-3, 0, 3)), player
 	)
 	_setup_and_spawn_unit(
-		Worker.instantiate(), spawn_transform.translated(Vector3(3, 0, 3)), player
+		Che.instantiate(), spawn_transform.translated(Vector3(3, 0, 3)), player
 	)
 
 
@@ -181,9 +262,15 @@ func _move_camera_to_player_units_crowd_pivot(player):
 	var player_units = get_tree().get_nodes_in_group("units").filter(
 		func(unit): return unit.player == player
 	)
-	assert(not player_units.is_empty(), "player must have at least one initial unit")
-	var crowd_pivot = Utils.Match.Unit.Movement.calculate_aabb_crowd_pivot_yless(player_units)
-	_camera.set_position_safely(crowd_pivot)
+	
+	if player_units.is_empty():
+		# If no units, center the camera on the map
+		var center_position = Vector3(100 / 2.0, 0, 100 / 2.0)
+		_camera.set_position_safely(center_position)
+	else:
+		# If units exist, center on their crowd pivot
+		var crowd_pivot = Utils.Match.Unit.Movement.calculate_aabb_crowd_pivot_yless(player_units)
+		_camera.set_position_safely(crowd_pivot)
 
 
 func _reveal_player_units(player):
@@ -202,3 +289,4 @@ func _conceal_player_units(player):
 		func(a_unit): return a_unit.player == player
 	):
 		unit.remove_from_group("revealed_units")
+

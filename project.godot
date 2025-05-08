@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="Open RTS"
+config/name="Open terminal"
 run/main_scene="res://source/Main.tscn"
 config/features=PackedStringArray("4.2", "Forward Plus")
 boot_splash/bg_color=Color(0, 0, 0, 1)

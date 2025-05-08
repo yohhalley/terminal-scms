@@ -55,6 +55,7 @@ func _change_state_to(new_state):
 	_enter_state(new_state)
 	_state = new_state
 	_state_locked = false
+	MatchSignals.unit_status_changed.emit(_unit._get_type(), State.find_key(_state))
 
 
 func _exit_state(_a_state):

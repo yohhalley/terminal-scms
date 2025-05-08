@@ -42,7 +42,6 @@ var _action_locked = false
 
 @onready var _match = find_parent("Match")
 
-
 func _ready():
 	if not _match.is_node_ready():
 		await _match.ready
@@ -102,6 +101,19 @@ func _setup_color():
 		material
 	)
 
+func _get_mqtt_update_data():
+	var mqtt_data = {
+		"name": name,
+		"type": type,
+		"action": action,
+		"position": {
+			"x": global_position.x,
+			"y": global_position.y,
+			"z": global_position.z
+		},
+		"hp": hp
+	}
+	return JSON.stringify(mqtt_data)
 
 func _set_action(action_node):
 	if not is_inside_tree() or _action_locked:
@@ -117,6 +129,7 @@ func _set_action(action_node):
 		add_child(action_node)
 	_action_locked = false
 	action_changed.emit(action)
+	MatchSignals.unit_action_changed.emit(_get_mqtt_update_data())
 
 
 func _get_type():

@@ -18,7 +18,6 @@ func _ready():
 	_movement_trait.move(_target_position)
 	_movement_trait.movement_finished.connect(_on_movement_finished)
 
-
 func _exit_tree():
 	if is_inside_tree():
 		_movement_trait.stop()
@@ -26,3 +25,4 @@ func _exit_tree():
 
 func _on_movement_finished():
 	queue_free()
+	

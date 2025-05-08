@@ -38,7 +38,6 @@ func _ready():
 	get_tree().current_scene = a_match
 	queue_free()
 
-
 func _preload_scenes():
 	var scene_paths = []
 	scene_paths += Constants.Match.Units.PROJECTILES.values()
