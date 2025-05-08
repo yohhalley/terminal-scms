@@ -1,0 +1,629 @@
+from django.db import models
+from django.core.validators import RegexValidator
+from django.db.models.signals import post_save
+from django.core.exceptions import ValidationError
+
+
+class IntegerRangeField(models.IntegerField):
+    def __init__(self, verbose_name=None, name=None, min_value=None, max_value=None, **kwargs):
+        self.min_value, self.max_value = min_value, max_value
+        models.IntegerField.__init__(self, verbose_name, name, **kwargs)
+
+    def formfield(self, **kwargs):
+        defaults = {'min_value': self.min_value, 'max_value': self.max_value}
+        defaults.update(kwargs)
+        return super(IntegerRangeField, self).formfield(**defaults)
+
+
+###################################
+class ISOType(models.Model):
+    L20 = '20'
+    L40 = '40'
+    L45 = '45'
+
+    HNC = 'NC'
+    HHC = 'HC'
+
+    LENGTHS = [
+        (L20, '20\''),
+        (L40, '40\''),
+        (L45, '45\'')
+    ]
+
+    HEIGHTS = [
+        (HNC, 'regular height (9\')'),
+        (HHC, 'high cube (9\' 6\")')
+    ]
+    iso_type = models.CharField(
+        validators=[RegexValidator(regex='^.{4}$', message='Length has to be 4', code='nomatch')], max_length=4,
+        unique=True)
+    length = models.CharField(
+        max_length=3,
+        choices=LENGTHS,
+        default=L20,
+    )
+
+    height = models.CharField(
+        max_length=3,
+        choices=HEIGHTS,
+        default=HNC,
+    )
+
+    is_reefer = models.BooleanField(default=0)
+    is_oog = models.BooleanField(default=0)
+
+    def __str__(self):
+        return self.iso_type
+
+
+###################################
+class ContainerOwner(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+    code = models.CharField(validators=[RegexValidator(regex='^.{4}$', message='Length has to be 4', code='nomatch')],
+                            max_length=4, unique=True)
+    is_shippingline = models.BooleanField(default=0)
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+class ContainerUnit(models.Model):
+    iso_type = models.ForeignKey(
+        'ISOType',
+        on_delete=models.RESTRICT, null=True
+    )
+    owner = models.ForeignKey(
+        'ContainerOwner',
+        on_delete=models.RESTRICT,
+    )
+
+    container_number = models.CharField(
+        validators=[RegexValidator(regex='^.{11}$', message='Length has to be 11', code='nomatch')], max_length=11,
+        primary_key=True)
+    is_active = models.BooleanField(default=1)
+    is_in_terminal = models.BooleanField(default=0)
+
+    def __str__(self):
+        return self.container_number
+
+
+###################################
+class ContainerVisit(models.Model):
+    IMPORT = 'I'
+    EXPORT = 'E'
+    TRANSSHIPMENT = 'T'
+    STORAGE = 'S'
+    THROUGH = 'O'
+    TERMINAL = 'M'
+
+    CATEGORIES = [
+        (IMPORT, 'Import'),
+        (EXPORT, 'Export'),
+        (TRANSSHIPMENT, 'Transshipment'),
+        (STORAGE, 'Storage'),
+        (THROUGH, 'Through'),
+        (TERMINAL, 'Owned by Terminal')
+    ]
+
+    category = models.CharField(
+        max_length=1,
+        choices=CATEGORIES,
+        default=STORAGE,
+    )
+
+    container_number = models.ForeignKey(
+        'ContainerUnit',
+        on_delete=models.RESTRICT, blank=True, null=True
+    )
+    ib_carrier = models.ForeignKey(
+        'Visit',
+        on_delete=models.RESTRICT,
+        related_name='ib_carrier', blank=True, null=True
+    )
+    ob_carrier = models.ForeignKey(
+        'Visit',
+        on_delete=models.RESTRICT,
+        related_name='ob_carrier', blank=True, null=True
+    )
+
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.RESTRICT,
+    )
+    eta = models.DateField(blank=True, null=True)
+    etd = models.DateField(blank=True, null=True)
+    weight = models.IntegerField(default=0)
+    pod = models.ForeignKey(
+        'POD',
+        on_delete=models.RESTRICT,
+        related_name='pod', blank=True, null=True,
+    )
+    pod2 = models.ForeignKey(
+        'POD',
+        on_delete=models.RESTRICT,
+        related_name='pod2', blank=True, null=True,
+    )
+    requires_power = models.BooleanField(default=0)
+    is_imdg = models.BooleanField(default=0)
+
+    def __str__(self):
+        return self.container_number.container_number
+
+
+###################################
+class Location(models.Model):
+    NA = 'NA'
+    TL = 'TL'
+    ID = 'ID'
+    VL = 'VL'
+    TK = 'TK'
+    TN = 'TN'
+
+    LOCATION_TYPES = [
+        (NA, 'Unknown'),
+        (TL, 'Terminal'),
+        (ID, 'Inland Depot'),
+        (VL, 'Vessel'),
+        (TK, 'Truck'),
+        (TN, 'Train'),
+    ]
+
+    name = models.CharField(max_length=30, unique=True)
+    location_type = models.CharField(
+        max_length=2,
+        choices=LOCATION_TYPES,
+        default=NA,
+    )
+
+    def __str__(self):
+        return "%s" % (self.name)
+
+
+###################################
+class Block(models.Model):
+    TZ = 'TZ'
+    EP = 'EP'
+    AB = 'AB'
+    MB = 'MB'
+
+    BLOCK_TYPES = [
+        (TZ, 'Transfer Zone'),
+        (EP, 'Entry Point'),
+        (AB, 'Automated Block'),
+        (MB, 'Manual Block'),
+    ]
+
+    location = models.ForeignKey(
+        'Location', related_name='blocks',
+        on_delete=models.CASCADE,
+    )
+
+    block_type = models.CharField(
+        max_length=2,
+        choices=BLOCK_TYPES,
+        default=AB,
+    )
+
+    name = models.CharField(max_length=30, unique=False)
+    max_bays = IntegerRangeField(min_value=1, max_value=100)
+    max_rows = IntegerRangeField(min_value=1, max_value=100)
+    max_tier = IntegerRangeField(min_value=1, max_value=20)
+    x_position = models.FloatField(blank=True, null=True)
+    y_position = models.FloatField(blank=True, null=True)
+    is_heapzone = models.BooleanField(default=0)
+    
+    objects = models.Manager() # The default manager.
+
+    class Meta:
+        unique_together = ('location', 'name',)
+
+    def __str__(self):
+        return "%s-%s" % (self.location, self.name)
+
+    def save(self, **kwargs):
+        created = super().save(**kwargs)  # Call the "real" save() method.
+        block = Block.objects.get(pk=self.pk)
+        block_piles = Pile.objects.filter(block = block.pk)
+        block_piles.delete()
+        
+        max_rows = block.max_rows
+        max_bays = block.max_bays
+        max_tier = block.max_tier
+        x_start_pos = block.x_position if block.x_position is not None else 0
+        y_start_pos = block.y_position if block.y_position is not None else 0
+        x_offset = 10
+        y_offset = 10
+        
+        for bay in range(1, max_bays+1):
+            for row in range(1,max_rows+1):
+                pile = Pile.objects.create(block=block, bay=bay, row=row, allows_in=True, allows_out=True,is_restricted=False, x_position = x_start_pos + bay*x_offset, y_position = y_start_pos + row*y_offset)
+                pile.save()
+                for tier in range(1, max_tier+1):
+                    position = Position.objects.create(pile=pile, is_reserved=False, is_occupied=False, tier=tier)
+                    position.save()
+        
+###################################
+class Pile(models.Model):
+    block = models.ForeignKey(
+        'Block', related_name='piles',
+        on_delete=models.CASCADE,
+    )
+    bay = models.IntegerField(default=0)
+    row = models.IntegerField(default=0)
+    tiers = models.IntegerField(default=0)
+    allows_in = models.BooleanField(default=True)
+    allows_out = models.BooleanField(default=True)
+    is_restricted = models.BooleanField(default=False)
+    allows_20 = models.BooleanField(default=False)
+    allows_40 = models.BooleanField(default=False)
+    allows_45 = models.BooleanField(default=False)
+
+    x_position = models.FloatField(blank=True, null=True)
+    y_position = models.FloatField(blank=True, null=True)
+
+    class Meta:
+        unique_together = ('block', 'bay', 'row')
+        # No need for additional constraints as the block's location is already part of the uniqueness
+        # through the block foreign key
+
+    def __str__(self):
+        return "%s-%s-%s-%s-%s" % (self.block.location.name, self.block.name, self.block, self.bay, self.row)
+
+    def save(self, *args, **kwargs):
+        # Set container size restrictions based on bay number
+        if self.bay % 2 == 1:  # Odd numbered bays
+            self.allows_20 = True
+            self.allows_40 = False
+            self.allows_45 = False
+        else:  # Even numbered bays
+            self.allows_20 = False
+            self.allows_40 = True
+            self.allows_45 = True
+
+        super().save(*args, **kwargs)
+
+    def can_accept_container(self, container_visit):
+        """
+        Check if this pile can accept a container based on its size.
+        Returns (bool, str) tuple: (can_accept, reason)
+        """
+        if not container_visit or not container_visit.container_number:
+            return False, "No container specified"
+
+        container = container_visit.container_number
+        iso_type = container.iso_type
+
+        if iso_type.length == '20' and not self.allows_20:
+            return False, "20' containers are not allowed in this bay"
+        elif iso_type.length == '40' and not self.allows_40:
+            return False, "40' containers are not allowed in this bay"
+        elif iso_type.length == '45' and not self.allows_45:
+            return False, "45' containers are not allowed in this bay"
+
+        return True, "Container size is compatible with this bay"
+
+
+###################################
+class Position(models.Model):
+    container_visit = models.OneToOneField(
+        'ContainerVisit', 
+        related_name='position',
+        on_delete=models.SET_NULL,
+        null=True, 
+        blank=True
+    )
+    pile = models.ForeignKey(
+        'Pile', 
+        related_name='positions',
+        on_delete=models.CASCADE
+    )
+    is_reserved = models.BooleanField(default=False)
+    is_occupied = models.BooleanField(default=False)
+    is_powered = models.BooleanField(default=False)
+    tier = IntegerRangeField(min_value=1, max_value=20)
+
+    class Meta:
+        unique_together = ('pile', 'tier')
+
+    def __str__(self):
+        return "%s-%s-%s-%s" % (self.pile.block, self.pile.bay, self.pile.row, self.tier)
+
+    def validate_physical_rules(self):
+        """Validate that the position follows physical rules."""
+        if self.container_visit:
+            # Check if there are any gaps below this position
+            lower_positions = self.pile.positions.filter(tier__lt=self.tier).order_by('tier')
+            for pos in lower_positions:
+                if not pos.is_occupied:
+                    raise ValidationError(
+                        f"Cannot place container in tier {self.tier} when tier {pos.tier} is empty"
+                    )
+        else:
+            # Check if removing this container would leave containers floating
+            higher_positions = self.pile.positions.filter(tier__gt=self.tier).order_by('tier')
+            if higher_positions.filter(is_occupied=True).exists():
+                raise ValidationError(
+                    f"Cannot remove container from tier {self.tier} when there are containers above it"
+                )
+
+    def save(self, *args, **kwargs):
+        # Validate that position is not already occupied
+        if self.container_visit and not self._state.adding:
+            # Check if another position already has this container
+            existing_position = Position.objects.filter(
+                container_visit=self.container_visit
+            ).exclude(pk=self.pk).first()
+            if existing_position:
+                raise ValidationError(
+                    f"Container {self.container_visit} is already assigned to position {existing_position}"
+                )
+            
+            # Validate container size restrictions
+            can_accept, reason = self.pile.can_accept_container(self.container_visit)
+            if not can_accept:
+                raise ValidationError(reason)
+
+            # Validate allows_in when assigning a container
+            if not self.pile.allows_in:
+                raise ValidationError("This pile does not allow containers to be placed in it")
+
+            # Validate physical rules when placing a container
+            self.validate_physical_rules()
+
+        # Validate allows_out when removing a container
+        if self._state.adding is False and self.container_visit is None:
+            # Check if we're removing a container
+            old_position = Position.objects.get(pk=self.pk)
+            if old_position.container_visit is not None and not self.pile.allows_out:
+                raise ValidationError("This pile does not allow containers to be removed from it")
+
+            # Validate physical rules when removing a container
+            self.validate_physical_rules()
+        
+        # Update is_occupied based on container_visit
+        self.is_occupied = bool(self.container_visit)
+        
+        super().save(*args, **kwargs)
+
+
+###################################
+class WorkQueue(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+    is_active = models.BooleanField(default=0)
+    # equipment_pool
+    description = models.CharField(max_length=30, unique=True, blank=True, null=True)
+
+    current_user = models.ForeignKey(
+        'auth.User',
+        related_name='work_queue',
+        on_delete=models.CASCADE, blank=True, null=True
+    )
+
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.RESTRICT, blank=True, null=True
+    )
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+class Order(models.Model):
+    MOVE_IN = 'IN'
+    MOVE_OUT = 'OT'
+    HOUSEKEEPING = 'HK'
+    SHIFT = 'SF'
+
+    ORDER_TYPES = [
+        (MOVE_IN, 'Move In'),
+        (MOVE_OUT, 'Move Out'),
+        (HOUSEKEEPING, 'Housekeeping'),
+        (SHIFT, 'Shift'),
+    ]
+
+    order_type = models.CharField(
+        max_length=2,
+        choices=ORDER_TYPES,
+        default=HOUSEKEEPING,
+    )
+    container_number = models.ForeignKey(
+        'ContainerVisit', related_name='container_visit', blank=True, null=True,
+        on_delete=models.CASCADE, 
+    )
+    work_queue = models.ForeignKey(
+        'WorkQueue', related_name='orders', blank=True, null=True,
+        on_delete=models.CASCADE,
+    )
+    ## expected time of completion
+    ## actual time of completion
+    etc = models.DateTimeField('expected time of completion', blank=True, null=True)
+    atc = models.DateTimeField('actual time of completion', blank=True, null=True)
+    from_position = models.ForeignKey(
+        'Position',
+        on_delete=models.RESTRICT,
+        related_name='from_position', blank=True, null=True
+    )
+    to_position = models.ForeignKey(
+        'Position',
+        on_delete=models.RESTRICT,
+        related_name='to_position', blank=True, null=True
+    )
+
+    def __str__(self):
+        return "%s-%s-%s" % (self.work_queue.name, self.pk, self.container_number,)
+
+
+###################################
+class OrderLeg(models.Model):
+    order = models.ForeignKey(
+        'Order', related_name='order_legs',
+        on_delete=models.CASCADE, blank=True, null=True,
+    )
+    che = models.ForeignKey(
+        'Che',
+        on_delete=models.RESTRICT, blank=True, null=True,
+    )
+    distance = IntegerRangeField(min_value=1, max_value=10000, blank=True, null=True)
+    start_position = models.ForeignKey(
+        'Pile',
+        on_delete=models.RESTRICT,
+        related_name='start_pile', blank=True, null=True
+    )
+    end_position = models.ForeignKey(
+        'Pile',
+        on_delete=models.RESTRICT,
+        related_name='end_pile', blank=True, null=True
+    )
+
+    def __str__(self):
+        return "%s-%s-%s" % (self.order, self.id, self.order.container_number)
+
+
+###################################
+class Che(models.Model):
+    IL = 'IL'
+    WK = 'WK'
+    OF = 'OF'
+    BD = 'BD'
+    MA = 'MA'
+
+    STATUS_TYPES = [
+        (IL, 'Idle'),
+        (WK, 'Working'),
+        (OF, 'Offline'),
+        (BD, 'Breakdown'),
+        (MA, 'In Maintenance'),
+    ]
+
+    status = models.CharField(
+        max_length=2,
+        choices=STATUS_TYPES,
+        default=OF,
+    )
+    name = models.CharField(max_length=30, unique=True)
+    equipment_type = models.ForeignKey(
+        'EquipmentType',
+        on_delete=models.CASCADE,
+    )
+    current_block = models.ForeignKey(
+        'Block',
+        on_delete=models.RESTRICT, blank=True, null=True
+    )
+    current_user = models.ForeignKey(
+        'auth.User',
+        related_name='equipments',
+        on_delete=models.RESTRICT, blank=True, null=True
+    )
+    # highlighted = models.TextField()
+
+    x_position = models.FloatField(blank=True, null=True)
+    y_position = models.FloatField(blank=True, null=True)
+    # position
+    twistlock_closed = models.BooleanField(default=False)
+
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+class EquipmentType(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+    running_hours = models.IntegerField(default=0)
+
+    TT = 'TT'
+    SC = 'SC'
+    RTG = 'RTG'
+    ASC = 'ASC'
+    STS = 'STS'
+
+    EQUIPMENT_TYPES = [
+        (TT, 'Terminal Tractor'),
+        (SC, 'Shuttle Carrier'),
+        (RTG, 'RT Gantry'),
+        (ASC, 'Auto Stacking Crane'),
+        (STS, 'Ship to Shore'),
+    ]
+
+    equipment_type = models.CharField(
+        max_length=3,
+        choices=EQUIPMENT_TYPES,
+        default=SC,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+class EquipmentPart(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+    running_hours = models.IntegerField(default=0)
+    equipment_type = models.ForeignKey(
+        'EquipmentType',
+        on_delete=models.RESTRICT,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+# class WarehouseInventory(models.Model):
+
+###################################
+class Route(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+    window_start = models.DateTimeField()
+    ops_start = models.DateTimeField()
+    ops_end = models.DateTimeField()
+    window_end = models.DateTimeField()
+    moves_in = models.IntegerField(default=0)
+    moves_out = models.IntegerField(default=0)
+    moves_import = models.IntegerField(default=0)
+    moves_export = models.IntegerField(default=0)
+    moves_ts = models.IntegerField(default=0)
+    moves_restow = models.IntegerField(default=0)
+    total_moves = models.IntegerField(default=0)
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+class Visit(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+    route = models.ForeignKey(
+        'Route',
+        on_delete=models.RESTRICT,
+    )
+    window_start = models.DateTimeField(blank=True, null=True)
+    ops_start = models.DateTimeField(blank=True, null=True)
+    ops_end = models.DateTimeField(blank=True, null=True)
+    window_end = models.DateTimeField(blank=True, null=True)
+    moves_in = models.IntegerField(default=0)
+    moves_out = models.IntegerField(default=0)
+    moves_import = models.IntegerField(default=0)
+    moves_export = models.IntegerField(default=0)
+    moves_ts = models.IntegerField(default=0)
+    moves_restow = models.IntegerField(default=0)
+    total_moves = models.IntegerField(default=0)
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+class POD(models.Model):
+    name = models.CharField(max_length=30, unique=True)
+    uncode = models.CharField(max_length=5, unique=True)
+    country = models.CharField(max_length=30)
+
+    def __str__(self):
+        return self.name
