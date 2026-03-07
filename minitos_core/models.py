@@ -146,6 +146,9 @@ class ContainerVisit(models.Model):
     )
     requires_power = models.BooleanField(default=0)
     is_imdg = models.BooleanField(default=0)
+    x_position = models.FloatField(blank=True, null=True)
+    y_position = models.FloatField(blank=True, null=True)
+    z_position = models.FloatField(blank=True, null=True)
 
     def __str__(self):
         return self.container_number.container_number
@@ -232,8 +235,8 @@ class Block(models.Model):
         max_tier = block.max_tier
         x_start_pos = block.x_position if block.x_position is not None else 0
         y_start_pos = block.y_position if block.y_position is not None else 0
-        x_offset = 10
-        y_offset = 10
+        x_offset = 1.5
+        y_offset = 0.8
         
         for bay in range(1, max_bays+1):
             for row in range(1,max_rows+1):
@@ -502,6 +505,7 @@ class Che(models.Model):
         choices=STATUS_TYPES,
         default=OF,
     )
+    is_available = models.BooleanField(default=False)
     name = models.CharField(max_length=30, unique=True)
     equipment_type = models.ForeignKey(
         'EquipmentType',
@@ -527,6 +531,10 @@ class Che(models.Model):
         'Location',
         on_delete=models.CASCADE,
     )
+
+    fuel_level = models.IntegerField(default=100)
+    last_maintenance = models.DateTimeField(blank=True, null=True)
+    # assigned_tasks: This would be a ManyToMany or ForeignKey to a Task/Order model
 
     def __str__(self):
         return self.name

@@ -15,7 +15,7 @@ class ContainerVisitSerializerShort(serializers.ModelSerializer):
     
     class Meta:
         model = ContainerVisit
-        fields = ['pk', 'category', 'container_number', 'ib_carrier', 'ob_carrier', 'location', 'eta', 'etd', 'weight', 'pod', 'pod2', 'requires_power', 'is_imdg']
+        fields = ['pk', 'category', 'container_number', 'ib_carrier', 'ob_carrier', 'location', 'eta', 'etd', 'weight', 'pod', 'pod2', 'requires_power', 'is_imdg', 'x_position', 'y_position', 'z_position']
                 
         
 ####  Position
@@ -76,9 +76,9 @@ class PileSerializer(serializers.ModelSerializer):
     class Meta:
         model = Pile
         fields = [
-            'pk', '__str__', 'block_name', 'bay_name', 'row_name',
-            'bay', 'row', 'allows_in', 'allows_out', 'is_restricted',
-            'positions', 'x_position', 'y_position'
+            'pk', 'block', 'block_name', 'bay', 'bay_name', 'row', 'row_name', 'tiers',
+            'allows_in', 'allows_out', 'is_restricted', 'allows_20', 'allows_40', 'allows_45',
+            'x_position', 'y_position', '__str__', 'positions'
         ]
         
     def partial_update(self, instance, validated_data):
@@ -113,6 +113,7 @@ class BlockSerializer(serializers.ModelSerializer):
 ####  Che
 class CheSerializer(serializers.ModelSerializer):
     equipment_type_name = serializers.CharField(source='equipment_type.name', read_only=True)
+    equipment_type_code = serializers.CharField(source='equipment_type.equipment_type', read_only=True)
     location_name = serializers.CharField(source='location.name', read_only=True)
     current_block_name = serializers.CharField(source='current_block.name', read_only=True, allow_null=True)
     current_user_name = serializers.CharField(source='current_user.username', read_only=True, allow_null=True)
@@ -125,9 +126,10 @@ class CheSerializer(serializers.ModelSerializer):
     class Meta:
         model = Che
         fields = [
-            'pk', 'status', 'name', 'equipment_type', 'equipment_type_name',
+            'pk', 'status', 'name', 'equipment_type', 'equipment_type_name', 'equipment_type_code',
             'current_block', 'current_block_name', 'current_user', 'current_user_name',
-            'location', 'location_name', 'twistlock_closed', 'x_position', 'y_position', 'cblock'
+            'location', 'location_name', 'twistlock_closed', 'x_position', 'y_position', 
+            'fuel_level', 'last_maintenance', 'cblock'
         ]
         
     def partial_update(self, instance, validated_data):
@@ -180,7 +182,8 @@ class ContainerVisitSerializer(serializers.ModelSerializer):
             'pk', 'category', 'category_display', 'container_number', 'container_number_name',
             'ib_carrier', 'ib_carrier_name', 'ob_carrier', 'ob_carrier_name',
             'location', 'location_name', 'position', 'eta', 'etd', 'weight',
-            'pod', 'pod_name', 'pod2', 'pod2_name', 'requires_power', 'is_imdg'
+            'pod', 'pod_name', 'pod2', 'pod2_name', 'requires_power', 'is_imdg',
+            'x_position', 'y_position', 'z_position'
         ]
 
 class OrderLegSerializer(serializers.ModelSerializer):

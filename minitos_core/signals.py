@@ -15,8 +15,8 @@ def create_block(sender, instance, created, **kwargs):
         max_tier = instance.max_tier
         x_start_pos = instance.x_position
         y_start_pos = instance.y_position
-        x_offset = 10
-        y_offset = 10
+        x_offset = 0.35
+        y_offset = 1.25
         
         for bay in range(1, max_bays+1):
             for row in range(1,max_rows+1):
@@ -38,8 +38,8 @@ def save_block(sender, instance, **kwargs):
         max_tier = instance.max_tier
         x_start_pos = instance.x_position
         y_start_pos = instance.y_position
-        x_offset = 10
-        y_offset = 10
+        x_offset = 0.35
+        y_offset = 1.25
         
         for bay in range(1, max_bays+1):
             for row in range(1,max_rows+1):
