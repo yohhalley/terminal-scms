@@ -72,9 +72,11 @@ func _set_width(a_width):
 
 
 func _on_input_event(_camera, event, _click_position, _click_normal, _shape_idx):
-	if (
-		event is InputEventMouseButton
-		and event.button_index == MOUSE_BUTTON_RIGHT
-		and event.pressed
-	):
-		MatchSignals.unit_targeted.emit(_unit)
+	if event is InputEventMouseButton and event.is_pressed():
+		match event.button_index:
+			#MOUSE_BUTTON_LEFT:
+			#    var human_player = get_tree().get_first_node_in_group("human_player")
+			#    if human_player:
+			#        human_player.handle_unit_selection(_unit, event.is_shift_pressed())
+			MOUSE_BUTTON_RIGHT:
+				MatchSignals.unit_targeted.emit(_unit)

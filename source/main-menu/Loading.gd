@@ -32,7 +32,7 @@ func _ready():
 	a_match.map = map
 	_progress_bar.value = 0.9
 
-	_label.text = tr("LOADING_STEP_STARTING_MATCH")
+	_label.text = tr("LOADING_STEP_STARTING_MATCH")	
 	await get_tree().physics_frame
 	get_parent().add_child(a_match)
 	get_tree().current_scene = a_match

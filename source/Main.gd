@@ -13,7 +13,6 @@ func _ready():
 	
 func quick_start():
 	#var new_scene = mqttexample.instantiate()
-	
 	var new_scene = LoadingScene.instantiate()
 	new_scene.match_settings = _create_match_settings()
 	new_scene.map_path = _get_selected_map_path()
@@ -27,13 +26,12 @@ func _get_selected_map_path():
 func _create_match_settings():
 	var match_settings = MatchSettings.new()
 	var spawn_index_offset = 0
-	var player_settings = PlayerSettings.new()
-	player_settings.controller = Constants.PlayerType.HUMAN
-	player_settings.color = Constants.Player.COLORS[0]
-	player_settings.spawn_index_offset = spawn_index_offset
-	match_settings.players.append(player_settings)
+	var agent_settings = PlayerSettings.new()
+	agent_settings.controller = Constants.PlayerType.HUMAN
+	agent_settings.color = Constants.Player.COLORS[0]
+	agent_settings.spawn_index_offset = spawn_index_offset
+	match_settings.agents.append(agent_settings)
 	spawn_index_offset = 0
 	match_settings.visible_player = 0
 	match_settings.visibility = match_settings.Visibility.FULL
-
 	return match_settings

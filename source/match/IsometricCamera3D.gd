@@ -1,5 +1,7 @@
 extends Camera3D
 
+signal zoom_level_changed(new_zoom_level)
+
 # TODO: perform rotation calculations in 3D space
 
 const EXPECTED_X_ROTATION_DEGREES = -30.0
@@ -52,6 +54,12 @@ func _physics_process(delta):
 
 
 func _process(_delta):
+	# Handle keyboard zoom input
+	if Input.is_action_pressed("zoom_in_keyboard"):
+		_zoom_in()
+	if Input.is_action_pressed("zoom_out_keyboard"):
+		_zoom_out()
+		
 	if !_is_rotating():
 		_move()
 
@@ -81,6 +89,7 @@ func set_size_safely(a_size):
 		return
 	size = clamp(a_size, size_min, size_max)
 	_align_camera_properties_to_current_size()
+	zoom_level_changed.emit(size)
 
 
 func set_position_safely(target_position: Vector3):

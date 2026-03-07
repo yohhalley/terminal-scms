@@ -46,6 +46,8 @@ func _ready():
 	if not _match.is_node_ready():
 		await _match.ready
 	_setup_color()
+	
+	
 	_setup_default_properties_from_constants()
 	assert(_safety_checks())
 
@@ -94,6 +96,12 @@ func _is_movable():
 
 func _setup_color():
 	var material = player.get_color_material()
+	#var _color_material = StandardMaterial3D.new()
+	#_color_material.vertex_color_use_as_albedo = true
+	#_color_material.albedo_color = Color.WHITE
+	#_color_material.metallic = 1
+	#var material = _color_material
+	
 	Utils.Match.traverse_node_tree_and_replace_materials_matching_albedo(
 		find_child("Geometry"),
 		MATERIAL_ALBEDO_TO_REPLACE,

@@ -1,7 +1,9 @@
-[gd_scene load_steps=47 format=3 uid="uid://camns8fqod8d4"]
+[gd_scene load_steps=50 format=3 uid="uid://camns8fqod8d4"]
 
 [ext_resource type="Script" path="res://source/match/Match.gd" id="1_1555u"]
 [ext_resource type="Script" path="res://source/match/IsometricCamera3D.gd" id="1_qb2ry"]
+[ext_resource type="Script" path="res://source/sparkplugB/SparkPlugBMQTTManager.gd" id="2_88id3"]
+[ext_resource type="Script" path="res://addons/mqtt/mqtt.gd" id="4_cs1si"]
 [ext_resource type="Script" path="res://source/match/FogOfWar.gd" id="5_eb52t"]
 [ext_resource type="PackedScene" uid="uid://co800e4shs7bh" path="res://source/generic-scenes-and-nodes/3d/RectangularSelection3D.tscn" id="5_yi0pu"]
 [ext_resource type="PackedScene" uid="uid://clbjgy724q2si" path="res://source/generic-scenes-and-nodes/2d/DynamicCircle2D.tscn" id="6_ux0ef"]
@@ -20,6 +22,7 @@
 [ext_resource type="Script" path="res://source/match/hud/Minimap.gd" id="17_0bfte"]
 [ext_resource type="Script" path="res://source/match/TerrainNavigation.gd" id="17_6fprk"]
 [ext_resource type="Shader" path="res://source/shaders/2d/white_transparent.gdshader" id="19_m1b2v"]
+[ext_resource type="PackedScene" uid="uid://b7rlk8frmf38g" path="res://source/match/hud/SelectionMenu.tscn" id="20_1a10x"]
 [ext_resource type="PackedScene" uid="uid://c0uxy26e4qs4w" path="res://source/match/handlers/MouseClickAnimationsHandler.tscn" id="22_438pb"]
 [ext_resource type="PackedScene" uid="uid://1rby73ckmk7b" path="res://source/match/Menu.tscn" id="22_ofmlu"]
 [ext_resource type="PackedScene" uid="uid://b83l4dny3gly0" path="res://source/match/debug/FrameIncrementer.tscn" id="23_exhtd"]
@@ -28,10 +31,10 @@
 [ext_resource type="PackedScene" uid="uid://pi813oou7xim" path="res://source/match/handlers/DoubleClickUnitSelectionHandler.tscn" id="25_ldkhw"]
 [ext_resource type="PackedScene" uid="uid://yn470qvc3eak" path="res://source/match/handlers/MatchEndHandler.tscn" id="26_4d7im"]
 [ext_resource type="PackedScene" uid="uid://ck6vrgdyg7hja" path="res://source/match/handlers/UnitGroupSelectionHandler.tscn" id="27_j2drv"]
-[ext_resource type="Script" path="res://source/match/MqttManager.gd" id="30_hq4id"]
 [ext_resource type="PackedScene" uid="uid://ktm7k0co2o7l" path="res://addons/mqtt/mqtt.tscn" id="31_t2qal"]
 [ext_resource type="Script" path="res://source/match/HTTPRequestManager.gd" id="32_c5ec8"]
 [ext_resource type="PackedScene" uid="uid://b8p6lcwubx1tp" path="res://source/match/handlers/UnitVisibilityHandler.tscn" id="32_fci1c"]
+[ext_resource type="Script" path="res://source/match/yard/YardManager.gd" id="35_8n27f"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ysb0j"]
 sun_angle_max = 200.0
@@ -121,7 +124,11 @@ viewport_path = NodePath("HUD/MarginContainer/Minimap/MarginContainer/MinimapVie
 [node name="Match" type="Node3D"]
 script = ExtResource("1_1555u")
 
-[node name="Players" type="Node3D" parent="."]
+[node name="MqttManager" type="Node" parent="."]
+script = ExtResource("2_88id3")
+
+[node name="MQTT" parent="MqttManager" instance=ExtResource("31_t2qal")]
+script = ExtResource("4_cs1si")
 
 [node name="IsometricCamera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 49.5996, 12.4465, 65.9216)
@@ -400,6 +407,21 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 8
 
+[node name="MarginContainer4" type="MarginContainer" parent="HUD"]
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -740.0
+offset_top = -219.0
+offset_right = 737.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="SelectionMenu" parent="HUD/MarginContainer4" instance=ExtResource("20_1a10x")]
+layout_mode = 2
+
 [node name="Menu" parent="." instance=ExtResource("22_ofmlu")]
 visible = false
 
@@ -427,13 +449,6 @@ visible = false
 
 [node name="UnitVisibilityHandler" parent="Handlers" instance=ExtResource("32_fci1c")]
 
-[node name="MqttManager" type="Control" parent="."]
-layout_mode = 3
-anchors_preset = 0
-script = ExtResource("30_hq4id")
-
-[node name="MQTT" parent="MqttManager" instance=ExtResource("31_t2qal")]
-
 [node name="HTTPRequestManager" type="Control" parent="."]
 layout_mode = 3
 anchors_preset = 0
@@ -443,8 +458,11 @@ script = ExtResource("32_c5ec8")
 
 [node name="HTTPRequest" type="HTTPRequest" parent="HTTPRequestManager"]
 
-[connection signal="broker_connected" from="MqttManager/MQTT" to="MqttManager" method="_on_mqtt_broker_connected"]
-[connection signal="broker_connection_failed" from="MqttManager/MQTT" to="MqttManager" method="_on_mqtt_broker_connection_failed"]
-[connection signal="broker_disconnected" from="MqttManager/MQTT" to="MqttManager" method="_on_mqtt_broker_disconnected"]
-[connection signal="publish_acknowledge" from="MqttManager/MQTT" to="MqttManager" method="_on_mqtt_publish_acknowledge"]
-[connection signal="received_message" from="MqttManager/MQTT" to="MqttManager" method="_on_mqtt_received_message"]
+[node name="Site" type="Node3D" parent="."]
+
+[node name="CHEs" type="Node3D" parent="Site"]
+
+[node name="Players" type="Node3D" parent="."]
+
+[node name="YardManager" type="Node" parent="."]
+script = ExtResource("35_8n27f")

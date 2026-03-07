@@ -141,6 +141,13 @@ class Units:
 			"hp_max": 10,
 			"resources_max": 2,
 		},
+		"res://source/match/units/ContainerUnit.tscn":
+		{
+			"sight_range": 8.0,
+			"hp": 10,
+			"hp_max": 10,
+			"resources_max": 2,
+		},
 		"res://source/match/units/Drone.tscn":
 		{
 			"sight_range": 10.0,

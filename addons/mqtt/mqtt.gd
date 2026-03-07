@@ -313,7 +313,7 @@ func connect_to_broker(brokerurl):
 		var E = websocket.connect_to_url(websocketurl)
 		if E != 0:
 			print("ERROR: websocketclient.connect_to_url Err: ", E)
-			#MatchSignals.emit_signal(broker_connection_failed(E))
+			# MatchSignals.emit_signal(broker_connection_failed(E))
 			return cleanupsockets(false)
 		print("Websocket get_requested_url ", websocket.get_requested_url())
 		brokerconnectmode = BCM_WAITING_WEBSOCKET_CONNECTION

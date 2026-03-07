@@ -1,28 +1,59 @@
 extends "res://source/match/units/Unit.gd"
 
-# MiniTOS DB fields
-var status: String = "OF"  # Default to Offline
+# MiniTOS DB fields - Core Identity
+var id: int = 0  # Primary key from Django
+var che_name: String = ""
+var equipment_type_id: int = 0
 var equipment_type_name: String = ""
+var equipment_type_code: String = ""  # TT, SC, RTG, ASC, STS
+
+# Status and State
+var status: String = "OF"  # IL, WK, OF, BD, MA
+var is_available: bool = false # Available for assignment
+var fuel_level: float = 100.0  # Percentage 0.0 - 100.0
+var last_maintenance: String = "" # ISO8601 string or epoch ms
+
+# Location and Position
+var location_id: int = 0
+var location_name: String = ""
+var current_block_id: int = 0
 var current_block_name: String = ""
+var x_position: float = 0.0
+var y_position: float = 0.0
+var position_logical: String = "OUT OF BOUNDS"
+
+# User and Assignment
+var current_user_id: int = 0
+var current_user_name: String = ""
+var assigned_tasks = [] # Optional, for future
+
+# Equipment State
 var twistlock_closed: bool = false
 
-# Resource management
+# Resource management (inherited from Unit)
 var resource_a = 0
 var resource_b = 0
 var resources_max = null
 
 # Fuel management
-var fuel_level: int = 100
 var fuel_consumption_timer: Timer
 
 # SparkPlugB constants
-const SPARKPLUG_NAMESPACE = "spBv1_0"
-const GROUP_ID = "OPEN-TERMINAL-SIM"
-const NODE_ID = "MQTTClient"
 const DEVICE_ID_PREFIX = "CHE_"
+
+var status_update_timer: Timer
 
 func _ready():
 	super._ready()
+	
+	# Connect the location detector Area3D to a handler function.
+	# This assumes you have added an Area3D named "LocationDetector" to your CHE scene.
+	if has_node("LocationDetector"):
+		$LocationDetector.area_entered.connect(_on_location_detector_area_entered)
+		$LocationDetector.area_exited.connect(_on_location_detector_area_exited)
+	else:
+		print("CHE is missing a 'LocationDetector' Area3D node.")
+
 	# Initialize fuel consumption timer
 	fuel_consumption_timer = Timer.new()
 	fuel_consumption_timer.wait_time = 1.0
@@ -30,57 +61,120 @@ func _ready():
 	add_child(fuel_consumption_timer)
 	fuel_consumption_timer.start()
 	
-	# Set initial status to Idle
-	_set_status("IL")
+	_set_status("OF")  # Default to Offline on spawn
 	
+	#Create and connect timer for status updates
+	_initialize_status_update_timer()
+
 	# Update status when action changes
 	action_changed.connect(func(new_action): 
 		_set_status("WK" if new_action != null else "IL")
 		_update_visual_state()
 	)
-	
-	# Emit DBIRTH message
+
+# Set action function for CHE unit
+func _set_action(action_node):
+	if new_action_allowed():
+		if not is_inside_tree() or _action_locked:
+			if action_node != null:
+				action_node.queue_free()
+			return
+		_action_locked = true
+		_teardown_current_action()
+		action = action_node
+		if action != null:
+			var action_copy = action  # bind() performs copy itself, but lets force copy just in case
+			action.tree_exited.connect(_on_action_node_tree_exited.bind(action_copy))
+			add_child(action_node)
+		_action_locked = false
+		action_changed.emit(action)
+		MatchSignals.unit_action_changed.emit(_get_mqtt_update_data())
+	else:
+		print("CHE %s cannot accept new assignments in its current state." % che_name)
+
+# Validate if CHE can accept new assignments
+func new_action_allowed() -> bool:
+	return is_available and status != "OF" and status != "BD" and status != "MA"
+
+# Update status update timer
+func _update_status_update_timer():
+	# Set timer interval based on status
+	if status == "WK":
+		status_update_timer.wait_time = 1.0
+		status_update_timer.start()
+	elif status == "IL":
+		status_update_timer.wait_time = 10.0
+		status_update_timer.start()
+	elif status == "OF":
+		_stop_status_update_timer()
+	else:
+		status_update_timer.wait_time = 10.0
+		status_update_timer.start()
+		
+func _initialize_status_update_timer():
+	status_update_timer = Timer.new()
+	status_update_timer.autostart = false
+	status_update_timer.one_shot = false
+	status_update_timer.timeout.connect(_on_status_update_timer_timeout)
+	add_child(status_update_timer)
+
+# Stop status update timer
+func _stop_status_update_timer():
+	if status_update_timer != null:
+		status_update_timer.stop()
+		
+#	 Turn on the CHE
+func _turn_on():
+	_set_status("IL")  # Set to Idle when turned on
 	_emit_device_birth()
+	_update_status_update_timer()
+
+#	 Turn off the CHE
+func _turn_off():
+	_set_status("OF")  # Set to Offline when turned off
+	_emit_device_death()
+	_update_status_update_timer()
+
+# Make the CHE available for assignments
+func _make_available():
+	if get_status() == "OF":
+		print("Cannot make CHE available while Offline.")
+		return
+	else:
+		is_available = true
+		print("%s is now available for assignments." % che_name)
+
+# Make the CHE unavailable for assignments
+func _make_unavailable():
+	if get_status() == "WK":
+		print("Cannot make CHE unavailable while Working.")
+		return
+	else:
+		is_available = false
+		print("%s is now available for assignments." % che_name)
+
+func get_availability() -> bool:
+	return is_available
 
 func _set_status(new_status: String):
 	if status != new_status:
 		status = new_status
+		_update_status_update_timer()
 		_update_visual_state()
-		_emit_device_data()
+
+func get_status() -> String:
+	return status
+
+
+func _get_mqtt_client():
+	# Adjust the path as needed for your project structure
+	# This assumes MqttManager is a singleton or at /root/MqttManager with MQTT as a child
+	if has_node("/root/MqttManager/MQTT"):
+		return get_node("/root/MqttManager/MQTT")
+	return null
 
 func _emit_device_birth():
-	var birth_data = {
-		"timestamp": Time.get_unix_time_from_system() * 1000,  # Convert to milliseconds
-		"metrics": [
-			{
-				"name": "Status",
-				"type": "String",
-				"value": status
-			},
-			{
-				"name": "FuelLevel",
-				"type": "Int32",
-				"value": fuel_level
-			},
-			{
-				"name": "Position",
-				"type": "String",
-				"value": JSON.stringify({
-					"x": global_position.x,
-					"y": global_position.y,
-					"z": global_position.z
-				})
-			},
-			{
-				"name": "TwistlockClosed",
-				"type": "Boolean",
-				"value": twistlock_closed
-			}
-		]
-	}
-	
-	var topic = "%s/%s/%s/DBIRTH/%s" % [SPARKPLUG_NAMESPACE, GROUP_ID, NODE_ID, DEVICE_ID_PREFIX + name]
-	MatchSignals.unit_action_changed.emit(topic, JSON.stringify(birth_data), true)
+	MatchSignals.che_mqtt_birth.emit(che_name)
 
 func _emit_device_data():
 	var data = {
@@ -93,8 +187,33 @@ func _emit_device_data():
 			},
 			{
 				"name": "FuelLevel",
-				"type": "Int32",
+				"type": "Float",
 				"value": fuel_level
+			},
+			{
+				"name": "CurrentBlockId",
+				"type": "Int32",
+				"value": current_block_id
+			},
+			{
+				"name": "CurrentBlockName",
+				"type": "String",
+				"value": current_block_name
+			},
+			{
+				"name": "CurrentUserId",
+				"type": "Int32",
+				"value": current_user_id
+			},
+			{
+				"name": "CurrentUserName",
+				"type": "String",
+				"value": current_user_name
+			},
+			{
+				"name": "PositionLogical",
+				"type": "String",
+				"value": position_logical
 			},
 			{
 				"name": "Position",
@@ -113,16 +232,14 @@ func _emit_device_data():
 		]
 	}
 	
-	var topic = "%s/%s/%s/DDATA/%s" % [SPARKPLUG_NAMESPACE, GROUP_ID, NODE_ID, DEVICE_ID_PREFIX + name]
-	MatchSignals.unit_action_changed.emit(topic, JSON.stringify(data), false)
+	if che_name != null:
+		print("CHE %s update..." % che_name)
+		MatchSignals.che_mqtt_data.emit(che_name, data)
+	else:
+		print("Error in CHE name: %s" % che_name)
 
 func _emit_device_death():
-	var death_data = {
-		"timestamp": Time.get_unix_time_from_system() * 1000,  # Convert to milliseconds
-	}
-	
-	var topic = "%s/%s/%s/DDEATH/%s" % [SPARKPLUG_NAMESPACE, GROUP_ID, NODE_ID, DEVICE_ID_PREFIX + name]
-	MatchSignals.unit_action_changed.emit(topic, JSON.stringify(death_data), true)
+	MatchSignals.che_mqtt_death.emit(che_name)
 
 func _handle_unit_death():
 	_emit_device_death()
@@ -132,46 +249,90 @@ func _on_fuel_consumption_timer_timeout():
 	#Fuel is consumed if the che is Working or Idle and the fuel is above 0.
 	if fuel_level > 0:
 		if status == "WK":
-			fuel_level -= 2
+			fuel_level -= 0.01
 		elif status == "IL":
-			fuel_level -= 1
+			fuel_level -= 0.001
 		if fuel_level <= 0:
-			_set_status("OF")  # Set to Offline when out of fuel
-			_update_visual_state()
-			_emit_device_data()
+			_turn_off()
+
+func _on_status_update_timer_timeout():
+	_emit_device_data()
 
 func initialize_from_data(che_data: Dictionary):
-	# Set basic properties
-	name = che_data.get("name", "")
-	status = che_data.get("status", "IL")  # Default to Idle instead of Offline
+	# Set core identity properties
+	id = che_data.get("pk", 0)
+	che_name = che_data.get("name", "")
+	equipment_type_id = che_data.get("equipment_type", 0)
 	equipment_type_name = che_data.get("equipment_type_name", "")
+	
+	# Set status and state
+	status = che_data.get("status", "IL")  # Default to Idle instead of Offline
+	is_available = che_data.get("is_available", false) # Default to not available
+	fuel_level = che_data.get("fuel_level", 100)
+	last_maintenance = "NA" #che_data.get("last_maintenance", "")
+	
+	# Set location and position
+	location_id = che_data.get("location", 0)
+	location_name = che_data.get("location_name", "")
+	current_block_id = 0 #che_data.get("current_block", 0)
+	current_block_name = "NA" #che_data.get("current_block_name", "")
 	twistlock_closed = che_data.get("twistlock_closed", false)
+	
+	# Set user information
+	current_user_id = 0 #che_data.get("current_user", 0)
+	current_user_name = "NA" #che_data.get("current_user_name", "")
 	
 	# Set position if provided
 	if "x_position" in che_data and "y_position" in che_data:
-		global_position = Vector3(che_data.x_position, 0, che_data.y_position)
+		x_position = che_data.x_position
+		y_position = che_data.y_position
+		global_position = Vector3(x_position, 0, y_position)
 	
 	# Update visual state based on status
 	_update_visual_state()
+	if status != "OF":
+		_emit_device_birth()
 
 func _update_visual_state():
 	# Update the CHE's appearance based on its status
+	var status_color = Color.WHITE  # default
 	match status:
 		"IL":  # Idle
-			# Set idle animation or state
-			pass
+			status_color = Color.GREEN
 		"WK":  # Working
-			# Set working animation or state
-			pass
+			status_color = Color.BLUE
 		"OF":  # Offline
-			# Set offline animation or state
-			pass
+			status_color = Color.GRAY
 		"BD":  # Breakdown
-			# Set breakdown animation or state
-			pass
+			status_color = Color.RED
 		"MA":  # In Maintenance
-			# Set maintenance animation or state
-			pass
+			status_color = Color.YELLOW
+	
+	# Apply the color to the geometry
+	var _color_material = StandardMaterial3D.new()
+	_color_material.vertex_color_use_as_albedo = true
+	_color_material.albedo_color = status_color
+	_color_material.metallic = 1
+
+	Utils.Match.traverse_node_tree_and_replace_materials_matching_albedo(
+		find_child("Geometry"),
+		MATERIAL_ALBEDO_TO_REPLACE,
+		MATERIAL_ALBEDO_TO_REPLACE_EPSILON,
+		_color_material
+	)
+
+func _on_location_detector_area_entered(area: Area3D):
+	# Check if the area we entered is a Pile by seeing if it has the 'logical_name' property.
+	if "logical_name" in area:
+		self.position_logical = area.logical_name
+		print(che_name + " entered pile: " + self.position_logical)
+
+func _on_location_detector_area_exited(area: Area3D):
+	# When we leave a pile, we can either clear the logical position
+	# or just wait until we enter a new one.
+	if "logical_name" in area and area.logical_name == self.position_logical:
+		self.position_logical = "IN TRANSIT"
+		print(che_name + " exited pile. Now in transit.")
 
 func is_full():
 	assert(resource_a + resource_b <= resources_max, "worker capacity was exceeded somehow")

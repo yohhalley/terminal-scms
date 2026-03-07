@@ -17,6 +17,7 @@ func _ready():
 	if Engine.is_editor_hint():
 		return
 	MatchSignals.deselect_all_units.connect(deselect)
+	MatchSignals.terrain_targeted.connect(_on_terrain_clicked)
 	_unit.input_event.connect(_on_input_event)
 	_circle.hide()
 
@@ -77,7 +78,19 @@ func _update_circle_params():
 
 func _on_input_event(_camera, event, _click_position, _click_normal, _shape_idx):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		if _selected and Input.is_action_pressed("shift_selecting"):
+		var shift_held = Input.is_action_pressed("shift_selecting")
+		if not shift_held:
+			# Deselect all other units before selecting this one
+			for node in get_tree().get_nodes_in_group("selected_units"):
+				if node != _unit and "deselect" in node:
+					node.deselect()
+		# Now toggle or select this unit
+		if _selected and shift_held:
 			deselect()
-			return
-		select()
+		else:
+			select()
+
+
+func _on_terrain_clicked(_position):
+	if not Input.is_action_pressed("shift_selecting"):
+		deselect()

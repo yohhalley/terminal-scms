@@ -1,0 +1,386 @@
+{
+  "name": "Sprinter",
+  "parameters": {
+    "sprinterID": {
+      "dataType": "Integer"
+    },
+    "sprinterName": {
+      "dataType": "String"
+    },
+    "dbConnection": {
+      "dataType": "String",
+      "value": "mes_core"
+    },
+    "assignedOrders": {
+      "dataType": "String"
+    }
+  },
+  "tagType": "UdtType",
+  "tags": [
+    {
+      "name": "OEE",
+      "typeId": "mes_core/Che-OEE-Downtime",
+      "tagType": "UdtInstance",
+      "tags": [
+        {
+          "name": "Unplanned Downtime",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Production Rate",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Estimated Finish Time",
+          "tagType": "AtomicTag"
+        },
+        {
+          "expression": "addHours({[.]../Start Time},6)",
+          "name": "Start Time",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Failed Orders",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "WorkOrder",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "ID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "OEE Quality",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "OEE Availability",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Schedule ID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Target Orders",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Units",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Standard Rate",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "OEE",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "OEE Performance",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Total Time",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Total Orders",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Current Time",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Successful Orders",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Planned Downtime",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Order Count",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Run Time",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Scheduled Rate",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "End Time",
+          "tagType": "AtomicTag"
+        }
+      ]
+    },
+    {
+      "valueSource": "memory",
+      "eventScripts": [
+        {
+          "eventid": "valueChanged",
+          "script": "\tif currentValue.value == 1 and not initialChange:\n\t\tsystem.tag.writeBlocking(\"[.]Dispatch/Enable\", 1)\n\t\t\n\telse:\n\t\tsystem.tag.writeBlocking(\"[.]Dispatch/Enable\", 0)"
+        }
+      ],
+      "dataType": "Boolean",
+      "name": "Collect Data",
+      "value": false,
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "expression": "{sprinterName}",
+      "dataType": "String",
+      "name": "Sprinter Name",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "memory",
+      "dataType": "DateTime",
+      "name": "Start Time",
+      "formatString": "yyyy-MM-dd h:mm:ss aa",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "expression": "{[.]../Edge/State}",
+      "name": "State",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "memory",
+      "name": "Productivity Setpoint",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "memory",
+      "dataType": "Float4",
+      "name": "Order Time",
+      "tagType": "AtomicTag",
+      "enabled": true
+    },
+    {
+      "valueSource": "expr",
+      "expression": "{sprinterID}",
+      "name": "Sprinter ID",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "eventScripts": [
+        {
+          "eventid": "valueChanged",
+          "script": "\timport system\n\tif not initialChange:\n\t\tlastTS = previousValue.timestamp\n\t\tnewTS = currentValue.timestamp\n\t\tdelta = system.date.millisBetween(lastTS, newTS)/1000\n\t\tsystem.tag.writeBlocking(\"[.]Order Time\", float(delta))"
+        }
+      ],
+      "expression": "{[.]../Edge/OrderComplete}",
+      "name": "Order Complete",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "expression": "{[.]../Edge/OrderStart}",
+      "name": "Order Start",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Dispatch",
+      "typeId": "mes_core/CHE Query Dispatch",
+      "parameters": {
+        "dbConnection": {
+          "dataType": "String",
+          "value": "mes_core"
+        },
+        "sprinterID": {
+          "dataType": "Integer",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{sprinterID}"
+          }
+        }
+      },
+      "tagType": "UdtInstance",
+      "tags": [
+        {
+          "name": "Enable",
+          "tagType": "AtomicTag",
+          "dataType": "Boolean",
+          "valueSource": "memory",
+          "value": true
+        },
+        {
+          "name": "State Start Time",
+          "tagType": "AtomicTag",
+          "dataType": "DateTime",
+          "valueSource": "memory",
+          "formatString": "yyyy-MM-dd h:mm:ss aa"
+        },
+        {
+          "name": "OEE Failed Orders",
+          "typeId": "mes_core/Che-OEE-Downtime",
+          "tagType": "UdtInstance",
+          "tags": [
+            {
+              "name": "RunID",
+              "tagType": "AtomicTag",
+              "dataType": "String",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Failed Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Target Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Total Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            }
+          ]
+        },
+        {
+          "name": "OEE Order Start",
+          "typeId": "mes_core/Che-OEE-Downtime",
+          "tagType": "UdtInstance",
+          "tags": [
+            {
+              "name": "RunID",
+              "tagType": "AtomicTag",
+              "dataType": "String",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Failed Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Target Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Total Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            }
+          ]
+        },
+        {
+          "name": "OEE Order Complete",
+          "typeId": "mes_core/Che-OEE-Downtime",
+          "tagType": "UdtInstance",
+          "tags": [
+            {
+              "name": "RunID",
+              "tagType": "AtomicTag",
+              "dataType": "String",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Failed Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Target Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            },
+            {
+              "name": "Total Orders",
+              "tagType": "AtomicTag",
+              "dataType": "Int4",
+              "valueSource": "memory"
+            }
+          ]
+        },
+        {
+          "name": "SprinterID",
+          "tagType": "AtomicTag",
+          "valueSource": "expr",
+          "expression": "{sprinterID}"
+        },
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag",
+          "valueSource": "expr"
+        },
+        {
+          "name": "State Run Time",
+          "tagType": "AtomicTag",
+          "valueSource": "expr",
+          "expression": "datediff({[.]State Start Time},now(),'second')"
+        },
+        {
+          "name": "Sprinter State",
+          "tagType": "AtomicTag",
+          "valueSource": "expr",
+          "expression": "{[.]../State}"
+        },
+        {
+          "name": "State Reason",
+          "tagType": "AtomicTag",
+          "valueSource": "db",
+          "dataType": "DataSet",
+          "query": "select * from statereason where ParentID = {sprinterID}",
+          "datasource": {
+            "bindType": "parameter",
+            "binding": "{dbConnection}"
+          }
+        }
+      ]
+    },
+    {
+      "valueSource": "expr",
+      "expression": "{[.]../Edge/FailedOrders}",
+      "name": "Failed Orders",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "expression": "now()",
+      "dataType": "DateTime",
+      "name": "Current Time",
+      "formatString": "yyyy-MM-dd h:mm:ss aa",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "expression": "dateDiff({[.]Start Time},{[.]Current Time},'Second')",
+      "name": "Run Time",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "memory",
+      "dataType": "Boolean",
+      "name": "Run Enabled",
+      "value": false,
+      "tagType": "AtomicTag"
+    }
+  ]
+} 

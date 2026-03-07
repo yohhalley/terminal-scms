@@ -1,0 +1,201 @@
+{
+  "name": "Query Dispatch",
+  "parameters": {
+    "dbConnection": {
+      "dataType": "String",
+      "value": {
+        "bindType": "parameter",
+        "binding": "{dbConnection}"
+      }
+    },
+    "lineID": {
+      "dataType": "Integer",
+      "value": {
+        "bindType": "parameter",
+        "binding": "{lineID}"
+      }
+    }
+  },
+  "tagType": "UdtType",
+  "tags": [
+    {
+      "valueSource": "memory",
+      "dataType": "Boolean",
+      "name": "Enable",
+      "value": true,
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "memory",
+      "dataType": "DateTime",
+      "name": "State Start Time",
+      "formatString": "yyyy-MM-dd h:mm:ss aa",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "OEE Infeed",
+      "typeId": "mes_core/Count Dispatch",
+      "tagType": "UdtInstance",
+      "tags": [
+        {
+          "name": "LastCount",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "CountTypeID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "TagID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Enable",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Count",
+          "tagType": "AtomicTag"
+        }
+      ]
+    },
+    {
+      "name": "OEE Outfeed",
+      "typeId": "mes_core/Count Dispatch",
+      "parameters": {
+        "dbConnection": {
+          "dataType": "String",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{dbConnection}"
+          }
+        },
+        "lineID": {
+          "dataType": "Integer",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{lineID}"
+          }
+        }
+      },
+      "tagType": "UdtInstance",
+      "tags": [
+        {
+          "name": "Count",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "TagID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Enable",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "LastCount",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "CountTypeID",
+          "tagType": "AtomicTag"
+        }
+      ]
+    },
+    {
+      "valueSource": "expr",
+      "expression": "{lineID}",
+      "name": "LineID",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "name": "RunID",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "OEE Waste",
+      "typeId": "mes_core/Count Dispatch",
+      "parameters": {
+        "dbConnection": {
+          "dataType": "String",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{dbConnection}"
+          }
+        },
+        "lineID": {
+          "dataType": "Integer",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{lineID}"
+          }
+        }
+      },
+      "tagType": "UdtInstance",
+      "tags": [
+        {
+          "name": "TagID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "CountTypeID",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "LastCount",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Enable",
+          "tagType": "AtomicTag"
+        },
+        {
+          "name": "Count",
+          "tagType": "AtomicTag"
+        }
+      ]
+    },
+    {
+      "valueSource": "expr",
+      "expression": "datediff({[.]State Start Time},now(),\u0027second\u0027)",
+      "name": "State Run Time",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "eventScripts": [
+        {
+          "eventid": "valueChanged",
+          "script": "\timport system\n\tfrom datetime import datetime\n\timport time\n\tdb \u003d \u0027mes_core\u0027\n\tenable \u003d system.tag.readBlocking(\"[.]Enable\")[0].value\n\tif not initialChange:\n\t\tstamp \u003d datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")\n\t\tsystem.tag.writeBlocking([\"[.]State Start Time\"],[stamp])\n\t\n\tif enable \u003d\u003d 1 and not initialChange:\n\t\n\t\tline\t\u003d system.tag.readBlocking(\"[.]LineID\")[0].value\n\t\treason\t\u003d (currentValue.value if currentValue.quality.isGood() else 0)\n\t\trun\t\t\u003d system.tag.readBlocking(\"[.]RunID\")[0].value\n\t\t\n\t\tstamp \u003d datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")\n\t\tsystem.tag.writeBlocking([\"[.]State Start Time\"],[stamp])\n\t\treasonCode \u003d currentValue.value\n\t\trunID \u003d system.tag.readBlocking(\"[.]RunID\")[0].value\n\t\tlineID \u003d system.tag.readBlocking(\"[.]LineID\")[0].value\n\t\tdata \u003d system.db.runPrepQuery(\u0027select ID,ReasonName FROM statereason where ReasonCode \u003d ? and ParentID \u003d ?\u0027,[reasonCode,lineID],db)\n\t\tfor row in data:\n\t\t\treasonID \u003d row[0]\n\t\t\treasonName \u003d row[1]\n\t\tendQuery \u003d \u0027update statehistory set EndDateTime \u003d ? where LineID \u003d ? and EndDateTime is NULL\u0027\n\t\tquery \u003d \u0027\u0027\u0027insert into statehistory\n\t\t(StateReasonID,RunID,ReasonName,\n\t\tLineID,ReasonCode,StartDateTime) \n\t\tVALUES\n\t\t(?,?,?,\n\t\t?,?,?) \u0027\u0027\u0027\n\t\tsystem.db.runSFPrepUpdate(endQuery,[stamp,lineID],[db])\n\n\t\tsystem.db.runSFPrepUpdate(query,[reasonID, runID, reasonName, lineID, currentValue.value, stamp],[db])\n\t\n"
+        }
+      ],
+      "expression": "{[.]../State}",
+      "name": "Line State",
+      "tagType": "AtomicTag"
+    },
+    {
+      "datasource": {
+        "bindType": "parameter",
+        "binding": "{dbConnection}"
+      },
+      "valueSource": "db",
+      "dataType": "DataSet",
+      "query": "select * from statereason where ParentID \u003d {lineID}",
+      "name": "State Reason",
+      "tagType": "AtomicTag"
+    }
+  ]
+}
