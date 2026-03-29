@@ -73,9 +73,9 @@
 
 ---
 
-## Data Flow: EDI → Planning → Dispatching → Execution
+## Data Flow: Simplified EDI → Visit Creation → Bulk Container Import → Planning
 
-### Sequence Diagram: Full Workflow
+### Sequence Diagram: Simplified Workflow (Sprint 1.1)
 
 ```
 User/EDI      TOS (MiniTOS)           MQTT              Godot Simulator

@@ -117,12 +117,12 @@ class ContainerVisit(models.Model):
         on_delete=models.RESTRICT, blank=True, null=True
     )
     ib_carrier = models.ForeignKey(
-        'Visit',
+        'CarrierVisit',
         on_delete=models.RESTRICT,
         related_name='ib_carrier', blank=True, null=True
     )
     ob_carrier = models.ForeignKey(
-        'Visit',
+        'CarrierVisit',
         on_delete=models.RESTRICT,
         related_name='ob_carrier', blank=True, null=True
     )
@@ -149,6 +149,34 @@ class ContainerVisit(models.Model):
     x_position = models.FloatField(blank=True, null=True)
     y_position = models.FloatField(blank=True, null=True)
     z_position = models.FloatField(blank=True, null=True)
+    bill_of_lading = models.CharField(max_length=20, blank=True, null=True)
+    booking = models.CharField(max_length=20, blank=True, null=True)
+
+    # New fields for status tracking
+    PREADVISED = 'Preadvised'
+    ARRIVED = 'Arrived'
+    AT_YARD = 'AtYard'
+    AT_QC = 'AtQC'
+    ON_VESSEL = 'OnVessel'
+    DEPARTED = 'Departed'
+    COMPLETED = 'Completed'
+
+    STATUS_CHOICES = [
+        (PREADVISED, 'Preadvised'),
+        (ARRIVED, 'Arrived'),
+        (AT_YARD, 'At Yard'),
+        (AT_QC, 'At QC'),
+        (ON_VESSEL, 'On Vessel'),
+        (DEPARTED, 'Departed'),
+        (COMPLETED, 'Completed'),
+    ]
+
+    status = models.CharField(
+        max_length=15,
+        choices=STATUS_CHOICES,
+        default=PREADVISED,
+    )
+    last_updated = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.container_number.container_number
@@ -582,34 +610,126 @@ class EquipmentPart(models.Model):
         return self.name
 
 
-###################################
-# class WarehouseInventory(models.Model):
 
 ###################################
 class Route(models.Model):
-    name = models.CharField(max_length=30, unique=True)
-    window_start = models.DateTimeField()
-    ops_start = models.DateTimeField()
-    ops_end = models.DateTimeField()
-    window_end = models.DateTimeField()
+    MONDAY = 'Monday'
+    TUESDAY = 'Tuesday'
+    WEDNESDAY = 'Wednesday'
+    THURSDAY = 'Thursday'
+    FRIDAY = 'Friday'
+    SATURDAY = 'Saturday'
+    SUNDAY = 'Sunday'
+
+    WEEKDAYS = [
+        (MONDAY, 'Monday'),
+        (TUESDAY, 'Tuesday'),
+        (WEDNESDAY, 'Wednesday'),
+        (THURSDAY, 'Thursday'),
+        (FRIDAY, 'Friday'),
+        (SATURDAY, 'Saturday'),
+        (SUNDAY, 'Sunday'),
+    ]
+
+    name = models.CharField(max_length=50, unique=True)
+    
+    # Time-based windows for daily routes
+    window_start_time = models.TimeField(blank=True, null=True)
+    window_end_time = models.TimeField(blank=True, null=True)
+    
+    # Weekday-based windows for weekly/biweekly routes
+    window_start_weekday = models.CharField(
+        max_length=10,
+        choices=WEEKDAYS,
+        blank=True,
+        null=True
+    )
+    window_end_weekday = models.CharField(
+        max_length=10,
+        choices=WEEKDAYS,
+        blank=True,
+        null=True
+    )
+    
+    # Monthday-based windows for monthly routes
+    window_start_monthday = models.IntegerField(blank=True, null=True)
+    window_end_monthday = models.IntegerField(blank=True, null=True)
+    
     moves_in = models.IntegerField(default=0)
     moves_out = models.IntegerField(default=0)
-    moves_import = models.IntegerField(default=0)
-    moves_export = models.IntegerField(default=0)
-    moves_ts = models.IntegerField(default=0)
-    moves_restow = models.IntegerField(default=0)
-    total_moves = models.IntegerField(default=0)
+    periodicity = models.CharField(max_length=20, choices=[
+        ('Daily', 'Daily'),
+        ('Weekly', 'Weekly'),
+        ('Bi-weekly', 'Bi-weekly'),
+        ('Monthly', 'Monthly'),
+    ], default='Weekly')
 
     def __str__(self):
         return self.name
 
 
 ###################################
-class Visit(models.Model):
+class CarrierVisit(models.Model):
+    PLANNED = 'Created'
+    ANNOUNCED = 'Announced'
+    ARRIVED = 'Arrived'
+    IN_OPERATION = 'InOperation'
+    COMPLETE = 'Complete'
+    DEPARTED = 'Departed'
+
+    STATUS_CHOICES = [
+        (PLANNED, 'Created'),
+        (ANNOUNCED, 'Announced'),
+        (ARRIVED, 'Arrived'),
+        (IN_OPERATION, 'In Operation'),
+        (COMPLETE, 'Complete'),
+        (DEPARTED, 'Departed'),
+    ]
+
+    VESSEL = 'Vessel'
+    BARGE = 'Barge'
+    TRUCK = 'Truck'
+    TRAIN = 'Train'
+
+    VISIT_TYPES = [
+        (VESSEL, 'Vessel'),
+        (BARGE, 'Barge'),
+        (TRUCK, 'Truck'),
+        (TRAIN, 'Train'),
+    ]
+
     name = models.CharField(max_length=30, unique=True)
+    visit_type = models.CharField(
+        max_length=10,
+        choices=VISIT_TYPES,
+        default=VESSEL,
+    )
+    status = models.CharField(
+        max_length=15,
+        choices=STATUS_CHOICES,
+        default=PLANNED,
+    )
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.RESTRICT,
+    )
+    eta = models.DateTimeField(blank=True, null=True)
+    etd = models.DateTimeField(blank=True, null=True)
+    ata = models.DateTimeField(blank=True, null=True)
+    atd = models.DateTimeField(blank=True, null=True)
+    vessel_name = models.CharField(max_length=50, blank=True, null=True)
+    voyage_number = models.CharField(max_length=20, blank=True, null=True)
+    carrier = models.CharField(max_length=50, blank=True, null=True)
+    berth = models.CharField(max_length=10, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    # Legacy fields from original Visit model
     route = models.ForeignKey(
         'Route',
         on_delete=models.RESTRICT,
+        blank=True,
+        null=True,
     )
     window_start = models.DateTimeField(blank=True, null=True)
     ops_start = models.DateTimeField(blank=True, null=True)
@@ -624,7 +744,7 @@ class Visit(models.Model):
     total_moves = models.IntegerField(default=0)
 
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.status})"
 
 
 ###################################

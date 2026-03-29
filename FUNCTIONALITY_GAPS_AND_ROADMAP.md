@@ -65,86 +65,70 @@
 
 ## 2. FUNCTIONAL GAPS BREAKDOWN BY FEATURE
 
-### 2.1 EDI Processing App
+### 2.1 EDI Processing App (SIMPLIFIED APPROACH)
 
 **Current State:** No EDI processing; manual `ContainerVisit` creation only.
 
 **Gap:** Cannot bulk-import container manifests from shipping lines.
 
-#### **Models to Add:**
+**Updated Approach (Sprint 1.1):** Skip complex EDI parsing. Instead, provide bulk container creation API that accepts container data directly. EDI processing will be handled by external systems that call our bulk API.
+
+#### **Models Updated (Sprint 1.1):**
 ```
-EDIFile (new)
-  - filename: CharField
-  - upload_date: DateTimeField
-  - status: [Pending, Processing, Processed, Failed]
-  - created_at: DateTimeField
-  ├── has error logs
+ContainerVisit (updated)
+  - bill_of_lading: CharField (NEW - links to shipping manifest)
+  - booking: CharField (NEW - booking reference)
+  - status: [Preadvised, Planned, InYard, Loaded, Discharged, Departed]  ← ENHANCED STATE MACHINE
+  - ib_carrier: FK(Visit) (inbound carrier)
+  - ob_carrier: FK(Visit) (outbound carrier)
 
-EDIContainer (new)
-  - edi_file: FK(EDIFile)
-  - bill_of_lading: CharField
-  - container_number: CharField
-  - iso_type: CharField
-  - weight: IntegerField
-  - pod: CharField
-  - line_sequence: IntegerField (for DSCH) or bay_sequence (for LOAD)
-  ├── maps to container manifest line
-
-TransportVisit (rename from Visit, add distinctions)
-  - name: CharField (vessel call identifier)
-  - visit_type: [Vessel, Train, Truck]
-  - status: [Planned, Announced, Arrived, InOperation, Complete, Departed]  ← NEW STATE MACHINE
-  - location: FK(Location)
+Visit (updated)
+  - visit_type: [Vessel, Barge, Truck, Train] (NEW)
+  - status: [Planned, Announced, Arrived, InOperation, Complete, Departed]  ← ENHANCED STATE MACHINE
+  - vessel_name: CharField (for vessel visits)
   - eta: DateTimeField
   - etd: DateTimeField
-  ├── tracks full lifecycle
-  
-VesselVisit (new, extends TransportVisit)
-  - vessel_imo: CharField
-  - vessel_name: CharField
-  - berth: CharField
-  ├── vessel-specific data
 
-TransportVisitContainer (new)
-  - transport_visit: FK(TransportVisit)
-  - container_visit: FK(ContainerVisit)
-  - sequence: IntegerField
-  - move_type: [DSCH, LOAD, Restow, Shift]
-  ├── explicit container-visit relationship with sequence
+Route (simplified)
+  - name: CharField
+  - window_start: DateTimeField
+  - window_end: DateTimeField
+  - periodicity: [Daily, Weekly, Biweekly, Monthly] (NEW)
 ```
 
-#### **APIs to Add:**
+#### **APIs Added (Sprint 1.1):**
 ```
-POST /api/edi/upload
-  - Input: EDI file (EDI 424, BAPLIE, etc.)
-  - Output: { status: "processing", edi_file_id: X }
-  - Process: Parse EDI, validate, detect duplicates
+POST /api/bulk-create-container-visits
+  - Input: { "containers": [{container_number, iso_type, bill_of_lading, booking, ib_carrier_id, ob_carrier_id}, ...] }
+  - Output: { success: true, created_visits: [id1, id2, ...] }
+  - Process: Bulk create ContainerVisit records with validation
 
-POST /api/locations/{location_pk}/transport_visits
-  - Input: TransportVisit data
-  - Output: TransportVisit + auto-created ContainerVisits in "Preadvised" status
+POST /api/visits/{visit_id}/transition-status
+  - Input: { "status": "Arrived" }
+  - Output: Updated visit data
+  - Process: State machine transition with validation
 
-PATCH /api/locations/{location_pk}/transport_visits/{visit_pk}
-  - Update visit status (e.g., Announced → Arrived)
+POST /api/container-visits/{container_id}/transition-status
+  - Input: { "status": "InYard" }
+  - Output: Updated container visit data
+  - Process: Container status transition
 
-GET /api/locations/{location_pk}/transport_visits/{visit_pk}/containers
-  - List containers for visit with sequence
+GET /api/visits/{visit_id}/status-summary
+  - Output: { discharge_containers: X, load_containers: Y, total: Z }
+  - Process: Count containers linked to visit via ib_carrier/ob_carrier
 ```
 
-#### **Services/Logic to Build:**
+#### **Services/Logic Added (Sprint 1.1):**
 ```
-class EDIProcessor:
-  - parse_edi_file(file_path) → List[EDILine]
-  - validate_edi_line(line) → (is_valid, errors)
-  - check_duplicate_visit(visit_name) → bool
-  - create_container_visits_from_edi(edi_lines, transport_visit)
-  
-class TransportVisitStateManager:
+class VisitStateManager:
   - get_allowed_transitions(current_status) → List[Status]
   - validate_transition(from_status, to_status) → bool
-  - update_status(visit, new_status) → Visit (with validation)
-  - on_visit_arrived: trigger yard planning for DSCH moves
-  - on_visit_departed: clean up, archive records
+  - transition_visit_status(visit, new_status, user) → (success, message)
+  - transition_container_status(container_visit, new_status, user) → (success, message)
+
+BulkContainerVisitSerializer:
+  - validate_container_data(data) → validated data
+  - create_container_visits(validated_data) → List[ContainerVisit]
 ```
 
 ---

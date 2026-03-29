@@ -31,6 +31,8 @@ work_queue_router = nested_routers.NestedSimpleRouter(location_router, r'work_qu
 location_router.register(r'container_visits', views.ContainerVisitViewSet, basename='container_visit')
 container_visit_router = nested_routers.NestedSimpleRouter(location_router, r'container_visits', lookup='container_visit')
 
+location_router.register(r'visits', views.VisitViewSet, basename='visit')
+
 #location_router.register(r'container_visits', views.ContainerVisitViewSet, basename='container_visit')
 #container_visit_router = nested_routers.NestedSimpleRouter(location_router, r'container_visits', lookup='container_visit')
 
@@ -74,6 +76,12 @@ urlpatterns = [
     re_path(r'^', include(pile_router.urls), name='partial_update'),
     re_path(r'^', include(work_queue_router.urls)),
     re_path(r'^', include(order_router.urls)),
+
+    # Visit API endpoints
+    path('api/bulk-create-container-visits/', views.bulk_create_container_visits, name='bulk_create_container_visits'),
+    path('api/visits/<int:visit_id>/transition-status/', views.transition_visit_status, name='transition_visit_status'),
+    path('api/container-visits/<int:container_id>/transition-status/', views.transition_container_status, name='transition_container_status'),
+    path('api/visits/<int:visit_id>/status-summary/', views.visit_status_summary, name='visit_status_summary'),
 ]
 
 # urlpatterns = [

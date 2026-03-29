@@ -12,11 +12,11 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 from django_filters import rest_framework as filters
 
-from .models import Location, Block, Pile, Position, ContainerOwner, ContainerUnit, ContainerVisit, ISOType, Che, \
+from .models import Location, Block, Pile, Position, ContainerOwner, ContainerUnit, ContainerVisit, CarrierVisit, ISOType, Che, \
     WorkQueue, Order, OrderLeg
 from .serializers import LocationSerializer, BlockSerializer, PileSerializer, PositionSerializer, UserSerializer, \
     GroupSerializer, ContainerUnitSerializer, ContainerVisitSerializer, CheSerializer, WorkQueueSerializer, \
-    OrderSerializer, OrderLegSerializer
+    OrderSerializer, OrderLegSerializer, CarrierVisitSerializer, BulkContainerVisitSerializer
 
 ##################################################################
 
@@ -294,6 +294,142 @@ class OrderLegViewSet(viewsets.ViewSet):
         order = get_object_or_404(queryset, pk=pk)
         serializer = OrderLegSerializer(order)
         return Response(serializer.data)
+
+
+##################################################################
+
+#### CarrierVisit Views
+class VisitViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing transport visits (vessels, trucks, trains, barges).
+    """
+    queryset = CarrierVisit.objects.all().order_by('-eta')
+    serializer_class = CarrierVisitSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['status', 'visit_type', 'location', 'vessel_name']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        location_pk = self.kwargs.get('location_pk')
+        if location_pk:
+            queryset = queryset.filter(location=location_pk)
+        return queryset
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def bulk_create_container_visits(request):
+    """
+    API endpoint for bulk creating container visits.
+    Expects: { "containers": [ {container_data}, ... ] }
+    """
+    serializer = BulkContainerVisitSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        created_visits = serializer.save()
+        response_data = {
+            'success': True,
+            'message': f'Successfully created {len(created_visits)} container visits',
+            'created_visits': [visit.id for visit in created_visits]
+        }
+        return Response(response_data, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'Failed to create container visits: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def transition_visit_status(request, visit_id):
+    """
+    API endpoint for transitioning visit status.
+    """
+    try:
+        visit = CarrierVisit.objects.get(id=visit_id)
+    except CarrierVisit.DoesNotExist:
+        return Response({'error': 'Visit not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    new_status = request.data.get('status')
+    if not new_status:
+        return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    visit_manager = VisitStateManager()
+    success, message = visit_manager.transition_visit_status(visit, new_status, request.user)
+
+    if success:
+        # Return updated visit
+        serializer = VisitSerializer(visit)
+        return Response({
+            'success': True,
+            'message': message,
+            'visit': serializer.data
+        })
+    else:
+        return Response({
+            'success': False,
+            'message': message
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def transition_container_status(request, container_id):
+    """
+    API endpoint for transitioning container visit status.
+    """
+    try:
+        container_visit = ContainerVisit.objects.get(id=container_id)
+    except ContainerVisit.DoesNotExist:
+        return Response({'error': 'Container visit not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    new_status = request.data.get('status')
+    if not new_status:
+        return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    visit_manager = VisitStateManager()
+    success, message = visit_manager.transition_container_status(container_visit, new_status, request.user)
+
+    if success:
+        # Return updated container
+        serializer = ContainerVisitSerializer(container_visit)
+        return Response({
+            'success': True,
+            'message': message,
+            'container_visit': serializer.data
+        })
+    else:
+        return Response({
+            'success': False,
+            'message': message
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def visit_status_summary(request, visit_id):
+    """
+    API endpoint for getting container status summary for a visit.
+    """
+    try:
+        visit = CarrierVisit.objects.get(id=visit_id)
+    except CarrierVisit.DoesNotExist:
+        return Response({'error': 'Visit not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Count containers linked to this visit
+    discharge_count = ContainerVisit.objects.filter(ib_carrier=visit).count()
+    load_count = ContainerVisit.objects.filter(ob_carrier=visit).count()
+
+    return Response({
+        'visit_id': visit_id,
+        'discharge_containers': discharge_count,
+        'load_containers': load_count,
+        'total_containers': discharge_count + load_count
+    })
 
 
 ##################################################################

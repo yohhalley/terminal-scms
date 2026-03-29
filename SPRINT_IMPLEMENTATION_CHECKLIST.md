@@ -6,47 +6,50 @@ Quick reference for executing the roadmap laid out in FUNCTIONALITY_GAPS_AND_ROA
 
 ## Phase 1: Foundation (Weeks 1-4)
 
-### Sprint 1.1: EDI & Visit Lifecycle (Week 1)
+### Sprint 1.1: EDI & Visit Lifecycle (Week 1) - SIMPLIFIED APPROACH ✅ COMPLETED
 
-#### Models to Create
-- [ ] **EDIFile** (`minitos_core/models.py`)
-  ```python
-  class EDIFile(models.Model):
-    filename = CharField(max_length=255)
-    upload_date = DateTimeField(auto_now_add=True)
-    STATUS_CHOICES = [('Pending', 'Pending'), ('Processing', 'Processing'), ...]
-    status = CharField(max_length=20, choices=STATUS_CHOICES, default='Pending')
-    created_by = ForeignKey(User, ...)
-    error_log = TextField(blank=True, null=True)
-  ```
+#### Models Updated ✅
+- [x] **ContainerVisit** (`minitos_core/models.py`)
+  - Added: `bill_of_lading = CharField(max_length=20, blank=True, null=True)`
+  - Added: `booking = CharField(max_length=20, blank=True, null=True)`
 
-- [ ] **EDIContainer** (maps to container manifest lines)
-- [ ] **TransportVisit** (rename/extend Visit)
-  - Status: Planned, Announced, Arrived, InOperation, Complete, Departed
-  - Fields: visit_type, eta, etd, location
-  
-- [ ] **VesselVisit** (extends TransportVisit)
-  - Fields: vessel_imo, vessel_name, berth
+- [x] **CarrierVisit** (renamed from Visit)
+  - Added: `visit_type = CharField(max_length=10, choices=VISIT_TYPES, default=VESSEL)`
+  - VISIT_TYPES: Vessel, Barge, Truck, Train
 
-- [ ] **TransportVisitContainer** (explicit mapping)
-  - Fields: transport_visit, container_visit, sequence, move_type
+- [x] **Route** (simplified)
+  - Changed to: name, window_start, window_end, periodicity
+  - periodicity choices: Daily, Weekly, Biweekly, Monthly
 
-#### Services to Create
-- [ ] `minitos_core/services/edi_processor.py`
-  - `parse_edi_file(file_path) → List[EDILine]`
-  - `validate_edi_line(line) → (is_valid, errors)`
-  - `check_duplicate_visit(visit_name) → bool`
-  - `create_container_visits_from_edi(edi_lines, transport_visit)`
+#### Serializers Updated ✅
+- [x] **ContainerVisitSerializer** - Added bill_of_lading, booking fields
+- [x] **VisitSerializer** - Added visit_type field
+- [x] **BulkContainerVisitSerializer** - New serializer for bulk creation
 
-- [ ] `minitos_core/services/visit_state_manager.py`
-  - `TransportVisitStateManager` class
-  - Transition validation logic
-  - Hooks: on_visit_arrived, on_visit_departed
+#### Views/APIs Added ✅
+- [x] `VisitViewSet` - CRUD operations for visits
+- [x] `bulk_create_container_visits()` - POST /api/bulk-create-container-visits
+- [x] `transition_visit_status()` - POST /api/visits/{visit_id}/transition-status
+- [x] `transition_container_status()` - POST /api/container-visits/{container_id}/transition-status
+- [x] `visit_status_summary()` - GET /api/visits/{visit_id}/status-summary
 
-#### Views/APIs to Add
-- [ ] `minitos_core/views.py`: Add `EDIUploadView` (POST /api/edi/upload)
-- [ ] `minitos_core/views.py`: Add `TransportVisitViewSet`
-- [ ] `minitos_core/urls.py`: Register new endpoints
+#### URLs Updated ✅
+- [x] `minitos_core/urls.py` - Registered VisitViewSet and API endpoints
+
+#### Services Updated ✅
+- [x] `VisitStateManager` - Enhanced with transition methods
+  - `transition_visit_status(visit, new_status, user)`
+  - `transition_container_status(container_visit, new_status, user)`
+
+#### Database Migration ✅
+- [x] Run `python manage.py makemigrations` to create migration files
+- [x] Run `python manage.py migrate` to apply changes
+
+#### Testing Required
+- [ ] Test bulk container creation API
+- [ ] Test visit status transitions
+- [ ] Test container status transitions
+- [ ] Verify visit status summary endpoint
 
 #### Serializers
 - [ ] `minitos_core/serializers.py`: `EDIFileSerializer`, `TransportVisitSerializer`

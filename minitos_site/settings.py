@@ -79,15 +79,14 @@ WSGI_APPLICATION = 'minitos_site.wsgi.application'
 
 DATABASES = {
     'default': {
-        #'ENGINE': 'django.db.backends.sqlite3',
-        #'ENGINE': 'django.db.backends.postgresql',
-        'ENGINE': 'django.db.backends.mysql',
-        #'NAME': BASE_DIR / 'db.sqlite3',
-        'NAME': 'minitos_db',
-        'USER': 'minitos_user',
-        'PASSWORD': 'password',
-        'HOST': '127.0.0.1',
-        'PORT': '3306',
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+        #'ENGINE': 'django.db.backends.mysql',
+        #'NAME': 'minitos_db',
+        #'USER': 'minitos_user',
+        #'PASSWORD': 'password',
+        #'HOST': '127.0.0.1',
+        #'PORT': '3306',
     }
 }
 

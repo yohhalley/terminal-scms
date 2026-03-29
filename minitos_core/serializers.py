@@ -1,6 +1,6 @@
 from django.contrib.auth.models import User, Group
 from rest_framework import serializers, generics
-from . models import Location, Block, Pile, Position, ContainerUnit, ContainerVisit, ISOType, ContainerOwner, Che, WorkQueue, Order, OrderLeg
+from . models import Location, Block, Pile, Position, ContainerUnit, ContainerVisit, ISOType, ContainerOwner, Che, WorkQueue, Order, OrderLeg, CarrierVisit
 
 
 ####  Position for container view
@@ -183,7 +183,7 @@ class ContainerVisitSerializer(serializers.ModelSerializer):
             'ib_carrier', 'ib_carrier_name', 'ob_carrier', 'ob_carrier_name',
             'location', 'location_name', 'position', 'eta', 'etd', 'weight',
             'pod', 'pod_name', 'pod2', 'pod2_name', 'requires_power', 'is_imdg',
-            'x_position', 'y_position', 'z_position'
+            'x_position', 'y_position', 'z_position', 'bill_of_lading', 'booking'
         ]
 
 class OrderLegSerializer(serializers.ModelSerializer):
@@ -210,3 +210,89 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'work_queue']
+
+
+#### CarrierVisit Serializers
+
+class CarrierVisitSerializer(serializers.ModelSerializer):
+    location_name = serializers.CharField(source='location.name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    visit_type_display = serializers.CharField(source='get_visit_type_display', read_only=True)
+    container_count = serializers.SerializerMethodField()
+
+    def get_container_count(self, obj):
+        # Count containers where this visit is ib_carrier or ob_carrier
+        return ContainerVisit.objects.filter(
+            models.Q(ib_carrier=obj) | models.Q(ob_carrier=obj)
+        ).count()
+
+    class Meta:
+        model = CarrierVisit
+        fields = [
+            'id', 'name', 'visit_type', 'visit_type_display', 'status', 'status_display',
+            'location', 'location_name', 'eta', 'etd', 'ata', 'atd', 'vessel_name',
+            'voyage_number', 'carrier', 'berth', 'container_count',
+            'created_at', 'last_updated'
+        ]
+        read_only_fields = ['created_at', 'last_updated', 'container_count']
+
+
+#### Bulk Container Creation Serializer
+class BulkContainerVisitSerializer(serializers.Serializer):
+    containers = serializers.ListField(
+        child=serializers.DictField(),
+        allow_empty=False
+    )
+
+    def create(self, validated_data):
+        containers_data = validated_data['containers']
+        created_visits = []
+
+        for container_data in containers_data:
+            # Extract fields
+            container_number = container_data.get('container_number')
+            iso_type_code = container_data.get('iso_type', '2200')  # Default
+            owner_code = container_data.get('owner', 'DEFAULT')  # Default
+            category = container_data.get('category', 'I')
+            location_id = container_data.get('location')
+            weight = container_data.get('weight', 0)
+            bill_of_lading = container_data.get('bill_of_lading')
+            booking = container_data.get('booking')
+            ib_carrier_id = container_data.get('ib_carrier')
+            ob_carrier_id = container_data.get('ob_carrier')
+            pod_id = container_data.get('pod')
+            eta = container_data.get('eta')
+            etd = container_data.get('etd')
+
+            # Get or create ContainerUnit
+            iso_type, _ = ISOType.objects.get_or_create(
+                iso_type=iso_type_code,
+                defaults={'length': iso_type_code[0], 'height': 'NC'}
+            )
+            owner, _ = ContainerOwner.objects.get_or_create(
+                code=owner_code,
+                defaults={'name': owner_code}
+            )
+            container_unit, _ = ContainerUnit.objects.get_or_create(
+                container_number=container_number,
+                defaults={'iso_type': iso_type, 'owner': owner}
+            )
+
+            # Create ContainerVisit
+            container_visit = ContainerVisit.objects.create(
+                container_number=container_unit,
+                category=category,
+                location_id=location_id,
+                weight=weight,
+                bill_of_lading=bill_of_lading,
+                booking=booking,
+                ib_carrier_id=ib_carrier_id,
+                ob_carrier_id=ob_carrier_id,
+                pod_id=pod_id,
+                eta=eta,
+                etd=etd,
+                status=ContainerVisit.PREADVISED
+            )
+            created_visits.append(container_visit)
+
+        return created_visits
