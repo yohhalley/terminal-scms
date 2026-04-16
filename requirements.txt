@@ -1,6 +1,6 @@
 asgiref==3.8.1
 Django==4.2.20
-django-filter==25.1
+django-filter
 django-utils-six==2.0
 djangorestframework==3.16.0
 djangorestframework-filters==0.11.1
