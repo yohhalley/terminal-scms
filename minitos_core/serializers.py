@@ -1,6 +1,7 @@
 from django.contrib.auth.models import User, Group
+from django.db import models
 from rest_framework import serializers, generics
-from . models import Location, Block, Pile, Position, ContainerUnit, ContainerVisit, ISOType, ContainerOwner, Che, WorkQueue, Order, OrderLeg, CarrierVisit
+from . models import Location, Block, Pile, Position, ContainerUnit, ContainerVisit, ISOType, ContainerOwner, Che, WorkQueue, Order, OrderLeg, CarrierVisit, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection
 
 
 ####  Position for container view
@@ -296,3 +297,154 @@ class BulkContainerVisitSerializer(serializers.Serializer):
             created_visits.append(container_visit)
 
         return created_visits
+
+
+class CarrierServiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CarrierService
+        fields = '__all__'
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get('request', None)
+        instance = self.instance
+
+        # Skip dynamic filtering for list views where instance is a list/queryset
+        if isinstance(instance, (list, tuple)):
+            return fields
+
+        # Get the repeat value from the request data or instance
+        repeat_value = None
+        if request and request.method in ['POST', 'PUT', 'PATCH']:
+            repeat_value = request.data.get('repeat')
+        elif instance:
+            repeat_value = instance.repeat
+
+        # Define which fields to show for each repeat type
+        base_fields = [
+            'id', 'name', 'start_date', 'duration', 'carrier_service_type', 'end_date', 'end_type', 'end_after_occurrences',
+            'repeat', 'window_start_time', 'window_end_time', 'window_start_weekday',
+            'window_end_weekday', 'window_start_monthday', 'window_end_monthday',
+            'moves_in', 'moves_out', 'periodicity'
+        ]
+
+        # Add repeat-specific fields
+        if repeat_value == 'Daily':
+            base_fields.extend(['repeat_daily'])
+        elif repeat_value == 'Weekly':
+            base_fields.extend(['repeat_weekly', 'on_weekdays'])
+        elif repeat_value == 'Monthly':
+            base_fields.extend(['repeat_monthly', 'on_monthly_pattern'])
+            # Add pattern-specific fields
+            if request and request.method in ['POST', 'PUT', 'PATCH']:
+                pattern = request.data.get('on_monthly_pattern')
+            elif instance:
+                pattern = instance.on_monthly_pattern
+            else:
+                pattern = None
+
+            if pattern == 'Day':
+                base_fields.append('on_monthly_day')
+            elif pattern in ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']:
+                base_fields.append('on_monthly_weekday')
+        elif repeat_value == 'Yearly':
+            base_fields.extend(['repeat_yearly', 'on_monthly_pattern'])
+            # Add pattern-specific fields
+            if request and request.method in ['POST', 'PUT', 'PATCH']:
+                pattern = request.data.get('on_monthly_pattern')
+            elif instance:
+                pattern = instance.on_monthly_pattern
+            else:
+                pattern = None
+
+            if pattern == 'Day':
+                base_fields.append('on_monthly_day')
+            elif pattern in ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']:
+                base_fields.append('on_monthly_weekday')
+
+        # Filter fields to only include relevant ones
+        filtered_fields = {}
+        for field_name in base_fields:
+            if field_name in fields:
+                filtered_fields[field_name] = fields[field_name]
+
+        return filtered_fields
+
+
+class ServiceCargoRouteSerializer(serializers.ModelSerializer):
+    inbound_carrier_service_name = serializers.CharField(source='inbound_carrier_service.name', read_only=True)
+    outbound_carrier_service_name = serializers.CharField(source='outbound_carrier_service.name', read_only=True)
+    pod_name = serializers.CharField(source='pod.name', read_only=True)
+    iso_type_code = serializers.CharField(source='iso_type.iso_type', read_only=True)
+
+    class Meta:
+        model = ServiceCargoRoute
+        fields = [
+            'id', 'inbound_carrier_service', 'inbound_carrier_service_name',
+            'outbound_carrier_service', 'outbound_carrier_service_name',
+            'pod', 'pod_name', 'container_type', 'iso_type', 'iso_type_code',
+            'hazard_codes', 'is_reefer', 'container_count', 'expected_dwell_time_days'
+        ]
+
+
+class VisitCargoRouteSerializer(serializers.ModelSerializer):
+    inbound_carrier_visit_name = serializers.CharField(source='inbound_carrier_visit.name', read_only=True)
+    outbound_carrier_visit_name = serializers.CharField(source='outbound_carrier_visit.name', read_only=True, allow_null=True)
+    outbound_carrier_service_name = serializers.CharField(source='outbound_carrier_service.name', read_only=True)
+    pod_name = serializers.CharField(source='pod.name', read_only=True)
+    iso_type_code = serializers.CharField(source='iso_type.iso_type', read_only=True)
+
+    class Meta:
+        model = VisitCargoRoute
+        fields = [
+            'id', 'inbound_carrier_visit', 'inbound_carrier_visit_name',
+            'outbound_carrier_visit', 'outbound_carrier_visit_name',
+            'outbound_carrier_service', 'outbound_carrier_service_name',
+            'pod', 'pod_name', 'container_type', 'iso_type', 'iso_type_code',
+            'hazard_codes', 'is_reefer', 'container_count', 'expected_dwell_time_days'
+        ]
+
+
+class PileBookingSerializer(serializers.ModelSerializer):
+    pile_name = serializers.CharField(source='pile.__str__', read_only=True)
+    visit_cargo_route_display = serializers.CharField(source='visit_cargo_route.__str__', read_only=True)
+
+    class Meta:
+        model = PileBooking
+        fields = [
+            'id', 'pile', 'pile_name', 'visit_cargo_route', 'visit_cargo_route_display',
+            'tier_limit', 'start_booking_time', 'end_booking_time'
+        ]
+
+
+class PointOfWorkSerializer(serializers.ModelSerializer):
+    location_name = serializers.CharField(source='location.name', read_only=True)
+    related_ches_names = serializers.SerializerMethodField()
+    pow_type_display = serializers.CharField(source='get_pow_type_display', read_only=True)
+
+    def get_related_ches_names(self, obj):
+        return [che.name for che in obj.related_ches.all()]
+
+    class Meta:
+        model = PointOfWork
+        fields = [
+            'id', 'name', 'pow_type', 'pow_type_display', 'related_ches', 'related_ches_names',
+            'location', 'location_name', 'code', 'x_position', 'y_position',
+            'max_throughput', 'is_active'
+        ]
+
+
+class POWConnectionSerializer(serializers.ModelSerializer):
+    from_pow_name = serializers.CharField(source='from_pow.name', read_only=True)
+    from_pow_code = serializers.CharField(source='from_pow.code', read_only=True)
+    to_pow_name = serializers.CharField(source='to_pow.name', read_only=True)
+    to_pow_code = serializers.CharField(source='to_pow.code', read_only=True)
+
+    class Meta:
+        model = POWConnection
+        fields = [
+            'id', 'from_pow', 'from_pow_name', 'from_pow_code',
+            'to_pow', 'to_pow_name', 'to_pow_code',
+            'distance', 'max_throughput', 'is_bidirectional',
+            'cost', 'is_enabled'
+        ]

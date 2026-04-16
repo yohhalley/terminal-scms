@@ -15,6 +15,9 @@ router = routers.DefaultRouter()
 
 router.register(r'locations', views.LocationViewSet, basename='location')
 router.register(r'container-units', views.ContainerUnitViewSet, basename='containerunit')
+router.register(r'carrier-services', views.CarrierServiceViewSet, basename='carrier-service')
+router.register(r'points-of-work', views.PointOfWorkViewSet, basename='point-of-work')
+router.register(r'pow-connections', views.POWConnectionViewSet, basename='pow-connection')
 ## generates:
 # /locations/
 # /locations/{pk}/
@@ -31,7 +34,14 @@ work_queue_router = nested_routers.NestedSimpleRouter(location_router, r'work_qu
 location_router.register(r'container_visits', views.ContainerVisitViewSet, basename='container_visit')
 container_visit_router = nested_routers.NestedSimpleRouter(location_router, r'container_visits', lookup='container_visit')
 
-location_router.register(r'visits', views.VisitViewSet, basename='visit')
+location_router.register(r'carrier-visits', views.CarrierVisitViewSet, basename='carrier-visit')
+location_router.register(r'carrier-services', views.CarrierServiceViewSet, basename='carrier-service')
+carrier_service_router = nested_routers.NestedSimpleRouter(location_router, r'carrier-services', lookup='carrier_service')
+carrier_service_router.register(r'service-cargo-routes', views.ServiceCargoRouteViewSet, basename='service-cargo-route')
+
+carrier_visit_router = nested_routers.NestedSimpleRouter(location_router, r'carrier-visits', lookup='carrier_visit')
+carrier_visit_router.register(r'visit-cargo-routes', views.VisitCargoRouteViewSet, basename='visit-cargo-route')
+carrier_visit_router.register(r'pile-bookings', views.PileBookingViewSet, basename='pile-booking')
 
 #location_router.register(r'container_visits', views.ContainerVisitViewSet, basename='container_visit')
 #container_visit_router = nested_routers.NestedSimpleRouter(location_router, r'container_visits', lookup='container_visit')
@@ -76,6 +86,8 @@ urlpatterns = [
     re_path(r'^', include(pile_router.urls), name='partial_update'),
     re_path(r'^', include(work_queue_router.urls)),
     re_path(r'^', include(order_router.urls)),
+    re_path(r'^', include(carrier_service_router.urls)),
+    re_path(r'^', include(carrier_visit_router.urls)),
 
     # Visit API endpoints
     path('api/bulk-create-container-visits/', views.bulk_create_container_visits, name='bulk_create_container_visits'),

@@ -612,7 +612,7 @@ class EquipmentPart(models.Model):
 
 
 ###################################
-class Route(models.Model):
+class CarrierService(models.Model):
     MONDAY = 'Monday'
     TUESDAY = 'Tuesday'
     WEDNESDAY = 'Wednesday'
@@ -631,13 +631,103 @@ class Route(models.Model):
         (SUNDAY, 'Sunday'),
     ]
 
+    MONTHLY_PATTERN_DAY = 'Day'
+    MONTHLY_PATTERN_SUNDAY = 'Sunday'
+    MONTHLY_PATTERN_MONDAY = 'Monday'
+    MONTHLY_PATTERN_TUESDAY = 'Tuesday'
+    MONTHLY_PATTERN_WEDNESDAY = 'Wednesday'
+    MONTHLY_PATTERN_THURSDAY = 'Thursday'
+    MONTHLY_PATTERN_FRIDAY = 'Friday'
+    MONTHLY_PATTERN_SATURDAY = 'Saturday'
+
+    MONTHLY_PATTERNS = [
+        (MONTHLY_PATTERN_DAY, 'Day'),
+        (MONTHLY_PATTERN_SUNDAY, 'Sunday'),
+        (MONTHLY_PATTERN_MONDAY, 'Monday'),
+        (MONTHLY_PATTERN_TUESDAY, 'Tuesday'),
+        (MONTHLY_PATTERN_WEDNESDAY, 'Wednesday'),
+        (MONTHLY_PATTERN_THURSDAY, 'Thursday'),
+        (MONTHLY_PATTERN_FRIDAY, 'Friday'),
+        (MONTHLY_PATTERN_SATURDAY, 'Saturday'),
+    ]
+
+    WEEKMONTH_ORDINALS = [
+        ('First', 'First'),
+        ('Second', 'Second'),
+        ('Third', 'Third'),
+        ('Fourth', 'Fourth'),
+        ('Last', 'Last'),
+    ]
+
+    END_ON_THIS_DAY = 'on this day'
+    END_AFTER = 'after'
+    END_NEVER = 'no end date'
+
+    END_CHOICES = [
+        (END_ON_THIS_DAY, 'On this day'),
+        (END_AFTER, 'After'),
+        (END_NEVER, 'No end date'),
+    ]
+
+    REPEAT_DAILY = 'Daily'
+    REPEAT_WEEKLY = 'Weekly'
+    REPEAT_MONTHLY = 'Monthly'
+    REPEAT_YEARLY = 'Yearly'
+
+    REPEAT_CHOICES = [
+        (REPEAT_DAILY, 'Daily'),
+        (REPEAT_WEEKLY, 'Weekly'),
+        (REPEAT_MONTHLY, 'Monthly'),
+        (REPEAT_YEARLY, 'Yearly'),
+    ]
+
     name = models.CharField(max_length=50, unique=True)
-    
-    # Time-based windows for daily routes
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.RESTRICT,
+        related_name='carrier_services'
+    )
+
+    VESSEL = 'Vessel'
+    BARGE = 'Barge'
+    TRUCK = 'Truck'
+    TRAIN = 'Train'
+
+    VISIT_TYPES = [
+        (VESSEL, 'Vessel'),
+        (BARGE, 'Barge'),
+        (TRUCK, 'Truck'),
+        (TRAIN, 'Train'),
+    ]
+
+    name = models.CharField(max_length=30, unique=True)
+    carrier_service_type = models.CharField(
+        max_length=10,
+        choices=VISIT_TYPES,
+        default=VESSEL,
+    )
+
+    start_date = models.DateField()
+    end_date = models.DateField(blank=True, null=True)
+    end_type = models.CharField(max_length=15, choices=END_CHOICES, default=END_NEVER)
+    end_after_occurrences = IntegerRangeField(min_value=1, max_value=100, blank=True, null=True)
+
+    repeat = models.CharField(max_length=10, choices=REPEAT_CHOICES, default=REPEAT_DAILY)
+    repeat_daily = IntegerRangeField(min_value=1, max_value=100, blank=True, null=True)
+    repeat_weekly = IntegerRangeField(min_value=1, max_value=100, blank=True, null=True)
+    on_weekdays = models.CharField(max_length=100, blank=True, null=True, help_text='Comma-separated weekdays')
+    repeat_monthly = IntegerRangeField(min_value=1, max_value=100, blank=True, null=True)
+    repeat_yearly = models.IntegerField(blank=True, null=True, help_text='Month number 1-12')
+
+    on_monthly_pattern = models.CharField(max_length=10, choices=MONTHLY_PATTERNS, blank=True, null=True)
+    on_monthly_day = IntegerRangeField(min_value=1, max_value=31, blank=True, null=True)
+    on_monthly_week = models.CharField(max_length=6, choices=WEEKMONTH_ORDINALS, blank=True, null=True)
+
     window_start_time = models.TimeField(blank=True, null=True)
     window_end_time = models.TimeField(blank=True, null=True)
-    
-    # Weekday-based windows for weekly/biweekly routes
+
+    duration = IntegerRangeField(min_value=1, max_value=1440, blank=True, null=True, help_text='Duration in minutes')
+
     window_start_weekday = models.CharField(
         max_length=10,
         choices=WEEKDAYS,
@@ -650,13 +740,13 @@ class Route(models.Model):
         blank=True,
         null=True
     )
-    
-    # Monthday-based windows for monthly routes
+
     window_start_monthday = models.IntegerField(blank=True, null=True)
     window_end_monthday = models.IntegerField(blank=True, null=True)
-    
+
     moves_in = models.IntegerField(default=0)
     moves_out = models.IntegerField(default=0)
+
     periodicity = models.CharField(max_length=20, choices=[
         ('Daily', 'Daily'),
         ('Weekly', 'Weekly'),
@@ -724,9 +814,9 @@ class CarrierVisit(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     last_updated = models.DateTimeField(auto_now=True)
 
-    # Legacy fields from original Visit model
-    route = models.ForeignKey(
-        'Route',
+    # Reference to the CarrierService this visit is associated with
+    carrier_service = models.ForeignKey(
+        'CarrierService',
         on_delete=models.RESTRICT,
         blank=True,
         null=True,
@@ -755,3 +845,225 @@ class POD(models.Model):
 
     def __str__(self):
         return self.name
+
+
+###################################
+class ServiceCargoRoute(models.Model):
+    FCL = 'FCL'
+    MTY = 'MTY'
+
+    CONTAINER_TYPES = [
+        (FCL, 'Full Container Load'),
+        (MTY, 'Empty Container'),
+    ]
+
+    inbound_carrier_service = models.ForeignKey(
+        'CarrierService',
+        on_delete=models.CASCADE,
+        related_name='outbound_cargo_routes'
+    )
+    outbound_carrier_service = models.ForeignKey(
+        'CarrierService',
+        on_delete=models.CASCADE,
+        related_name='inbound_cargo_routes'
+    )
+    pod = models.ForeignKey(
+        'POD',
+        on_delete=models.RESTRICT,
+        blank=True,
+        null=True,
+    )
+    container_type = models.CharField(
+        max_length=3,
+        choices=CONTAINER_TYPES,
+        default=FCL,
+    )
+    iso_type = models.ForeignKey(
+        'ISOType',
+        on_delete=models.RESTRICT,
+    )
+    hazard_codes = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text='Comma-separated IMDG hazard codes'
+    )
+    is_reefer = models.BooleanField(default=False)
+    container_count = models.IntegerField(default=0)
+    expected_dwell_time_days = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.0,
+        help_text='Expected dwell time in days'
+    )
+
+    class Meta:
+        unique_together = ('inbound_carrier_service', 'outbound_carrier_service', 'pod', 'container_type', 'iso_type')
+
+    def __str__(self):
+        return f"{self.inbound_carrier_service.name} → {self.outbound_carrier_service.name} ({self.container_type})"
+
+
+###################################
+class VisitCargoRoute(models.Model):
+    FCL = 'FCL'
+    MTY = 'MTY'
+
+    CONTAINER_TYPES = [
+        (FCL, 'Full Container Load'),
+        (MTY, 'Empty Container'),
+    ]
+
+    inbound_carrier_visit = models.ForeignKey(
+        'CarrierVisit',
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name='outbound_visit_cargo_routes'
+    )
+    inbound_carrier_service = models.ForeignKey(
+        'CarrierService',
+        on_delete=models.CASCADE,
+        related_name='inbound_service_cargo_routes'
+    )
+    outbound_carrier_visit = models.ForeignKey(
+        'CarrierVisit',
+        on_delete=models.CASCADE,
+        blank=True,
+        null=True,
+        related_name='inbound_visit_cargo_routes'
+    )
+    outbound_carrier_service = models.ForeignKey(
+        'CarrierService',
+        on_delete=models.CASCADE,
+        related_name='outbound_service_cargo_routes'
+    )
+    pod = models.ForeignKey(
+        'POD',
+        on_delete=models.RESTRICT,
+        blank=True,
+        null=True,
+    )
+    container_type = models.CharField(
+        max_length=3,
+        choices=CONTAINER_TYPES,
+        default=FCL,
+    )
+    iso_type = models.ForeignKey(
+        'ISOType',
+        on_delete=models.RESTRICT,
+    )
+    hazard_codes = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text='Comma-separated IMDG hazard codes'
+    )
+    is_reefer = models.BooleanField(default=False)
+    container_count = models.IntegerField(default=0)
+    expected_dwell_time_days = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.0,
+        help_text='Expected dwell time in days'
+    )
+
+    class Meta:
+        unique_together = ('inbound_carrier_visit', 'outbound_carrier_visit', 'outbound_carrier_service', 'pod', 'container_type', 'iso_type')
+
+    def __str__(self):
+        visit_name = self.inbound_carrier_visit.name
+        service_name = self.outbound_carrier_service.name
+        return f"{visit_name} → {service_name} ({self.container_type})"
+
+
+###################################
+class PileBooking(models.Model):
+    pile = models.ForeignKey(
+        'Pile',
+        on_delete=models.CASCADE,
+        related_name='bookings'
+    )
+    visit_cargo_route = models.ForeignKey(
+        'VisitCargoRoute',
+        on_delete=models.CASCADE,
+        related_name='pile_bookings'
+    )
+    tier_limit = IntegerRangeField(min_value=1, max_value=20)
+    start_booking_time = models.DateTimeField()
+    end_booking_time = models.DateTimeField()
+
+    class Meta:
+        unique_together = ('pile', 'visit_cargo_route')
+
+    def __str__(self):
+        return f"{self.pile} → {self.visit_cargo_route} (Tier {self.tier_limit})"
+
+
+###################################
+class PointOfWork(models.Model):
+    TERMINAL_AREA = 'terminal area'
+    ENTRY_POINT = 'entry point'
+    DEPARTURE_POINT = 'departure point'
+    ENTRY_DEPARTURE_POINT = 'entry and departure point'
+
+    POW_TYPE_CHOICES = [
+        (TERMINAL_AREA, 'Terminal Area'),
+        (ENTRY_POINT, 'Entry Point'),
+        (DEPARTURE_POINT, 'Departure Point'),
+        (ENTRY_DEPARTURE_POINT, 'Entry and Departure Point'),
+    ]
+
+    name = models.CharField(max_length=100)
+    pow_type = models.CharField(
+        max_length=25,
+        choices=POW_TYPE_CHOICES,
+        default=TERMINAL_AREA,
+    )
+    related_ches = models.ManyToManyField(
+        'Che',
+        related_name='points_of_work',
+        blank=True,
+    )
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.CASCADE,
+        related_name='points_of_work'
+    )
+    code = models.CharField(max_length=20)
+    x_position = models.FloatField(blank=True, null=True)
+    y_position = models.FloatField(blank=True, null=True)
+    max_throughput = models.IntegerField(blank=True, null=True, help_text='Maximum throughput in containers per hour')
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ('location', 'code')
+
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
+###################################
+class POWConnection(models.Model):
+    from_pow = models.ForeignKey(
+        'PointOfWork',
+        on_delete=models.CASCADE,
+        related_name='outgoing_connections'
+    )
+    to_pow = models.ForeignKey(
+        'PointOfWork',
+        on_delete=models.CASCADE,
+        related_name='incoming_connections'
+    )
+    distance = models.IntegerField(help_text='Distance in meters')
+    max_throughput = models.IntegerField(help_text='Maximum throughput in containers per hour')
+    is_bidirectional = models.BooleanField(default=False)
+    cost = models.FloatField(default=1.0, help_text='Cost factor for pathfinding algorithms')
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ('from_pow', 'to_pow')
+
+    def __str__(self):
+        direction = '↔' if self.is_bidirectional else '→'
+        return f"{self.from_pow.code} {direction} {self.to_pow.code} ({self.distance}m)"

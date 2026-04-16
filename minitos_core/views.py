@@ -1,6 +1,6 @@
 import django_filters
 
-from django.http import HttpResponse, JsonResponse
+from django.db import models
 from django.template import loader
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
@@ -13,10 +13,10 @@ from rest_framework.viewsets import ModelViewSet
 from django_filters import rest_framework as filters
 
 from .models import Location, Block, Pile, Position, ContainerOwner, ContainerUnit, ContainerVisit, CarrierVisit, ISOType, Che, \
-    WorkQueue, Order, OrderLeg
+    WorkQueue, Order, OrderLeg, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection
 from .serializers import LocationSerializer, BlockSerializer, PileSerializer, PositionSerializer, UserSerializer, \
     GroupSerializer, ContainerUnitSerializer, ContainerVisitSerializer, CheSerializer, WorkQueueSerializer, \
-    OrderSerializer, OrderLegSerializer, CarrierVisitSerializer, BulkContainerVisitSerializer
+    OrderSerializer, OrderLegSerializer, CarrierVisitSerializer, BulkContainerVisitSerializer, CarrierServiceSerializer, ServiceCargoRouteSerializer, VisitCargoRouteSerializer, PileBookingSerializer, PointOfWorkSerializer, POWConnectionSerializer
 
 ##################################################################
 
@@ -299,7 +299,7 @@ class OrderLegViewSet(viewsets.ViewSet):
 ##################################################################
 
 #### CarrierVisit Views
-class VisitViewSet(viewsets.ModelViewSet):
+class CarrierVisitViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing transport visits (vessels, trucks, trains, barges).
     """
@@ -315,6 +315,105 @@ class VisitViewSet(viewsets.ModelViewSet):
         if location_pk:
             queryset = queryset.filter(location=location_pk)
         return queryset
+
+
+class CarrierServiceViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing carrier services with conditional field display based on repeat pattern.
+    """
+    queryset = CarrierService.objects.all().order_by('name')
+    serializer_class = CarrierServiceSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['repeat', 'periodicity']
+    filter_backends = [filters.DjangoFilterBackend]
+
+
+class ServiceCargoRouteViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing service cargo routes.
+    """
+    queryset = ServiceCargoRoute.objects.all().order_by('inbound_carrier_service__name', 'outbound_carrier_service__name')
+    serializer_class = ServiceCargoRouteSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['inbound_carrier_service', 'outbound_carrier_service', 'container_type', 'is_reefer']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        carrier_service_pk = self.kwargs.get('carrierservice_pk')
+        if carrier_service_pk:
+            queryset = queryset.filter(
+                models.Q(inbound_carrier_service=carrier_service_pk) |
+                models.Q(outbound_carrier_service=carrier_service_pk)
+            )
+        return queryset
+
+
+class VisitCargoRouteViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing visit cargo routes.
+    """
+    queryset = VisitCargoRoute.objects.all().order_by('inbound_carrier_visit__name', 'outbound_carrier_service__name')
+    serializer_class = VisitCargoRouteSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['inbound_carrier_visit', 'outbound_carrier_visit', 'outbound_carrier_service', 'container_type', 'is_reefer']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        carrier_visit_pk = self.kwargs.get('carriervisit_pk')
+        if carrier_visit_pk:
+            queryset = queryset.filter(
+                models.Q(inbound_carrier_visit=carrier_visit_pk) |
+                models.Q(outbound_carrier_visit=carrier_visit_pk)
+            )
+        return queryset
+
+
+class PileBookingViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing pile bookings.
+    """
+    queryset = PileBooking.objects.all().order_by('start_booking_time')
+    serializer_class = PileBookingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['pile', 'visit_cargo_route']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        carrier_visit_pk = self.kwargs.get('carriervisit_pk')
+        if carrier_visit_pk:
+            # Get all VisitCargoRoutes for this carrier visit
+            visit_cargo_routes = VisitCargoRoute.objects.filter(
+                models.Q(inbound_carrier_visit=carrier_visit_pk) |
+                models.Q(outbound_carrier_visit=carrier_visit_pk)
+            )
+            # Get all pile bookings for these visit cargo routes
+            queryset = queryset.filter(visit_cargo_route__in=visit_cargo_routes)
+        return queryset
+
+
+class PointOfWorkViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing points of work.
+    """
+    queryset = PointOfWork.objects.all().order_by('location__name', 'code')
+    serializer_class = PointOfWorkSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['location', 'pow_type', 'is_active']
+    filter_backends = [filters.DjangoFilterBackend]
+
+
+class POWConnectionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing POW connections.
+    """
+    queryset = POWConnection.objects.all().order_by('from_pow__code', 'to_pow__code')
+    serializer_class = POWConnectionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['from_pow', 'to_pow', 'is_enabled', 'is_bidirectional']
+    filter_backends = [filters.DjangoFilterBackend]
 
 
 @api_view(['POST'])
