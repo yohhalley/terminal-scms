@@ -179,7 +179,9 @@ class ContainerVisit(models.Model):
     last_updated = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return self.container_number.container_number
+        if self.container_number_id:
+            return self.container_number.container_number
+        return f"ContainerVisit #{self.pk}"
 
 
 ###################################
@@ -483,7 +485,9 @@ class Order(models.Model):
     )
 
     def __str__(self):
-        return "%s-%s-%s" % (self.work_queue.name, self.pk, self.container_number,)
+        work_queue_name = self.work_queue.name if self.work_queue_id else "Unassigned"
+        container_ref = self.container_number if self.container_number_id else "No Container"
+        return f"{work_queue_name}-{self.pk}-{container_ref}"
 
 
 ###################################
@@ -509,7 +513,11 @@ class OrderLeg(models.Model):
     )
 
     def __str__(self):
-        return "%s-%s-%s" % (self.order, self.id, self.order.container_number)
+        if self.order_id:
+            order_ref = self.order
+            container_ref = self.order.container_number if self.order.container_number_id else "No Container"
+            return f"{order_ref}-{self.id}-{container_ref}"
+        return f"OrderLeg #{self.id}"
 
 
 ###################################
@@ -972,8 +980,8 @@ class VisitCargoRoute(models.Model):
         unique_together = ('inbound_carrier_visit', 'outbound_carrier_visit', 'outbound_carrier_service', 'pod', 'container_type', 'iso_type')
 
     def __str__(self):
-        visit_name = self.inbound_carrier_visit.name
-        service_name = self.outbound_carrier_service.name
+        visit_name = self.inbound_carrier_visit.name if self.inbound_carrier_visit_id else "No Inbound Visit"
+        service_name = self.outbound_carrier_service.name if self.outbound_carrier_service_id else "No Outbound Service"
         return f"{visit_name} → {service_name} ({self.container_type})"
 
 
