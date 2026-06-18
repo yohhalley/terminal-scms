@@ -18,6 +18,9 @@ router.register(r'container-units', views.ContainerUnitViewSet, basename='contai
 router.register(r'carrier-services', views.CarrierServiceViewSet, basename='carrier-service')
 router.register(r'points-of-work', views.PointOfWorkViewSet, basename='point-of-work')
 router.register(r'pow-connections', views.POWConnectionViewSet, basename='pow-connection')
+router.register(r'equipment-types', views.EquipmentTypeViewSet, basename='equipment-type')
+router.register(r'routing-nodes', views.RoutingNodeViewSet, basename='routing-node')
+router.register(r'terminal-connections', views.TerminalConnectionViewSet, basename='terminal-connection')
 ## generates:
 # /locations/
 # /locations/{pk}/
@@ -36,6 +39,8 @@ container_visit_router = nested_routers.NestedSimpleRouter(location_router, r'co
 
 location_router.register(r'carrier-visits', views.CarrierVisitViewSet, basename='carrier-visit')
 location_router.register(r'carrier-services', views.CarrierServiceViewSet, basename='carrier-service')
+location_router.register(r'areas', views.AreaViewSet, basename='area')
+location_router.register(r'roads', views.RoadViewSet, basename='road')
 carrier_service_router = nested_routers.NestedSimpleRouter(location_router, r'carrier-services', lookup='carrier_service')
 carrier_service_router.register(r'service-cargo-routes', views.ServiceCargoRouteViewSet, basename='service-cargo-route')
 
@@ -94,9 +99,14 @@ urlpatterns = [
     path('api/visits/<int:visit_id>/transition-status/', views.transition_visit_status, name='transition_visit_status'),
     path('api/container-visits/<int:container_id>/transition-status/', views.transition_container_status, name='transition_container_status'),
     path('api/visits/<int:visit_id>/status-summary/', views.visit_status_summary, name='visit_status_summary'),
+
+    # Terminal Editor API endpoints
+    path('api/location/<int:location_id>/', views.location_api_detail, name='location_api_detail'),
+    path('api/location/', views.location_api_save, name='location_api_create'),
+    path('api/location/<int:location_id>/save/', views.location_api_save, name='location_api_save'),
 ]
 
 # urlpatterns = [
-#   
+#
 #   url(r'^', include(router.urls)),
 #   url(r'^api-auth/', include('rest_framework.urls', namespace='rest_framework'))]

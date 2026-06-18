@@ -8,6 +8,7 @@ from minitos_core.models import (
     ContainerUnit, ISOType, ContainerOwner, Location, Block, Pile, 
     Position, Che, WorkQueue, Order, OrderLeg, ContainerVisit, EquipmentType
 )
+from minitos_core.services import sync_yard_grid
 import json
 
 class BaseTestCase(APITestCase):
@@ -124,6 +125,7 @@ class BlockTests(BaseTestCase):
             max_rows=10,
             max_tier=5
         )
+        sync_yard_grid(self.block)
 
     def test_block_list(self):
         url = reverse('minitos_core:block-list', args=[self.location.id])
@@ -162,14 +164,14 @@ class PileTests(BaseTestCase):
             max_rows=10,
             max_tier=5
         )
+        sync_yard_grid(self.block)
         # Create owner for container tests
         self.owner = ContainerOwner.objects.create(
             name='Test Shipping Line',
             code='TEST',
             is_shippingline=True
         )
-        # The block's save method will have created piles automatically
-        # Let's get the first pile for testing
+        # Grid creation is explicit so normal model saves never destroy operational data.
         self.pile = Pile.objects.filter(block=self.block).first()
 
     def test_pile_list(self):
@@ -313,6 +315,8 @@ class PileTests(BaseTestCase):
             max_rows=10,
             max_tier=5
         )
+        sync_yard_grid(block1)
+        sync_yard_grid(block2)
 
         # Verify that both blocks have piles with the same bay/row combinations
         pile1 = Pile.objects.filter(block=block1, bay=1, row=1).first()
@@ -347,6 +351,7 @@ class PositionTests(BaseTestCase):
             max_rows=10,
             max_tier=5
         )
+        sync_yard_grid(self.block)
         # Get the first pile and position created by the block
         self.pile = Pile.objects.filter(block=self.block).first()
         self.position = Position.objects.filter(pile=self.pile).first()
@@ -537,7 +542,7 @@ class PositionTests(BaseTestCase):
         self.assertFalse(position1.is_occupied)
 
     def test_position_physical_rules(self):
-        # Create a new block which will automatically create piles and positions
+        # Create a new block and explicitly build its grid.
         block = Block.objects.create(
             location=self.location,
             name='Block C',
@@ -546,6 +551,7 @@ class PositionTests(BaseTestCase):
             max_rows=10,
             max_tier=5
         )
+        sync_yard_grid(block)
         
         # Get a pile from an even-numbered bay (for 40' containers)
         pile = Pile.objects.filter(block=block, bay=2).first()

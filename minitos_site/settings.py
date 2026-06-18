@@ -137,6 +137,11 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
+# Configure static files directories for development
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'minitos_core', 'static'),
+]
+
 # STATIC_ROOT only needed for production (WhiteNoise/collectstatic)
 if 'DATABASE_URL' in os.environ:
     STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')

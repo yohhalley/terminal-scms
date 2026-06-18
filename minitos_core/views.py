@@ -4,6 +4,9 @@ from django.db import models
 from django.template import loader
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import LoginView
+from django.http import JsonResponse
 
 from rest_framework.parsers import JSONParser
 from rest_framework import status
@@ -12,16 +15,135 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 from django_filters import rest_framework as filters
 
-from .models import Location, Block, Pile, Position, ContainerOwner, ContainerUnit, ContainerVisit, CarrierVisit, ISOType, Che, \
-    WorkQueue, Order, OrderLeg, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection
+from .models import Location, Block, Pile, Position, ContainerOwner, ContainerUnit, ContainerVisit, CarrierVisit, ISOType, Che, EquipmentType, \
+    WorkQueue, Order, OrderLeg, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection, Area, Road, RoutingNode, ParkingArea, TerminalConnection
 from .serializers import LocationSerializer, BlockSerializer, PileSerializer, PositionSerializer, UserSerializer, \
     GroupSerializer, ContainerUnitSerializer, ContainerVisitSerializer, CheSerializer, WorkQueueSerializer, \
-    OrderSerializer, OrderLegSerializer, CarrierVisitSerializer, BulkContainerVisitSerializer, CarrierServiceSerializer, ServiceCargoRouteSerializer, VisitCargoRouteSerializer, PileBookingSerializer, PointOfWorkSerializer, POWConnectionSerializer
+    OrderSerializer, OrderLegSerializer, CarrierVisitSerializer, BulkContainerVisitSerializer, CarrierServiceSerializer, ServiceCargoRouteSerializer, VisitCargoRouteSerializer, PileBookingSerializer, PointOfWorkSerializer, POWConnectionSerializer, AreaSerializer, EquipmentTypeSerializer, RoadSerializer, RoutingNodeSerializer, ParkingAreaSerializer, TerminalConnectionSerializer
 
 ##################################################################
 
 from django.contrib.auth.models import User, Group
 from rest_framework import viewsets, permissions, generics
+
+
+# Landing page view
+def landing_page(request):
+    """Simple landing page with button to admin panel"""
+    return render(request, 'landing.html')
+
+
+# Terminal Editor views
+@login_required(login_url='admin:login')
+def location_select_view(request):
+    """Select or create a Terminal/Inland Depot location for editing"""
+    # Get only Terminal (TL) and Inland Depot (ID) locations
+    locations = Location.objects.filter(location_type__in=['TL', 'ID']).order_by('name')
+
+    context = {
+        'locations': locations,
+    }
+    return render(request, 'location_select.html', context)
+
+
+@login_required(login_url='admin:login')
+def terminal_editor_view(request, location_id=None):
+    """Map editor for a specific location"""
+    if location_id:
+        location = get_object_or_404(Location, pk=location_id, location_type__in=['TL', 'ID'])
+    else:
+        # Show a form to create a new location
+        location = None
+
+    context = {
+        'location': location,
+        'location_id': location_id,
+    }
+    return render(request, 'terminal_editor.html', context)
+
+
+# API endpoints for Terminal Editor
+@login_required
+def location_api_detail(request, location_id):
+    """API endpoint to get location data (GET)"""
+    try:
+        location = Location.objects.get(pk=location_id, location_type__in=['TL', 'ID'])
+        return JsonResponse({
+            'id': location.id,
+            'name': location.name,
+            'location_type': location.location_type,
+            'latitude': location.latitude,
+            'longitude': location.longitude,
+            'map_origin_latitude': location.map_origin_latitude if location.map_origin_latitude is not None else location.latitude,
+            'map_origin_longitude': location.map_origin_longitude if location.map_origin_longitude is not None else location.longitude,
+            'map_width_m': location.map_width_m,
+            'map_height_m': location.map_height_m,
+            'map_units_per_meter': location.map_units_per_meter,
+            'default_zoom': location.default_zoom or 15,
+            'angle': location.angle or 0,
+        })
+    except Location.DoesNotExist:
+        return JsonResponse({'error': 'Location not found'}, status=404)
+
+
+@login_required
+def location_api_save(request, location_id=None):
+    """API endpoint to save/create location data (POST/PUT)"""
+    if request.method == 'POST' or request.method == 'PUT':
+        try:
+            data = JSONParser().parse(request)
+
+            if location_id:
+                # Update existing location
+                location = Location.objects.get(pk=location_id, location_type__in=['TL', 'ID'])
+                location.name = data.get('name', location.name)
+                location.latitude = data.get('latitude', location.latitude)
+                location.longitude = data.get('longitude', location.longitude)
+                location.map_origin_latitude = data.get('map_origin_latitude', location.map_origin_latitude)
+                location.map_origin_longitude = data.get('map_origin_longitude', location.map_origin_longitude)
+                location.map_width_m = data.get('map_width_m', location.map_width_m)
+                location.map_height_m = data.get('map_height_m', location.map_height_m)
+                location.map_units_per_meter = data.get('map_units_per_meter', location.map_units_per_meter)
+                location.default_zoom = data.get('default_zoom', location.default_zoom)
+                location.angle = data.get('angle', location.angle)
+            else:
+                # Create new location
+                location = Location(
+                    name=data.get('name', 'New Location'),
+                    location_type=data.get('location_type', 'TL'),
+                    latitude=data.get('latitude'),
+                    longitude=data.get('longitude'),
+                    map_origin_latitude=data.get('map_origin_latitude') or data.get('latitude'),
+                    map_origin_longitude=data.get('map_origin_longitude') or data.get('longitude'),
+                    map_width_m=data.get('map_width_m', 1000.0),
+                    map_height_m=data.get('map_height_m', 1000.0),
+                    map_units_per_meter=data.get('map_units_per_meter', 1.0),
+                    default_zoom=data.get('default_zoom', 15),
+                    angle=data.get('angle', 0),
+                )
+
+            location.save()
+            return JsonResponse({
+                'id': location.id,
+                'name': location.name,
+                'location_type': location.location_type,
+                'latitude': location.latitude,
+                'longitude': location.longitude,
+                'map_origin_latitude': location.map_origin_latitude,
+                'map_origin_longitude': location.map_origin_longitude,
+                'map_width_m': location.map_width_m,
+                'map_height_m': location.map_height_m,
+                'map_units_per_meter': location.map_units_per_meter,
+                'default_zoom': location.default_zoom,
+                'angle': location.angle,
+                'message': 'Location saved successfully'
+            })
+        except Location.DoesNotExist:
+            return JsonResponse({'error': 'Location not found'}, status=404)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=400)
+
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
 ####  ContainerUnit
@@ -95,17 +217,17 @@ class BlockViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         location_pk = self.kwargs.get('location_pk')
         queryset = Block.objects.filter(location=location_pk)
-        
+
         # Filter by bay if provided
         bay = self.request.query_params.get('bay', None)
         if bay is not None:
             queryset = queryset.filter(piles__bay=bay).distinct()
-        
+
         # Filter by row if provided
         row = self.request.query_params.get('row', None)
         if row is not None:
             queryset = queryset.filter(piles__row=row).distinct()
-        
+
         return queryset
 
     def perform_create(self, serializer):
@@ -416,6 +538,82 @@ class POWConnectionViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.DjangoFilterBackend]
 
 
+class AreaViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing terminal areas.
+    """
+    serializer_class = AreaSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['location', 'area_type', 'is_visible']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        queryset = Area.objects.all().order_by('location__name', 'area_type', 'name')
+        location_pk = self.kwargs.get('location_pk')
+        if location_pk is not None:
+            queryset = queryset.filter(location=location_pk)
+        return queryset
+
+    def perform_create(self, serializer):
+        location_pk = self.kwargs.get('location_pk')
+        if location_pk is not None:
+            location = get_object_or_404(Location, pk=location_pk)
+            serializer.save(location=location)
+        else:
+            serializer.save()
+
+    def perform_destroy(self, instance):
+        block = instance.block if instance.block_id else None
+        instance.delete()
+        if block:
+            block.delete()
+
+
+class EquipmentTypeViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = EquipmentType.objects.all().order_by('name')
+    serializer_class = EquipmentTypeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+
+class RoadViewSet(viewsets.ModelViewSet):
+    serializer_class = RoadSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Road.objects.filter(location_id=self.kwargs.get('location_pk')).prefetch_related('allowed_che_types')
+
+    def perform_create(self, serializer):
+        location = get_object_or_404(Location, pk=self.kwargs.get('location_pk'))
+        serializer.save(location=location)
+
+    def perform_destroy(self, instance):
+        nodes = [instance.start_node, instance.end_node]
+        instance.delete()
+        for node in nodes:
+            if node and not node.starting_roads.exists() and not node.ending_roads.exists() and not node.terminal_connections.exists():
+                node.delete()
+
+
+class RoutingNodeViewSet(viewsets.ModelViewSet):
+    serializer_class = RoutingNodeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['location']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        return RoutingNode.objects.all().order_by('location_id', 'id')
+
+
+class TerminalConnectionViewSet(viewsets.ModelViewSet):
+    serializer_class = TerminalConnectionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['node', 'block', 'parking_area', 'is_enabled']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        return TerminalConnection.objects.all().order_by('node_id', 'id')
+
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def bulk_create_container_visits(request):
@@ -575,4 +773,3 @@ def isotype_containers(request, isotype_id):
     containers = ContainerUnit.objects.filter(iso_type=isotype_id)
     return render(request, 'containers/isotypes/isotype_containers.html',
                   {'isotype_containers': isotype_containers, 'containers': containers})
-

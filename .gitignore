@@ -14,8 +14,7 @@ db.sqlite3
 venv/
 *.env
 
-# Migrations directory should not be committed if models source is enough
-minitos_core/migrations/
+# Django schema migrations are source code and must be committed.
 
 # OS generated files
 .DS_Store

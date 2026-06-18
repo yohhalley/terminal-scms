@@ -1,7 +1,9 @@
 from django.contrib.auth.models import User, Group
-from django.db import models
+from django.db import models, transaction
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers, generics
-from . models import Location, Block, Pile, Position, ContainerUnit, ContainerVisit, ISOType, ContainerOwner, Che, WorkQueue, Order, OrderLeg, CarrierVisit, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection
+from . models import Location, Block, Pile, Position, ContainerUnit, ContainerVisit, ISOType, ContainerOwner, Che, EquipmentType, WorkQueue, Order, OrderLeg, CarrierVisit, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection, Area, Road, RoutingNode, ParkingArea, TerminalConnection
+from .services import sync_yard_grid
 
 
 ####  Position for container view
@@ -25,8 +27,8 @@ class PositionSerializer(serializers.ModelSerializer):
     
     def get_formatted_str(self, obj):
         block_name = obj.pile.block.name
-        bay = f"{obj.pile.bay:02d}"
-        row = f"{obj.pile.row:02d}"
+        bay = obj.pile.get_bay_name()
+        row = obj.pile.get_row_name()
         tier = f"{obj.tier:02d}"
         return f"{block_name}.{bay}.{row}.{tier}"
 
@@ -59,15 +61,15 @@ class PileSerializer(serializers.ModelSerializer):
     
     def get_formatted_str(self, obj):
         block_name = obj.block.name
-        bay = f"{obj.bay:02d}"
-        row = f"{obj.row:02d}"
+        bay = obj.get_bay_name()
+        row = obj.get_row_name()
         return f"{block_name}.{bay}.{row}"
 
     def get_bay_name(self, obj):
-        return f"{obj.bay:02d}"
+        return obj.get_bay_name()
 
     def get_row_name(self, obj):
-        return f"{obj.row:02d}"
+        return obj.get_row_name()
 
     __str__ = serializers.SerializerMethodField(method_name='get_formatted_str')
     bay_name = serializers.SerializerMethodField(method_name='get_bay_name')
@@ -107,9 +109,32 @@ class BlockSerializer(serializers.ModelSerializer):
     class Meta:
         model = Block
         fields = ['pk', 'name', 'location', 'location_name', 'block_type', 'block_type_display',
-                 'max_bays', 'max_rows', 'max_tier', 'x_position', 'y_position', 'is_heapzone',
+                 'max_bays', 'max_rows', 'max_tier', 'x_position', 'y_position',
+                 'anchor_lat', 'anchor_lon', 'heading_deg', 'slot_heading_deg',
+                 'pile_length_m', 'pile_width_m', 'pile_height_m',
+                 'initial_bay', 'initial_row', 'bay_order', 'row_order',
+                 'bay_naming', 'row_naming', 'bay_use_heading_axis',
+                 'padding_top_m', 'padding_bottom_m', 'padding_left_m', 'padding_right_m',
+                 'bay_spacing_m', 'row_spacing_m', 'is_heapzone',
                  'total_piles', 'total_positions_20', 'total_positions_40', 'total_positions_45',
                  'free_positions_20', 'free_positions_40', 'free_positions_45', 'piles']
+        extra_kwargs = {'location': {'required': False}}
+
+    @transaction.atomic
+    def create(self, validated_data):
+        block = super().create(validated_data)
+        try:
+            return sync_yard_grid(block)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        block = super().update(instance, validated_data)
+        try:
+            return sync_yard_grid(block)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
         
 ####  Che
 class CheSerializer(serializers.ModelSerializer):
@@ -139,17 +164,6 @@ class CheSerializer(serializers.ModelSerializer):
         Che.objects.filter(pk=instance.id)\
                            .update(**validated_data)
         return che
-
-####  Location
-class LocationSerializer(serializers.ModelSerializer):
-    
-    blocks = BlockSerializer(many=True, read_only=True)
-    ches = CheSerializer(many=True, read_only=True)
-    class Meta:
-        model = Location
-        fields = ['pk','name','location_type','blocks', 'ches']
-        
-
 
 class UserSerializer(serializers.HyperlinkedModelSerializer):
     
@@ -447,4 +461,222 @@ class POWConnectionSerializer(serializers.ModelSerializer):
             'to_pow', 'to_pow_name', 'to_pow_code',
             'distance', 'max_throughput', 'is_bidirectional',
             'cost', 'is_enabled'
+        ]
+
+
+class AreaSerializer(serializers.ModelSerializer):
+    location_name = serializers.CharField(source='location.name', read_only=True)
+    area_type_display = serializers.CharField(source='get_area_type_display', read_only=True)
+    yard_grid = serializers.JSONField(write_only=True, required=False)
+    block_config = serializers.SerializerMethodField()
+    parking_settings = serializers.JSONField(write_only=True, required=False)
+    parking_config = serializers.SerializerMethodField()
+
+    def get_block_config(self, obj):
+        if not obj.block_id:
+            return None
+        return BlockSerializer(obj.block, context=self.context).data
+
+    def get_parking_config(self, obj):
+        try:
+            parking = obj.parking_config
+        except ParkingArea.DoesNotExist:
+            return None
+        return ParkingAreaSerializer(parking, context=self.context).data
+
+    def _save_yard_block(self, area, grid):
+        if area.area_type != Area.YARD_BLOCK:
+            if area.block_id:
+                block = area.block
+                area.block = None
+                area.save(update_fields=['block'])
+                block.delete()
+            return area
+
+        if not grid and area.block_id:
+            return area
+        if not grid:
+            raise serializers.ValidationError({'yard_grid': 'Yard block configuration is required.'})
+
+        grid = dict(grid)
+        grid['name'] = area.name
+        grid['location'] = area.location_id
+        serializer = BlockSerializer(
+            instance=area.block if area.block_id else None,
+            data=grid,
+            context=self.context,
+        )
+        serializer.is_valid(raise_exception=True)
+        block = serializer.save()
+        if area.block_id != block.pk:
+            area.block = block
+            area.save(update_fields=['block'])
+        return area
+
+    def _save_parking(self, area, settings):
+        try:
+            parking = area.parking_config
+        except ParkingArea.DoesNotExist:
+            parking = None
+        if area.area_type != Area.PARKING:
+            if parking:
+                parking.delete()
+            return area
+        if settings is None and parking:
+            return area
+        settings = settings or {}
+        allowed = settings.pop('allowed_che_types', [])
+        if parking is None:
+            parking = ParkingArea.objects.create(area=area, **settings)
+        else:
+            for key, value in settings.items():
+                setattr(parking, key, value)
+            parking.save()
+        parking.allowed_che_types.set(allowed)
+        return area
+
+    @transaction.atomic
+    def create(self, validated_data):
+        grid = validated_data.pop('yard_grid', None)
+        parking = validated_data.pop('parking_settings', None)
+        area = super().create(validated_data)
+        self._save_yard_block(area, grid)
+        return self._save_parking(area, parking)
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        grid = validated_data.pop('yard_grid', None)
+        parking = validated_data.pop('parking_settings', None)
+        area = super().update(instance, validated_data)
+        self._save_yard_block(area, grid)
+        return self._save_parking(area, parking)
+
+    class Meta:
+        model = Area
+        fields = [
+            'id', 'location', 'location_name', 'name', 'area_type', 'area_type_display',
+            'area', 'is_visible', 'coordinates', 'yard_grid', 'block_config',
+            'parking_settings', 'parking_config'
+        ]
+
+
+class EquipmentTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EquipmentType
+        fields = ['id', 'name', 'equipment_type']
+
+
+class RoutingNodeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RoutingNode
+        fields = ['id', 'location', 'name', 'x_position', 'y_position']
+
+
+class RoadSerializer(serializers.ModelSerializer):
+    allowed_che_type_details = EquipmentTypeSerializer(
+        source='allowed_che_types', many=True, read_only=True
+    )
+    start_node_details = RoutingNodeSerializer(source='start_node', read_only=True)
+    end_node_details = RoutingNodeSerializer(source='end_node', read_only=True)
+
+    class Meta:
+        model = Road
+        fields = [
+            'id', 'location', 'name', 'points', 'lane_count', 'capacity', 'direction',
+            'allowed_che_types', 'allowed_che_type_details', 'start_node', 'end_node',
+            'start_node_details', 'end_node_details', 'is_enabled'
+        ]
+        extra_kwargs = {
+            'location': {'required': False},
+            'start_node': {'read_only': True},
+            'end_node': {'read_only': True},
+        }
+
+    def validate_points(self, value):
+        if not isinstance(value, list) or len(value) < 2:
+            raise serializers.ValidationError('A road requires at least two points.')
+        for point in value:
+            if not isinstance(point, list) or len(point) < 2:
+                raise serializers.ValidationError('Every road point must be [x, y].')
+            try:
+                float(point[0])
+                float(point[1])
+            except (TypeError, ValueError):
+                raise serializers.ValidationError('Road point coordinates must be numeric.')
+        return value
+
+    def _sync_endpoint_nodes(self, road):
+        first, last = road.points[0], road.points[-1]
+        if road.start_node_id is None:
+            road.start_node = RoutingNode.objects.create(
+                location=road.location, name=f'{road.name} start',
+                x_position=first[0], y_position=first[1]
+            )
+        else:
+            road.start_node.x_position, road.start_node.y_position = first[0], first[1]
+            road.start_node.name = f'{road.name} start'
+            road.start_node.save(update_fields=['name', 'x_position', 'y_position'])
+        if road.end_node_id is None:
+            road.end_node = RoutingNode.objects.create(
+                location=road.location, name=f'{road.name} end',
+                x_position=last[0], y_position=last[1]
+            )
+        else:
+            road.end_node.x_position, road.end_node.y_position = last[0], last[1]
+            road.end_node.name = f'{road.name} end'
+            road.end_node.save(update_fields=['name', 'x_position', 'y_position'])
+        road.save(update_fields=['start_node', 'end_node'])
+        return road
+
+    @transaction.atomic
+    def create(self, validated_data):
+        return self._sync_endpoint_nodes(super().create(validated_data))
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        return self._sync_endpoint_nodes(super().update(instance, validated_data))
+
+
+class ParkingAreaSerializer(serializers.ModelSerializer):
+    allowed_che_type_details = EquipmentTypeSerializer(
+        source='allowed_che_types', many=True, read_only=True
+    )
+
+    class Meta:
+        model = ParkingArea
+        fields = ['id', 'area', 'capacity', 'allowed_che_types', 'allowed_che_type_details']
+        extra_kwargs = {'area': {'read_only': True}}
+
+
+class TerminalConnectionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TerminalConnection
+        fields = ['id', 'node', 'block', 'parking_area', 'is_bidirectional', 'cost', 'is_enabled']
+
+    def validate(self, attrs):
+        block = attrs.get('block', getattr(self.instance, 'block', None))
+        parking = attrs.get('parking_area', getattr(self.instance, 'parking_area', None))
+        node = attrs.get('node', getattr(self.instance, 'node', None))
+        if bool(block) == bool(parking):
+            raise serializers.ValidationError('Select exactly one block or parking area.')
+        target_location = block.location_id if block else parking.area.location_id
+        if node and node.location_id != target_location:
+            raise serializers.ValidationError('The node and connected asset must belong to the same terminal.')
+        return attrs
+
+
+####  Location
+class LocationSerializer(serializers.ModelSerializer):
+    blocks = BlockSerializer(many=True, read_only=True)
+    ches = CheSerializer(many=True, read_only=True)
+    areas = AreaSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Location
+        fields = [
+            'pk', 'name', 'location_type',
+            'latitude', 'longitude', 'map_origin_latitude', 'map_origin_longitude',
+            'map_width_m', 'map_height_m', 'map_units_per_meter',
+            'default_zoom', 'angle',
+            'blocks', 'ches', 'areas'
         ]

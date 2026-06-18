@@ -208,6 +208,20 @@ class Location(models.Model):
         choices=LOCATION_TYPES,
         default=NA,
     )
+    latitude = models.FloatField(blank=True, null=True, help_text='GPS latitude coordinate')
+    longitude = models.FloatField(blank=True, null=True, help_text='GPS longitude coordinate')
+    map_origin_latitude = models.FloatField(blank=True, null=True, help_text='Latitude of the local map origin')
+    map_origin_longitude = models.FloatField(blank=True, null=True, help_text='Longitude of the local map origin')
+    map_width_m = models.FloatField(default=1000.0, help_text='Local map width in meters')
+    map_height_m = models.FloatField(default=1000.0, help_text='Local map height in meters')
+    map_units_per_meter = models.FloatField(default=1.0, help_text='Godot/map units represented by one real-world meter')
+    default_zoom = models.FloatField(
+        blank=True,
+        null=True,
+        validators=[RegexValidator(regex='^[0-9]*\.?[0-9]+$', message='Must be a positive number')],
+        help_text='Default zoom level for map view'
+    )
+    angle = models.FloatField(blank=True, null=True, help_text='Rotation angle in degrees (0-360)')
 
     def __str__(self):
         return "%s" % (self.name)
@@ -242,10 +256,63 @@ class Block(models.Model):
     max_bays = IntegerRangeField(min_value=1, max_value=100)
     max_rows = IntegerRangeField(min_value=1, max_value=100)
     max_tier = IntegerRangeField(min_value=1, max_value=20)
+
+    # Legacy canvas coordinates (keep for backward compatibility)
     x_position = models.FloatField(blank=True, null=True)
     y_position = models.FloatField(blank=True, null=True)
+
+    # Map anchor selected by the editor. At heading 0 the grid grows north and east.
+    anchor_lat = models.FloatField(blank=True, null=True, help_text='Latitude of the block drawing anchor')
+    anchor_lon = models.FloatField(blank=True, null=True, help_text='Longitude of the block drawing anchor')
+    heading_deg = models.FloatField(blank=True, null=True, help_text='Block rotation/heading in degrees')
+    slot_heading_deg = models.FloatField(default=0.0, help_text='Slot rotation relative to the block heading')
+
+    # Default pile dimensions (meters) - 20' ISO container approx values
+    pile_length_m = models.FloatField(default=6.058, help_text="Pile length in meters (default 20')")
+    pile_width_m = models.FloatField(default=2.438, help_text='Pile width in meters (default 20")')
+    pile_height_m = models.FloatField(default=2.591, help_text='Pile height in meters (default 20")')
+
+    # Grid origin and ordering
+    initial_bay = models.CharField(max_length=10, default='1')
+    initial_row = models.CharField(max_length=10, default='1')
+
+    FORWARD = 'forward'
+    REVERSE = 'reverse'
+    ORDER_CHOICES = [
+        (FORWARD, 'forward'),
+        (REVERSE, 'reverse'),
+    ]
+
+    bay_order = models.CharField(max_length=7, choices=ORDER_CHOICES, default=FORWARD)
+    row_order = models.CharField(max_length=7, choices=ORDER_CHOICES, default=FORWARD)
+
+    NUMBERS = '1,2,3...'
+    ODD_NUMBERS = '1,3,5...'
+    LETTERS = 'A,B,C...'
+    NAMING_CHOICES = [
+        (NUMBERS, '1,2,3...'),
+        (ODD_NUMBERS, '1,3,5...'),
+        (LETTERS, 'A,B,C...'),
+    ]
+
+    bay_naming = models.CharField(max_length=8, choices=NAMING_CHOICES, default=NUMBERS)
+    row_naming = models.CharField(max_length=8, choices=NAMING_CHOICES, default=NUMBERS)
+
+    # Whether bay numbering follows the block heading axis
+    bay_use_heading_axis = models.BooleanField(default=False)
+
+    # Padding around the block (meters)
+    padding_top_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Top padding (m) around block')
+    padding_bottom_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Bottom padding (m) around block')
+    padding_left_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Left padding (m) around block')
+    padding_right_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Right padding (m) around block')
+
+    # Spacing between bays and rows (meters)
+    bay_spacing_m = models.FloatField(default=2.5, help_text='Spacing between bays in meters')
+    row_spacing_m = models.FloatField(default=2.5, help_text='Spacing between rows in meters')
+
     is_heapzone = models.BooleanField(default=0)
-    
+
     objects = models.Manager() # The default manager.
 
     class Meta:
@@ -254,28 +321,6 @@ class Block(models.Model):
     def __str__(self):
         return "%s-%s" % (self.location, self.name)
 
-    def save(self, **kwargs):
-        created = super().save(**kwargs)  # Call the "real" save() method.
-        block = Block.objects.get(pk=self.pk)
-        block_piles = Pile.objects.filter(block = block.pk)
-        block_piles.delete()
-        
-        max_rows = block.max_rows
-        max_bays = block.max_bays
-        max_tier = block.max_tier
-        x_start_pos = block.x_position if block.x_position is not None else 0
-        y_start_pos = block.y_position if block.y_position is not None else 0
-        x_offset = 1.5
-        y_offset = 0.8
-        
-        for bay in range(1, max_bays+1):
-            for row in range(1,max_rows+1):
-                pile = Pile.objects.create(block=block, bay=bay, row=row, allows_in=True, allows_out=True,is_restricted=False, x_position = x_start_pos + bay*x_offset, y_position = y_start_pos + row*y_offset)
-                pile.save()
-                for tier in range(1, max_tier+1):
-                    position = Position.objects.create(pile=pile, is_reserved=False, is_occupied=False, tier=tier)
-                    position.save()
-        
 ###################################
 class Pile(models.Model):
     block = models.ForeignKey(
@@ -295,6 +340,12 @@ class Pile(models.Model):
     x_position = models.FloatField(blank=True, null=True)
     y_position = models.FloatField(blank=True, null=True)
 
+    # Per-pile margin adjustments (meters) to handle special cases
+    margin_top_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Top margin for this pile (m)')
+    margin_bottom_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Bottom margin for this pile (m)')
+    margin_left_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Left margin for this pile (m)')
+    margin_right_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Right margin for this pile (m)')
+
     class Meta:
         unique_together = ('block', 'bay', 'row')
         # No need for additional constraints as the block's location is already part of the uniqueness
@@ -302,6 +353,48 @@ class Pile(models.Model):
 
     def __str__(self):
         return "%s-%s-%s-%s-%s" % (self.block.location.name, self.block.name, self.block, self.bay, self.row)
+
+    def get_bay_name(self):
+        """Generate bay name/identifier based on block naming convention."""
+        return self._grid_label('bay')
+
+    def get_row_name(self):
+        """Generate row name/identifier based on block naming convention."""
+        return self._grid_label('row')
+
+    def _grid_label(self, axis):
+        if not self.block:
+            return str(getattr(self, axis))
+        physical = getattr(self, axis)
+        count = getattr(self.block, f'max_{axis}s')
+        order = getattr(self.block, f'{axis}_order')
+        logical = count - physical + 1 if order == Block.REVERSE else physical
+        naming = getattr(self.block, f'{axis}_naming')
+        initial = str(getattr(self.block, f'initial_{axis}') or '1').strip()
+        if naming == Block.LETTERS:
+            number = 0
+            for char in initial.upper():
+                if not ('A' <= char <= 'Z'):
+                    number = 1
+                    break
+                number = number * 26 + ord(char) - 64
+            number = max(1, number) + logical - 1
+            result = ''
+            while number:
+                number -= 1
+                result = chr(65 + number % 26) + result
+                number //= 26
+            return result
+        try:
+            start = int(initial)
+        except ValueError:
+            start = 1
+        step = 2 if naming == Block.ODD_NUMBERS else 1
+        return str(start + (logical - 1) * step)
+
+    def get_pile_name(self):
+        """Generate full pile identifier (e.g., 'A-01' or '1-2')."""
+        return f"{self.get_bay_name()}-{self.get_row_name()}"
 
     def save(self, *args, **kwargs):
         # Set container size restrictions based on bay number
@@ -340,14 +433,14 @@ class Pile(models.Model):
 ###################################
 class Position(models.Model):
     container_visit = models.OneToOneField(
-        'ContainerVisit', 
+        'ContainerVisit',
         related_name='position',
         on_delete=models.SET_NULL,
-        null=True, 
+        null=True,
         blank=True
     )
     pile = models.ForeignKey(
-        'Pile', 
+        'Pile',
         related_name='positions',
         on_delete=models.CASCADE
     )
@@ -391,7 +484,7 @@ class Position(models.Model):
                 raise ValidationError(
                     f"Container {self.container_visit} is already assigned to position {existing_position}"
                 )
-            
+
             # Validate container size restrictions
             can_accept, reason = self.pile.can_accept_container(self.container_visit)
             if not can_accept:
@@ -413,10 +506,10 @@ class Position(models.Model):
 
             # Validate physical rules when removing a container
             self.validate_physical_rules()
-        
+
         # Update is_occupied based on container_visit
         self.is_occupied = bool(self.container_visit)
-        
+
         super().save(*args, **kwargs)
 
 
@@ -463,7 +556,7 @@ class Order(models.Model):
     )
     container_number = models.ForeignKey(
         'ContainerVisit', related_name='container_visit', blank=True, null=True,
-        on_delete=models.CASCADE, 
+        on_delete=models.CASCADE,
     )
     work_queue = models.ForeignKey(
         'WorkQueue', related_name='orders', blank=True, null=True,
@@ -1075,3 +1168,156 @@ class POWConnection(models.Model):
     def __str__(self):
         direction = '↔' if self.is_bidirectional else '→'
         return f"{self.from_pow.code} {direction} {self.to_pow.code} ({self.distance}m)"
+
+
+###################################
+class Area(models.Model):
+    TERMINAL_AREA = 'terminal area'
+    YARD = 'yard'
+    QUAY = 'quay'
+    WATER = 'water'
+    ROAD = 'road'
+    BUILDING = 'building'
+    YARD_BLOCK = 'yard block'
+    PARKING = 'parking'
+
+    AREA_TYPE_CHOICES = [
+        (TERMINAL_AREA, 'Terminal Area'),
+        (YARD, 'Yard'),
+        (QUAY, 'Quay'),
+        (WATER, 'Water'),
+        (ROAD, 'Road'),
+        (BUILDING, 'Building'),
+        (YARD_BLOCK, 'Yard Block'),
+        (PARKING, 'Parking'),
+    ]
+
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.CASCADE,
+        related_name='areas'
+    )
+    block = models.OneToOneField(
+        'Block',
+        on_delete=models.CASCADE,
+        related_name='area_geometry',
+        null=True,
+        blank=True,
+    )
+    name = models.CharField(max_length=100, default='', help_text='Name of the area')
+    area_type = models.CharField(
+        max_length=20,
+        choices=AREA_TYPE_CHOICES,
+        default=TERMINAL_AREA,
+    )
+    area = models.FloatField(help_text='Area size in square meters')
+    is_visible = models.BooleanField(default=True)
+    coordinates = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Polygon coordinates in local map meters as [[x, y], ...]'
+    )
+
+    class Meta:
+        unique_together = ('location', 'name')
+
+    def __str__(self):
+        return f"{self.location.name} - {self.name}"
+
+
+###################################
+class RoutingNode(models.Model):
+    location = models.ForeignKey(
+        'Location', on_delete=models.CASCADE, related_name='routing_nodes'
+    )
+    name = models.CharField(max_length=100, blank=True, default='')
+    x_position = models.FloatField()
+    y_position = models.FloatField()
+
+    def __str__(self):
+        return self.name or f"Node {self.pk}"
+
+
+###################################
+class Road(models.Model):
+    FORWARD = 'forward'
+    REVERSE = 'reverse'
+    BOTH = 'both'
+    DIRECTION_CHOICES = [
+        (FORWARD, 'First node to last node'),
+        (REVERSE, 'Last node to first node'),
+        (BOTH, 'Both ways'),
+    ]
+
+    location = models.ForeignKey(
+        'Location', on_delete=models.CASCADE, related_name='roads'
+    )
+    name = models.CharField(max_length=100)
+    points = models.JSONField(
+        default=list,
+        help_text='Ordered road centerline points in local map meters as [[x, y], ...]',
+    )
+    lane_count = IntegerRangeField(min_value=1, max_value=20, default=1)
+    capacity = models.PositiveIntegerField(default=1, help_text='Maximum CHEs on the road')
+    direction = models.CharField(max_length=7, choices=DIRECTION_CHOICES, default=BOTH)
+    allowed_che_types = models.ManyToManyField(
+        'EquipmentType', related_name='roads', blank=True
+    )
+    start_node = models.ForeignKey(
+        'RoutingNode', on_delete=models.SET_NULL, related_name='starting_roads', null=True, blank=True
+    )
+    end_node = models.ForeignKey(
+        'RoutingNode', on_delete=models.SET_NULL, related_name='ending_roads', null=True, blank=True
+    )
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ('location', 'name')
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+class ParkingArea(models.Model):
+    area = models.OneToOneField(
+        'Area', on_delete=models.CASCADE, related_name='parking_config'
+    )
+    capacity = models.PositiveIntegerField(default=1, help_text='Maximum parked CHEs')
+    allowed_che_types = models.ManyToManyField(
+        'EquipmentType', related_name='parking_areas', blank=True
+    )
+
+    def __str__(self):
+        return self.area.name
+
+
+###################################
+class TerminalConnection(models.Model):
+    node = models.ForeignKey(
+        'RoutingNode', on_delete=models.CASCADE, related_name='terminal_connections'
+    )
+    block = models.ForeignKey(
+        'Block', on_delete=models.CASCADE, related_name='routing_connections', null=True, blank=True
+    )
+    parking_area = models.ForeignKey(
+        'ParkingArea', on_delete=models.CASCADE, related_name='routing_connections', null=True, blank=True
+    )
+    is_bidirectional = models.BooleanField(default=True)
+    cost = models.FloatField(default=1.0)
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(block__isnull=False, parking_area__isnull=True)
+                    | models.Q(block__isnull=True, parking_area__isnull=False)
+                ),
+                name='terminal_connection_exactly_one_asset',
+            )
+        ]
+
+    def __str__(self):
+        target = self.block or self.parking_area
+        return f"{self.node} -> {target}"
