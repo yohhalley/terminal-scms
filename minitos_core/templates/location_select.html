@@ -1,0 +1,225 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Location - MiniTOS Terminal Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #fbdcb1 0%, #e8e8e8 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+        }
+        
+        .header {
+            margin-bottom: 30px;
+            border-bottom: 3px solid #f56c2c;
+            padding-bottom: 20px;
+        }
+        
+        .header h1 {
+            color: #333;
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1em;
+        }
+        
+        .location-list {
+            display: grid;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .location-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .location-item:hover {
+            border-color: #f56c2c;
+            background: #fff9f5;
+            box-shadow: 0 5px 15px rgba(245, 108, 44, 0.2);
+        }
+        
+        .location-info h3 {
+            color: #333;
+            font-size: 1.2em;
+            margin-bottom: 5px;
+        }
+        
+        .location-type {
+            display: inline-block;
+            padding: 4px 12px;
+            background: #f56c2c;
+            color: white;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+        
+        .location-meta {
+            color: #999;
+            font-size: 0.9em;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.95em;
+        }
+        
+        .btn-primary {
+            background: #f56c2c;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #b5570f;
+            box-shadow: 0 5px 15px rgba(245, 108, 44, 0.3);
+        }
+        
+        .btn-secondary {
+            background: #ddd;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #ccc;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+        
+        .btn-back {
+            background: #666;
+            color: white;
+            padding: 12px 30px;
+            font-size: 1em;
+        }
+        
+        .btn-back:hover {
+            background: #444;
+        }
+        
+        .btn-new {
+            background: #f56c2c;
+            color: white;
+            padding: 12px 30px;
+            font-size: 1em;
+        }
+        
+        .btn-new:hover {
+            background: #b5570f;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        
+        .empty-state h2 {
+            color: #666;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Terminal Editor</h1>
+            <p>Select a location to edit or create a new one</p>
+        </div>
+        
+        {% if locations %}
+            <div class="location-list">
+                {% for location in locations %}
+                    <div class="location-item">
+                        <div class="location-info">
+                            <h3>{{ location.name }}</h3>
+                            <span class="location-type">
+                                {% if location.location_type == 'TL' %}
+                                    Terminal
+                                {% elif location.location_type == 'ID' %}
+                                    Inland Depot
+                                {% endif %}
+                            </span>
+                            {% if location.map_origin_latitude and location.map_origin_longitude %}
+                                <span class="location-meta">
+                                    Origin {{ location.map_origin_latitude|floatformat:4 }}, {{ location.map_origin_longitude|floatformat:4 }}
+                                </span>
+                            {% elif location.latitude and location.longitude %}
+                                <span class="location-meta">
+                                    Center {{ location.latitude|floatformat:4 }}, {{ location.longitude|floatformat:4 }}
+                                </span>
+                            {% else %}
+                                <span class="location-meta">No GPS coordinates set</span>
+                            {% endif %}
+                        </div>
+                        <div class="action-buttons">
+                            <a href="{% url 'terminal_editor' location.id %}" class="btn btn-primary">
+                                ✎ Edit
+                            </a>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="empty-state">
+                <h2>No locations found</h2>
+                <p>Create a new Terminal or Inland Depot location to get started.</p>
+            </div>
+        {% endif %}
+        
+        <div class="button-group">
+            <a href="/" class="btn btn-back">← Back Home</a>
+            <a href="/terminal-editor/" class="btn btn-new">+ New Location</a>
+        </div>
+    </div>
+</body>
+</html>
