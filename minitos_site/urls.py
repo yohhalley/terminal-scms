@@ -17,13 +17,17 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 from rest_framework.urlpatterns import format_suffix_patterns
-from minitos_core.views import landing_page, location_select_view, terminal_editor_view
+from minitos_core.views import berth_plan_view, landing_page, terminal_browser_view, terminal_editor_view
 
 
 urlpatterns = [
     path('', landing_page, name='landing'),
-    path('terminal-editor/', location_select_view, name='location_select'),
+    path('terminal-browser/', terminal_browser_view, name='terminal_browser'),
+    path('terminal-editor/', terminal_browser_view, name='location_select'),
+    path('terminal-editor/new/', terminal_editor_view, name='terminal_editor_new'),
     path('terminal-editor/<int:location_id>/', terminal_editor_view, name='terminal_editor'),
+    path('terminals/<int:location_id>/berth-plan/', berth_plan_view, name='berth_plan'),
+    path('terminal-editor/<int:location_id>/berth-plan/', berth_plan_view, name='berth_plan_legacy'),
     path('api_auth/', include('rest_framework.urls')),
     path('minitos_core/', include('minitos_core.urls')),
     path('admin/', admin.site.urls),

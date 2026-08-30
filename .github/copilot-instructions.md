@@ -53,6 +53,10 @@ python manage.py test minitos_core  # Run test suite
 3. Add ViewSet in [minitos_core/views.py](minitos_core/views.py) (inherit `ModelViewSet` or `viewsets.ViewSet`)
 4. Register in [minitos_core/urls.py](minitos_core/urls.py) (use nested routers if parent exists)
 5. Create migration: `python manage.py makemigrations`
+6. Add or update discoverable Django regression tests for the complete model,
+   serializer, view, and URL contract.
+7. Run `python manage.py makemigrations --check --dry-run` and
+   `python manage.py test`, then update `TEST_COVERAGE_AUDIT.md` if coverage changed.
 
 ### Debugging Validation Failures
 Check `Position.validate_physical_rules()` and `Position.save()` for constraint violations. Use Django shell to inspect:

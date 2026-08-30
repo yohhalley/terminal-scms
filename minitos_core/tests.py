@@ -24,7 +24,11 @@ class BaseTestCase(APITestCase):
         # Create test location
         self.location = Location.objects.create(
             name='Test Terminal',
-            location_type='TL'
+            location_type='TL',
+            latitude=40,
+            longitude=-3,
+            map_origin_latitude=40,
+            map_origin_longitude=-3,
         )
 
 class ContainerTests(BaseTestCase):
@@ -295,7 +299,11 @@ class PileTests(BaseTestCase):
         # Create a second location
         location2 = Location.objects.create(
             name='Test Terminal 2',
-            location_type='TL'
+            location_type='TL',
+            latitude=41,
+            longitude=-4,
+            map_origin_latitude=41,
+            map_origin_longitude=-4,
         )
 
         # Create blocks with the same name in different locations
@@ -630,11 +638,21 @@ class CheTests(BaseTestCase):
         super().setUp()
         self.equipment_type = EquipmentType.objects.create(
             name='Test Equipment',
-            equipment_type='SC'
+            equipment_type='SC',
+            length_m=10.2,
+            width_m=4.8,
+            height_m=6.1,
+            driving_speed_empty_kmh=21.0,
+            driving_speed_full_load_kmh=17.0,
+            lifting_speed_empty_m_per_min=24.0,
+            lifting_speed_full_load_m_per_min=18.0,
+            turning_radius_m=8.5,
+            energy_source=EquipmentType.Diesel,
+            fuel_tank_capacity=500.0,
         )
         self.che = Che.objects.create(
             name='CHE-001',
-            status='IL',
+            powered_on=True,
             location=self.location,
             equipment_type=self.equipment_type
         )
@@ -650,6 +668,69 @@ class CheTests(BaseTestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['name'], 'CHE-001')
+
+    def test_create_che_exposes_operational_fields_and_type_characteristics(self):
+        url = reverse('minitos_core:che-list', args=[self.location.id])
+        response = self.client.post(url, {
+            'name': 'CHE-NEW',
+            'equipment_type': self.equipment_type.id,
+            'powered_on': True,
+            'working': False,
+            'is_available': True,
+            'fuel_level': 82,
+            'latitude': 40.1,
+            'longitude': -3.2,
+            'rotation': 127.5,
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['location'], self.location.id)
+        self.assertTrue(response.data['powered_on'])
+        self.assertFalse(response.data['working'])
+        self.assertTrue(response.data['is_available'])
+        self.assertEqual(response.data['fuel_level'], 82)
+        self.assertEqual(response.data['rotation'], 127.5)
+        self.assertEqual(response.data['equipment_type_details']['length_m'], 10.2)
+        self.assertEqual(response.data['equipment_type_details']['driving_speed_empty_kmh'], 21.0)
+        self.assertEqual(response.data['equipment_type_details']['turning_radius_m'], 8.5)
+        self.assertEqual(response.data['equipment_type_details']['fuel_tank_capacity'], 500.0)
+        self.assertEqual(response.data['running_hours'], 0)
+
+    def test_equipment_type_api_supports_characteristic_updates(self):
+        detail_url = reverse('minitos_core:equipment-type-detail', args=[self.equipment_type.id])
+        response = self.client.patch(detail_url, {
+            'driving_speed_empty_kmh': 22.5,
+            'turning_radius_m': 9.0,
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data['driving_speed_empty_kmh'], 22.5)
+        self.assertEqual(response.data['turning_radius_m'], 9.0)
+        self.assertEqual(response.data['equipment_type_display'], 'Shuttle Carrier')
+
+    def test_che_fuel_level_accepts_fractional_simulation_updates(self):
+        detail_url = reverse('minitos_core:che-detail', args=[self.location.id, self.che.id])
+        response = self.client.patch(detail_url, {'fuel_level': 99.9875}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertAlmostEqual(response.data['fuel_level'], 99.9875)
+
+    def test_che_rejects_contradictory_operational_facts(self):
+        detail_url = reverse('minitos_core:che-detail', args=[self.location.id, self.che.id])
+
+        powered_off_working = self.client.patch(
+            detail_url, {'powered_on': False, 'working': True}, format='json'
+        )
+        maintenance_available = self.client.patch(
+            detail_url,
+            {'powered_on': True, 'working': False, 'is_available': True, 'is_in_maintenance': True},
+            format='json',
+        )
+
+        self.assertEqual(powered_off_working.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('working', powered_off_working.data)
+        self.assertEqual(maintenance_available.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('is_available', maintenance_available.data)
 
 class WorkQueueTests(BaseTestCase):
     def setUp(self):
@@ -696,19 +777,22 @@ class AuthenticationTests(APITestCase):
 
 class ModelValidationTests(TestCase):
     def test_container_number_validation(self):
-        with self.assertRaises(Exception):
-            ContainerUnit.objects.create(
-                container_number='INVALID'  # Should be 11 characters
-            )
+        iso_type = ISOType.objects.create(iso_type='22G1', length='20', height='NC')
+        owner = ContainerOwner.objects.create(name='Validation Owner', code='VALD')
+        container = ContainerUnit(
+            container_number='INVALID',
+            iso_type=iso_type,
+            owner=owner,
+        )
+        with self.assertRaises(ValidationError):
+            container.full_clean()
 
     def test_iso_type_validation(self):
-        with self.assertRaises(Exception):
-            ISOType.objects.create(
-                iso_type='INVALID'  # Should be 4 characters
-            )
+        iso_type = ISOType(iso_type='INVALID')
+        with self.assertRaises(ValidationError):
+            iso_type.full_clean()
 
     def test_container_owner_validation(self):
-        with self.assertRaises(Exception):
-            ContainerOwner.objects.create(
-                code='INVALID'  # Should be 4 characters
-            )
+        owner = ContainerOwner(name='Invalid Owner', code='INVALID')
+        with self.assertRaises(ValidationError):
+            owner.full_clean()

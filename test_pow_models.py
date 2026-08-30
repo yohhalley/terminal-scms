@@ -11,6 +11,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'minitos_site.settings')
 django.setup()
 
 from minitos_core.models import Location, PointOfWork, POWConnection, Che
+from minitos_core.services import local_to_geographic
 from datetime import datetime
 
 def test_point_of_work():
@@ -24,6 +25,10 @@ def test_point_of_work():
 
     print(f"Location: {location.name}")
 
+    def geo_fields(x_m, y_m):
+        latitude, longitude = local_to_geographic(location, x_m, y_m)
+        return {'latitude': latitude, 'longitude': longitude}
+
     # Create some PointOfWork instances
     print("\n--- Creating PointOfWork instances ---")
 
@@ -34,8 +39,7 @@ def test_point_of_work():
         defaults={
             'name': 'Main Terminal Area',
             'pow_type': PointOfWork.TERMINAL_AREA,
-            'x_position': 100.0,
-            'y_position': 200.0,
+            **geo_fields(100.0, 200.0),
             'max_throughput': 1000,
             'is_active': True
         }
@@ -49,8 +53,7 @@ def test_point_of_work():
         defaults={
             'name': 'Main Entry Gate',
             'pow_type': PointOfWork.ENTRY_POINT,
-            'x_position': 50.0,
-            'y_position': 150.0,
+            **geo_fields(50.0, 150.0),
             'max_throughput': 200,
             'is_active': True
         }
@@ -64,8 +67,7 @@ def test_point_of_work():
         defaults={
             'name': 'Main Departure Gate',
             'pow_type': PointOfWork.DEPARTURE_POINT,
-            'x_position': 150.0,
-            'y_position': 150.0,
+            **geo_fields(150.0, 150.0),
             'max_throughput': 200,
             'is_active': True
         }
@@ -121,7 +123,7 @@ def test_point_of_work():
     print("\n--- All PointOfWork instances ---")
     pows = PointOfWork.objects.filter(location=location)
     for pow in pows:
-        print(f"  {pow.code}: {pow.name} ({pow.get_pow_type_display()}) - Position: ({pow.x_position}, {pow.y_position})")
+        print(f"  {pow.code}: {pow.name} ({pow.get_pow_type_display()}) - GPS: ({pow.latitude}, {pow.longitude})")
 
     # Show all POWConnection instances
     print("\n--- All POWConnection instances ---")

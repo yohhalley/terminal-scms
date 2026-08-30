@@ -1,25 +1,30 @@
 import django_filters
 
-from django.db import models
+from django.db import models, transaction
 from django.template import loader
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.http import JsonResponse
+from django.core.exceptions import PermissionDenied, ValidationError as DjangoValidationError
+from django.utils import timezone as django_timezone
+from zoneinfo import ZoneInfo
 
 from rest_framework.parsers import JSONParser
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 from django_filters import rest_framework as filters
 
 from .models import Location, Block, Pile, Position, ContainerOwner, ContainerUnit, ContainerVisit, CarrierVisit, ISOType, Che, EquipmentType, \
-    WorkQueue, Order, OrderLeg, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection, Area, Road, RoutingNode, ParkingArea, TerminalConnection
+    WorkQueue, Order, OrderLeg, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection, Area, Road, RoutingNode, ParkingArea, TerminalConnection, Berth, POD, validate_iana_timezone, ProcessHierarchy, BusinessProcess, ProcessVersion, BusinessProcessExecution, CheComponent, ComponentType, EquipmentTypeComponent, HandlingCycle, OperationalStateInterval, SignalBinding, SignalDefinition
 from .serializers import LocationSerializer, BlockSerializer, PileSerializer, PositionSerializer, UserSerializer, \
     GroupSerializer, ContainerUnitSerializer, ContainerVisitSerializer, CheSerializer, WorkQueueSerializer, \
-    OrderSerializer, OrderLegSerializer, CarrierVisitSerializer, BulkContainerVisitSerializer, CarrierServiceSerializer, ServiceCargoRouteSerializer, VisitCargoRouteSerializer, PileBookingSerializer, PointOfWorkSerializer, POWConnectionSerializer, AreaSerializer, EquipmentTypeSerializer, RoadSerializer, RoutingNodeSerializer, ParkingAreaSerializer, TerminalConnectionSerializer
+    OrderSerializer, OrderLegSerializer, CarrierVisitSerializer, BulkContainerVisitSerializer, CarrierServiceSerializer, ServiceCargoRouteSerializer, VisitCargoRouteSerializer, PileBookingSerializer, PointOfWorkSerializer, POWConnectionSerializer, AreaSerializer, EquipmentTypeSerializer, RoadSerializer, RoutingNodeSerializer, ParkingAreaSerializer, TerminalConnectionSerializer, BerthSerializer, ProcessHierarchySerializer, BusinessProcessSerializer, ProcessVersionSerializer, BusinessProcessExecutionSerializer, CheComponentSerializer, ComponentTypeSerializer, CurrentSignalValueSerializer, EquipmentTypeComponentSerializer, HandlingCycleSerializer, OperationalStateIntervalSerializer, SignalBindingSerializer, SignalDefinitionSerializer
+from .services import accessible_terminals, generate_service_visits, terminal_capabilities
 
 ##################################################################
 
@@ -33,17 +38,19 @@ def landing_page(request):
     return render(request, 'landing.html')
 
 
-# Terminal Editor views
+# Terminal workspace views
 @login_required(login_url='admin:login')
-def location_select_view(request):
-    """Select or create a Terminal/Inland Depot location for editing"""
-    # Get only Terminal (TL) and Inland Depot (ID) locations
-    locations = Location.objects.filter(location_type__in=['TL', 'ID']).order_by('name')
+def terminal_browser_view(request):
+    """Choose a terminal and one of the tools available to the current user."""
+    terminals = [
+        {'location': location, **terminal_capabilities(request.user, location)}
+        for location in accessible_terminals(request.user)
+    ]
+    return render(request, 'terminal_browser.html', {'terminals': terminals})
 
-    context = {
-        'locations': locations,
-    }
-    return render(request, 'location_select.html', context)
+
+# Backward-compatible view name used by older imports.
+location_select_view = terminal_browser_view
 
 
 @login_required(login_url='admin:login')
@@ -55,11 +62,75 @@ def terminal_editor_view(request, location_id=None):
         # Show a form to create a new location
         location = None
 
+    capabilities = terminal_capabilities(request.user, location) if location else {
+        'can_view_terminal': True,
+        'can_edit_terminal': True,
+        'can_manage_berth_plan': True,
+    }
+    if location and not capabilities['can_edit_terminal']:
+        raise PermissionDenied
+
     context = {
         'location': location,
         'location_id': location_id,
+        **capabilities,
     }
     return render(request, 'terminal_editor.html', context)
+
+
+@login_required(login_url='admin:login')
+def berth_plan_view(request, location_id):
+    location = get_object_or_404(Location, pk=location_id, location_type__in=['TL', 'ID'])
+    capabilities = terminal_capabilities(request.user, location)
+    if not capabilities['can_manage_berth_plan']:
+        raise PermissionDenied
+    berths = Berth.objects.filter(location=location).prefetch_related('bollards').order_by('name')
+    services = CarrierService.objects.filter(location=location).select_related(
+        'default_berth', 'default_start_bollard', 'default_end_bollard'
+    ).prefetch_related('equipment_requirements__equipment_type').order_by('name')
+    visits = CarrierVisit.objects.filter(location=location).select_related(
+        'carrier_service', 'planned_berth', 'berth_start_bollard', 'berth_end_bollard'
+    ).order_by('eta')
+    cargo_routes = ServiceCargoRoute.objects.filter(
+        models.Q(inbound_carrier_service__location=location) |
+        models.Q(outbound_carrier_service__location=location)
+    ).select_related(
+        'inbound_carrier_service', 'outbound_carrier_service', 'pod', 'iso_type'
+    ).distinct().order_by('inbound_carrier_service__name', 'outbound_carrier_service__name')
+    equipment_types = EquipmentType.objects.filter(is_horizontal_transport=False).annotate(
+        fleet_count=models.Count(
+            'che', filter=models.Q(che__location=location), distinct=True
+        ),
+        available_count=models.Count(
+            'che',
+            filter=models.Q(che__location=location, che__is_available=True),
+            distinct=True,
+        ),
+    ).filter(fleet_count__gt=0).order_by('name')
+    equipment_type_data = EquipmentTypeSerializer(equipment_types, many=True).data
+    for item, equipment_type in zip(equipment_type_data, equipment_types):
+        item['fleet_count'] = equipment_type.fleet_count
+        item['available_count'] = equipment_type.available_count
+    return render(request, 'berth_plan.html', {
+        'location': location,
+        **capabilities,
+        'berths_data': BerthSerializer(berths, many=True).data,
+        'services_data': CarrierServiceSerializer(services, many=True).data,
+        'visits_data': CarrierVisitSerializer(visits, many=True).data,
+        'cargo_routes_data': ServiceCargoRouteSerializer(cargo_routes, many=True).data,
+        'pods_data': list(POD.objects.order_by('name').values('id', 'name', 'uncode')),
+        'iso_types_data': list(ISOType.objects.order_by('iso_type').values('id', 'iso_type', 'length', 'height')),
+        'equipment_types_data': equipment_type_data,
+    })
+
+
+def _location_time_data(location):
+    local_now = django_timezone.now().astimezone(ZoneInfo(location.timezone or 'UTC'))
+    return {
+        'timezone': location.timezone or 'UTC',
+        'timezone_utc_offset_minutes': int(local_now.utcoffset().total_seconds() // 60),
+        'local_datetime': local_now.isoformat(),
+    }
 
 
 # API endpoints for Terminal Editor
@@ -81,6 +152,7 @@ def location_api_detail(request, location_id):
             'map_units_per_meter': location.map_units_per_meter,
             'default_zoom': location.default_zoom or 15,
             'angle': location.angle or 0,
+            **_location_time_data(location),
         })
     except Location.DoesNotExist:
         return JsonResponse({'error': 'Location not found'}, status=404)
@@ -106,6 +178,7 @@ def location_api_save(request, location_id=None):
                 location.map_units_per_meter = data.get('map_units_per_meter', location.map_units_per_meter)
                 location.default_zoom = data.get('default_zoom', location.default_zoom)
                 location.angle = data.get('angle', location.angle)
+                location.timezone = data.get('timezone', location.timezone)
             else:
                 # Create new location
                 location = Location(
@@ -120,8 +193,10 @@ def location_api_save(request, location_id=None):
                     map_units_per_meter=data.get('map_units_per_meter', 1.0),
                     default_zoom=data.get('default_zoom', 15),
                     angle=data.get('angle', 0),
+                    timezone=data.get('timezone', 'UTC'),
                 )
 
+            validate_iana_timezone(location.timezone)
             location.save()
             return JsonResponse({
                 'id': location.id,
@@ -136,6 +211,7 @@ def location_api_save(request, location_id=None):
                 'map_units_per_meter': location.map_units_per_meter,
                 'default_zoom': location.default_zoom,
                 'angle': location.angle,
+                **_location_time_data(location),
                 'message': 'Location saved successfully'
             })
         except Location.DoesNotExist:
@@ -189,9 +265,13 @@ class ContainerUnitViewSet(viewsets.ModelViewSet):
 
 
 class ContainerVisitViewSet(viewsets.ModelViewSet):
-    queryset = ContainerVisit.objects.all()
     serializer_class = ContainerVisitSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = ContainerVisit.objects.all()
+        location_pk = self.kwargs.get('location_pk')
+        return queryset.filter(location_id=location_pk) if location_pk else queryset
 
 
 class LocationViewSet(viewsets.ViewSet):
@@ -242,51 +322,23 @@ class BlockViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-class CheViewSet(viewsets.ViewSet):
+class CheViewSet(viewsets.ModelViewSet):
     serializer_class = CheSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
 
-    def list(self, request, location_pk=None, che_pk=None):
-        queryset = Che.objects.filter(location=location_pk)
-        serializer = CheSerializer(queryset, many=True)
-        return Response(serializer.data)
+    def get_queryset(self):
+        return Che.objects.filter(location_id=self.kwargs.get('location_pk')).select_related(
+            'equipment_type', 'location', 'current_block', 'current_user'
+        ).prefetch_related(
+            'components__component_type', 'components__template',
+            'components__signal_bindings__signal_definition',
+            'components__signal_bindings__current_value', 'state_intervals',
+        )
 
-    def retrieve(self, request, pk=None, *args, **kwargs):
-        queryset = Che.objects.filter(pk=pk)
-        block = get_object_or_404(queryset, pk=pk)
-        serializer = CheSerializer(block)
-        return Response(serializer.data)
-
-    def partial_update(self, request, pk=None, *args, **kwargs):
-        print(request.data)
-        queryset = Che.objects.filter(pk=pk)
-        che = get_object_or_404(queryset, pk=pk)
-        if "x_position" in request.data:
-            che.x_position = request.data["x_position"]
-        if "y_position" in request.data:
-            che.y_position = request.data["y_position"]
-        che.status = request.data["status"]
-
-        queryset2 = Block.objects.filter(pk=request.data["current_block"], location=request.data["location"])
-        print(queryset2)
-        cblock = get_object_or_404(queryset2, pk=request.data["current_block"])
-        print(cblock)
-        che.current_block = cblock
-        queryset3 = User.objects.filter(pk=request.data["current_user"])
-        cuser = get_object_or_404(queryset3, pk=request.data["current_user"])
-        che.current_user = cuser
-        che.twistlock_closed = request.data["twistlock_closed"]
-        che.save()
-
-        serializer = CheSerializer(che, data=request.data, partial=True)
-
-        if serializer.is_valid():
-            print(serializer.data)
-            return Response(serializer.data)
-        else:
-            print("Serializer error:")
-            print(serializer.errors)
-            return Response(serializer.errors, status=400)
+    def perform_create(self, serializer):
+        location = get_object_or_404(Location, pk=self.kwargs.get('location_pk'))
+        serializer.save(location=location)
 
 
 class PileViewSet(viewsets.ViewSet):
@@ -319,18 +371,12 @@ class PileViewSet(viewsets.ViewSet):
         return Response(serializer.data)
 
     def partial_update(self, request, pk=None, *args, **kwargs):
-        print(request.data)
         queryset = Pile.objects.filter(pk=pk)
         pile = get_object_or_404(queryset, pk=pk)
-        pile.x_position = request.data["x_position"]
-        pile.y_position = request.data["y_position"]
-        pile.save()
-
         serializer = PileSerializer(pile, data=request.data, partial=True)
-        if serializer.is_valid():
-            return Response(serializer.data)
-        else:
-            return Response(serializer.errors, status=400)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class PositionViewSet(viewsets.ModelViewSet):
@@ -371,32 +417,25 @@ class WorkQueueViewSet(viewsets.ViewSet):
         return Response(serializer.data)
 
     def partial_update(self, request, pk=None, *args, **kwargs):
-        print(request.data)
         queryset = WorkQueue.objects.filter(pk=pk)
         work_queue = get_object_or_404(queryset, pk=pk)
-        work_queue.x_position = request.data["x_position"]
-        work_queue.y_position = request.data["y_position"]
-        work_queue.save()
-
         serializer = WorkQueueSerializer(work_queue, data=request.data, partial=True)
-
-        if serializer.is_valid():
-            return Response(serializer.data)
-        else:
-            return Response(serializer.errors, status=400)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class OrderViewSet(viewsets.ViewSet):
     serializer_class = OrderSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def list(self, request, work_queue_pk=None):
-        queryset = Order.objects.filter(work_queue=work_queue_pk)
+    def list(self, request, location_pk=None, work_queue_pk=None):
+        queryset = Order.objects.filter(work_queue=work_queue_pk, work_queue__location=location_pk)
         serializer = OrderSerializer(queryset, many=True)
         return Response(serializer.data)
 
-    def retrieve(self, request, pk=None, work_queue_pk=None):
-        queryset = Order.objects.filter(pk=pk, work_queue=work_queue_pk)
+    def retrieve(self, request, pk=None, location_pk=None, work_queue_pk=None):
+        queryset = Order.objects.filter(pk=pk, work_queue=work_queue_pk, work_queue__location=location_pk)
         order = get_object_or_404(queryset, pk=pk)
         serializer = OrderSerializer(order)
         return Response(serializer.data)
@@ -406,13 +445,22 @@ class OrderLegViewSet(viewsets.ViewSet):
     serializer_class = OrderLegSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def list(self, request, work_queue_pk=None, order_pk=None):
-        queryset = OrderLeg.objects.filter(order__work_queue=work_queue_pk, order=order_pk)
+    def list(self, request, location_pk=None, work_queue_pk=None, order_pk=None):
+        queryset = OrderLeg.objects.filter(
+            order__work_queue=work_queue_pk,
+            order__work_queue__location=location_pk,
+            order=order_pk,
+        )
         serializer = OrderLegSerializer(queryset, many=True)
         return Response(serializer.data)
 
-    def retrieve(self, request, pk=None, work_queue_pk=None, order_pk=None):
-        queryset = OrderLeg.objects.filter(pk=pk, order=order_pk, order__work_queue=work_queue_pk)
+    def retrieve(self, request, pk=None, location_pk=None, work_queue_pk=None, order_pk=None):
+        queryset = OrderLeg.objects.filter(
+            pk=pk,
+            order=order_pk,
+            order__work_queue=work_queue_pk,
+            order__work_queue__location=location_pk,
+        )
         order = get_object_or_404(queryset, pk=pk)
         serializer = OrderLegSerializer(order)
         return Response(serializer.data)
@@ -425,7 +473,9 @@ class CarrierVisitViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing transport visits (vessels, trucks, trains, barges).
     """
-    queryset = CarrierVisit.objects.all().order_by('-eta')
+    queryset = CarrierVisit.objects.select_related('primary_equipment_type').prefetch_related(
+        'equipment_requirements__equipment_type'
+    ).order_by('-eta')
     serializer_class = CarrierVisitSerializer
     permission_classes = [permissions.IsAuthenticated]
     filterset_fields = ['status', 'visit_type', 'location', 'vessel_name']
@@ -443,11 +493,38 @@ class CarrierServiceViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing carrier services with conditional field display based on repeat pattern.
     """
-    queryset = CarrierService.objects.all().order_by('name')
+    queryset = CarrierService.objects.select_related('primary_equipment_type').prefetch_related(
+        'equipment_requirements__equipment_type'
+    ).order_by('name')
     serializer_class = CarrierServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
     filterset_fields = ['repeat', 'periodicity']
     filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        location_pk = self.kwargs.get('location_pk') or self.request.query_params.get('location')
+        return queryset.filter(location_id=location_pk) if location_pk else queryset
+
+    @action(detail=True, methods=['post'], url_path='generate-visits')
+    def generate_visits(self, request, pk=None):
+        service = self.get_object()
+        try:
+            from datetime import date
+            horizon_start = date.fromisoformat(request.data.get('start_date'))
+            horizon_end = date.fromisoformat(request.data.get('end_date'))
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'start_date and end_date are required in YYYY-MM-DD format.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if horizon_end < horizon_start:
+            return Response({'error': 'end_date must not be before start_date.'}, status=status.HTTP_400_BAD_REQUEST)
+        created = generate_service_visits(service, horizon_start, horizon_end)
+        return Response({
+            'created_count': len(created),
+            'visits': CarrierVisitSerializer(created, many=True).data,
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 class ServiceCargoRouteViewSet(viewsets.ModelViewSet):
@@ -569,10 +646,180 @@ class AreaViewSet(viewsets.ModelViewSet):
             block.delete()
 
 
-class EquipmentTypeViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = EquipmentType.objects.all().order_by('name')
+class EquipmentTypeViewSet(viewsets.ModelViewSet):
+    queryset = EquipmentType.objects.all().prefetch_related(
+        'component_profiles__component_type'
+    ).order_by('name')
     serializer_class = EquipmentTypeSerializer
     permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = [
+        'equipment_type', 'energy_source', 'is_automated',
+        'is_horizontal_transport', 'is_yard_equipment',
+        'is_quay_equipment', 'is_rail_equipment', 'is_gate_equipment',
+    ]
+    filter_backends = [filters.DjangoFilterBackend]
+
+
+class ComponentTypeViewSet(viewsets.ModelViewSet):
+    queryset = ComponentType.objects.all().order_by('name')
+    serializer_class = ComponentTypeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['code', 'is_motion_component', 'is_energy_component']
+    filter_backends = [filters.DjangoFilterBackend]
+
+
+class SignalDefinitionViewSet(viewsets.ModelViewSet):
+    queryset = SignalDefinition.objects.select_related('component_type').all()
+    serializer_class = SignalDefinitionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['component_type', 'data_type', 'value_kind', 'is_required_for_oee']
+    filter_backends = [filters.DjangoFilterBackend]
+
+
+class EquipmentTypeComponentViewSet(viewsets.ModelViewSet):
+    serializer_class = EquipmentTypeComponentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        return EquipmentTypeComponent.objects.filter(
+            equipment_type_id=self.kwargs.get('equipment_type_pk')
+        ).select_related('equipment_type', 'component_type')
+
+    def perform_create(self, serializer):
+        equipment_type = get_object_or_404(
+            EquipmentType, pk=self.kwargs.get('equipment_type_pk')
+        )
+        profile = serializer.save(equipment_type=equipment_type)
+        self._sync_installed_components(profile.equipment_type)
+
+    def perform_update(self, serializer):
+        profile = serializer.save()
+        self._sync_installed_components(profile.equipment_type)
+
+    def _sync_installed_components(self, equipment_type):
+        from .services.che_components import sync_che_components
+
+        for che in equipment_type.che_set.all():
+            sync_che_components(che)
+
+
+class CheComponentViewSet(viewsets.ModelViewSet):
+    serializer_class = CheComponentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def _parent_che(self):
+        return get_object_or_404(
+            Che, pk=self.kwargs.get('che_pk'), location_id=self.kwargs.get('location_pk')
+        )
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['che'] = Che.objects.filter(
+            pk=self.kwargs.get('che_pk'), location_id=self.kwargs.get('location_pk')
+        ).first()
+        return context
+
+    def get_queryset(self):
+        return CheComponent.objects.filter(
+            che_id=self.kwargs.get('che_pk'),
+            che__location_id=self.kwargs.get('location_pk'),
+        ).select_related(
+            'che', 'component_type', 'template', 'parent', 'engine', 'battery',
+            'energy_tank', 'motion_axis', 'spreader',
+        ).prefetch_related('signal_bindings__signal_definition', 'signal_bindings__current_value')
+
+    def perform_create(self, serializer):
+        serializer.save(che=self._parent_che())
+
+
+class SignalBindingViewSet(viewsets.ModelViewSet):
+    serializer_class = SignalBindingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def _parent_component(self):
+        return get_object_or_404(
+            CheComponent,
+            pk=self.kwargs.get('component_pk'),
+            che_id=self.kwargs.get('che_pk'),
+            che__location_id=self.kwargs.get('location_pk'),
+        )
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['component'] = self._parent_component()
+        return context
+
+    def get_queryset(self):
+        return SignalBinding.objects.filter(
+            component_id=self.kwargs.get('component_pk'),
+            component__che_id=self.kwargs.get('che_pk'),
+            component__che__location_id=self.kwargs.get('location_pk'),
+        ).select_related('component', 'signal_definition', 'signal_definition__component_type')
+
+    def perform_create(self, serializer):
+        serializer.save(component=self._parent_component())
+
+    @action(detail=True, methods=['put', 'patch'], url_path='current-value')
+    def current_value(self, request, *args, **kwargs):
+        binding = self.get_object()
+        current = getattr(binding, 'current_value', None)
+        serializer = CurrentSignalValueSerializer(
+            current,
+            data=request.data,
+            partial=request.method == 'PATCH',
+        )
+        serializer.is_valid(raise_exception=True)
+        from .services.che_components import record_signal_value
+
+        try:
+            current = record_signal_value(binding, **serializer.validated_data)
+        except DjangoValidationError as exc:
+            return Response({'value': exc.messages}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(CurrentSignalValueSerializer(current).data)
+
+
+class OperationalStateIntervalViewSet(viewsets.ModelViewSet):
+    serializer_class = OperationalStateIntervalSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        return OperationalStateInterval.objects.filter(
+            che_id=self.kwargs.get('che_pk'),
+            che__location_id=self.kwargs.get('location_pk'),
+        )
+
+    def perform_create(self, serializer):
+        che = get_object_or_404(
+            Che, pk=self.kwargs.get('che_pk'), location_id=self.kwargs.get('location_pk')
+        )
+        with transaction.atomic():
+            if serializer.validated_data.get('ended_at') is None:
+                OperationalStateInterval.objects.filter(
+                    che=che, ended_at__isnull=True
+                ).update(ended_at=serializer.validated_data['started_at'])
+            serializer.save(che=che)
+
+
+class HandlingCycleViewSet(viewsets.ModelViewSet):
+    serializer_class = HandlingCycleSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        return HandlingCycle.objects.filter(
+            che_id=self.kwargs.get('che_pk'),
+            che__location_id=self.kwargs.get('location_pk'),
+        ).select_related('che', 'order_leg', 'container_visit')
+
+    def perform_create(self, serializer):
+        che = get_object_or_404(
+            Che, pk=self.kwargs.get('che_pk'), location_id=self.kwargs.get('location_pk')
+        )
+        serializer.save(che=che)
 
 
 class RoadViewSet(viewsets.ModelViewSet):
@@ -594,6 +841,14 @@ class RoadViewSet(viewsets.ModelViewSet):
                 node.delete()
 
 
+class BerthViewSet(viewsets.ModelViewSet):
+    serializer_class = BerthSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Berth.objects.filter(location_id=self.kwargs.get('location_pk')).prefetch_related('bollards')
+
+
 class RoutingNodeViewSet(viewsets.ModelViewSet):
     serializer_class = RoutingNodeSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -612,6 +867,70 @@ class TerminalConnectionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return TerminalConnection.objects.all().order_by('node_id', 'id')
+
+
+class ProcessHierarchyViewSet(viewsets.ModelViewSet):
+    queryset = ProcessHierarchy.objects.select_related('parent').all()
+    serializer_class = ProcessHierarchySerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['process_area', 'parent', 'is_active']
+    filter_backends = [filters.DjangoFilterBackend]
+
+
+class BusinessProcessViewSet(viewsets.ModelViewSet):
+    serializer_class = BusinessProcessSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['hierarchy', 'location', 'trigger_type', 'is_active']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        return BusinessProcess.objects.select_related('hierarchy', 'location').prefetch_related('versions')
+
+
+class ProcessVersionViewSet(viewsets.ModelViewSet):
+    serializer_class = ProcessVersionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['business_process', 'status', 'is_current']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        return ProcessVersion.objects.select_related('business_process', 'created_by')
+
+    @action(detail=True, methods=['post'])
+    def execute(self, request, pk=None):
+        version = self.get_object()
+        location_id = request.data.get('location') or version.business_process.location_id
+        location = None
+        if location_id:
+            location = get_object_or_404(Location, pk=location_id)
+        execution = BusinessProcessExecution.objects.create(
+            business_process=version.business_process,
+            process_version=version,
+            location=location,
+            status=BusinessProcessExecution.RUNNING,
+            trigger_source=request.data.get('trigger_source', BusinessProcess.TRIGGER_MANUAL),
+            trigger_payload=request.data.get('trigger_payload', {}),
+            requested_by=request.user if request.user.is_authenticated else None,
+        )
+        execution.mark_completed({
+            'message': 'Process execution recorded. Node-RED runtime deployment is not enabled yet.',
+            'nodered_flow_node_count': len(version.nodered_flow) if isinstance(version.nodered_flow, list) else None,
+            'mqtt_announcement_topic': version.mqtt_announcement_topic,
+        })
+        serializer = BusinessProcessExecutionSerializer(execution, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class BusinessProcessExecutionViewSet(viewsets.ModelViewSet):
+    serializer_class = BusinessProcessExecutionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filterset_fields = ['business_process', 'process_version', 'location', 'status']
+    filter_backends = [filters.DjangoFilterBackend]
+
+    def get_queryset(self):
+        return BusinessProcessExecution.objects.select_related(
+            'business_process', 'process_version', 'location', 'requested_by'
+        )
 
 
 @api_view(['POST'])

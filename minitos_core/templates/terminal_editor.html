@@ -458,7 +458,7 @@
             {% endif %}
         </h1>
         <div class="topbar-buttons">
-            <a href="{% url 'location_select' %}" class="btn">← Back</a>
+            <a href="{% url 'terminal_browser' %}" class="btn">← Terminals</a>
             <a href="/" class="btn">🏠 Home</a>
         </div>
     </div>
@@ -468,6 +468,7 @@
             <div class="tabs">
                 <button class="tab-btn active" data-tab="location">Location</button>
                 <button class="tab-btn" data-tab="areas">Areas</button>
+                <button class="tab-btn" data-tab="che">CHE</button>
             </div>
             
             <div class="tabs-content">
@@ -516,6 +517,11 @@
                         <div class="form-group">
                             <label for="longitude">Longitude</label>
                             <input type="number" id="longitude" name="longitude" step="0.0000001" value="{% if location and location.longitude %}{{ location.longitude }}{% endif %}" placeholder="-74.0060">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="timezone">Terminal Timezone</label>
+                            <input type="text" id="timezone" name="timezone" value="{% if location %}{{ location.timezone }}{% else %}UTC{% endif %}" placeholder="Europe/Madrid">
                         </div>
                         
                         <div class="section-title">Map Settings</div>
@@ -572,6 +578,14 @@
                         <button class="mode-btn" id="drawModeBtn">Draw</button>
                     </div>
 
+                    <div class="form-group" id="drawingShapeGroup">
+                        <label for="drawingShape">Drawing shape</label>
+                        <select id="drawingShape">
+                            <option value="rectangle" selected>Rectangle</option>
+                            <option value="free">Free polygon</option>
+                        </select>
+                    </div>
+
                     <div class="form-group">
                         <label for="areaName">Area Name</label>
                         <input type="text" id="areaName" placeholder="e.g., North Quay">
@@ -585,9 +599,11 @@
                             <option value="yard">Yard</option>
                             <option value="quay">Quay</option>
                             <option value="water">Water</option>
+                            <option value="land">Land</option>
                             <option value="road">Road</option>
                             <option value="building">Building</option>
                             <option value="yard block">Yard Block</option>
+                            <option value="berth">Berth</option>
                             <option value="parking">Parking</option>
                         </select>
                     </div>
@@ -637,6 +653,25 @@
                         </div>
                     </div>
 
+                    <div class="type-config-panel" id="berthPanel">
+                        <div class="section-title">Berth and Bollards</div>
+                        <div class="field-grid">
+                            <div class="form-group"><label for="berthHeading">Orientation (deg)</label><input id="berthHeading" type="number" value="0" step="1"></div>
+                            <div class="form-group"><label for="berthLength">Length (m)</label><input id="berthLength" type="number" value="300" min="1" step="1"></div>
+                            <div class="form-group"><label for="berthWidth">Width (m)</label><input id="berthWidth" type="number" value="20" min="1" step="1"></div>
+                            <div class="form-group"><label for="berthWaterSide">Water side</label><select id="berthWaterSide"><option value="left" selected>Left</option><option value="right">Right</option></select></div>
+                            <div class="form-group"><label for="berthBollardDirection">Bollard direction</label><select id="berthBollardDirection"><option value="forward" selected>Start to end</option><option value="reverse">End to start</option></select></div>
+                            <div class="form-group"><label for="berthBollardCount">Bollards</label><input id="berthBollardCount" type="number" value="15" min="2" max="200"></div>
+                            <div class="form-group"><label for="berthDefaultSpacing">Default spacing (m)</label><input id="berthDefaultSpacing" type="number" value="20" min="0.1" step="0.1"></div>
+                            <div class="form-group"><label for="berthStartMargin">Start margin (m)</label><input id="berthStartMargin" type="number" value="0" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="berthEndMargin">End margin (m)</label><input id="berthEndMargin" type="number" value="0" min="0" step="0.1"></div>
+                        </div>
+                        <div class="form-group">
+                            <label for="berthSpacings">Spacing after each bollard (m)</label>
+                            <textarea id="berthSpacings" rows="3" placeholder="Optional comma-separated values"></textarea>
+                        </div>
+                    </div>
+
                     <div class="type-config-panel" id="roadPanel">
                         <div class="section-title">Road</div>
                         <div class="field-grid">
@@ -667,6 +702,46 @@
                     <div class="section-title" style="margin-top: 25px;">Existing Roads</div>
                     <div class="area-list" id="roadList"><div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">No roads yet</div></div>
                 </div>
+
+                <!-- CHE Tab -->
+                <div id="che-tab" class="tab-content">
+                    <div class="section-title">Cargo Handling Equipment</div>
+                    <div class="form-group">
+                        <label for="cheName">Name *</label>
+                        <input id="cheName" maxlength="30" placeholder="e.g., TT-01">
+                    </div>
+                    <div class="form-group">
+                        <label for="cheEquipmentType">Equipment type *</label>
+                        <select id="cheEquipmentType"></select>
+                    </div>
+                    <div class="info-box" id="cheTypeInfo">Select an equipment type</div>
+                    <div class="field-grid">
+                        <div class="form-group">
+                            <label for="cheFuelLevel">Fuel level (%)</label>
+                            <input id="cheFuelLevel" type="number" min="0" max="100" value="100">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label"><input id="chePoweredOn" type="checkbox"> Powered on</label>
+                        <label class="checkbox-label"><input id="cheWorking" type="checkbox"> Working</label>
+                        <label class="checkbox-label"><input id="cheIsAvailable" type="checkbox"> Available for work</label>
+                        <label class="checkbox-label"><input id="cheIsDispatched" type="checkbox"> Dispatched</label>
+                        <label class="checkbox-label"><input id="cheIsInMaintenance" type="checkbox"> In maintenance</label>
+                    </div>
+                    <div class="field-grid">
+                        <div class="form-group"><label for="cheLatitude">Latitude</label><input id="cheLatitude" type="number" step="0.0000001"></div>
+                        <div class="form-group"><label for="cheLongitude">Longitude</label><input id="cheLongitude" type="number" step="0.0000001"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="cheRotation">Heading from true north (degrees)</label>
+                        <input id="cheRotation" type="number" step="0.1" value="0">
+                    </div>
+                    <button type="button" class="mode-btn" id="placeCheBtn">Place on map</button>
+                    <button type="button" class="save-btn" id="saveCheBtn">Save CHE</button>
+                    <button type="button" class="cancel-btn" id="clearCheBtn">New CHE</button>
+                    <div class="section-title" style="margin-top: 25px;">Existing CHE</div>
+                    <div class="area-list" id="cheList"><div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">No CHE yet</div></div>
+                </div>
             </div>
         </div>
         
@@ -686,13 +761,18 @@
             drawing: false,
             polygon: [],
             yardAnchor: null,
+            berthAnchor: null,
             selectedAreaId: null,
             selectedRoadId: null,
+            selectedCheId: null,
             areas: [],
             roads: [],
+            ches: [],
             equipmentTypes: [],
             editMarkers: [],
             blockDrag: null,
+            rectangleStart: null,
+            placingChe: false,
             locationData: {
                 latitude: 40.7128,
                 longitude: -74.0060,
@@ -704,18 +784,21 @@
                 default_zoom: 15,
                 angle: 0,
                 name: '',
-                location_type: 'TL'
+                location_type: 'TL',
+                timezone: 'UTC'
             }
         };
         
         const AREA_COLORS = {
-            'terminal area': '#0f766e',
+            'terminal area': '#e8edcb',
             'yard': '#65a30d',
             'quay': '#2563eb',
-            'water': '#0891b2',
+            'water': '#6ad3ed',
+            'land': '#eec185',
             'road': '#475569',
             'building': '#7c3aed',
             'yard block': '#4d7c0f',
+            'berth': '#0f766e',
             'parking': '#be123c'
         };
 
@@ -726,27 +809,58 @@
             'gridBayOrder', 'gridRowOrder', 'gridBayUseHeading',
             'gridPadTop', 'gridPadBottom', 'gridPadLeft', 'gridPadRight'
         ];
+        const BERTH_INPUT_IDS = [
+            'berthHeading', 'berthLength', 'berthWidth', 'berthBollardCount',
+            'berthWaterSide', 'berthBollardDirection', 'berthDefaultSpacing',
+            'berthStartMargin', 'berthEndMargin', 'berthSpacings'
+        ];
 
         document.getElementById('areaType').addEventListener('change', syncYardPanel);
+        document.getElementById('drawingShape').addEventListener('change', updateDrawingInfo);
+        document.getElementById('cheEquipmentType').addEventListener('change', updateCheTypeInfo);
+        document.getElementById('placeCheBtn').addEventListener('click', beginChePlacement);
+        document.getElementById('clearCheBtn').addEventListener('click', clearCheForm);
+        document.getElementById('saveCheBtn').addEventListener('click', saveChe);
         GRID_INPUT_IDS.forEach(id => document.getElementById(id).addEventListener('input', updateYardGeometry));
+        BERTH_INPUT_IDS.forEach(id => document.getElementById(id).addEventListener('input', updateBerthGeometry));
 
         function isYardBlock() {
             return document.getElementById('areaType').value === 'yard block';
         }
 
+        function isBerth() {
+            return document.getElementById('areaType').value === 'berth';
+        }
+
         function syncYardPanel() {
             const type = document.getElementById('areaType').value;
             document.getElementById('yardGridPanel').classList.toggle('active', isYardBlock());
+            document.getElementById('berthPanel').classList.toggle('active', isBerth());
             document.getElementById('roadPanel').classList.toggle('active', type === 'road');
             document.getElementById('parkingPanel').classList.toggle('active', type === 'parking');
             document.getElementById('areaSizeLabel').textContent = type === 'road' ? 'Road length (m)' : 'Area Size (m²)';
             document.getElementById('saveAreaBtn').textContent = type === 'road' ? 'Save Road' : 'Save Area';
+            document.getElementById('drawingShapeGroup').style.display = type === 'road' || isYardBlock() || isBerth() ? 'none' : 'block';
+            updateDrawingInfo();
+            updateYardGeometry();
+            updateBerthGeometry();
+        }
+
+        function currentDrawingShape() {
+            return document.getElementById('drawingShape').value;
+        }
+
+        function updateDrawingInfo() {
+            const type = document.getElementById('areaType').value;
             document.getElementById('drawingInfo').textContent = isYardBlock()
                 ? 'Click once to place the block anchor. At 0 degrees the block grows north and east.'
+                : isBerth()
+                    ? 'Click once to place the first bollard end. At 0 degrees the berth grows north.'
                 : type === 'road'
                     ? 'Click to add road nodes. Double-click or press Enter to finish the centerline.'
-                : 'Click on the map to add points. Double-click or press Enter to finish drawing.';
-            updateYardGeometry();
+                    : currentDrawingShape() === 'rectangle'
+                        ? 'Click two opposite corners to create a rectangle aligned with the terminal axes.'
+                        : 'Click to add polygon points. Double-click or press Enter to finish.';
         }
         
         // Tab switching
@@ -780,6 +894,8 @@
             state.drawing = true;
             state.polygon = [];
             state.yardAnchor = null;
+            state.berthAnchor = null;
+            state.rectangleStart = null;
             
             document.getElementById('selectModeBtn').classList.remove('active');
             document.getElementById('drawModeBtn').classList.add('active');
@@ -796,6 +912,7 @@
         
         function exitDrawing(shouldClear) {
             state.drawing = false;
+            state.rectangleStart = null;
             
             document.getElementById('selectModeBtn').classList.add('active');
             document.getElementById('drawModeBtn').classList.remove('active');
@@ -817,6 +934,7 @@
             document.getElementById('saveAreaBtn').disabled = true;
             state.polygon = [];
             state.yardAnchor = null;
+            state.berthAnchor = null;
             state.selectedAreaId = null;
             state.selectedRoadId = null;
             clearEditMarkers();
@@ -886,10 +1004,25 @@
                     state.ignoreMapClick = false;
                     return;
                 }
+                if (state.placingChe) {
+                    document.getElementById('cheLongitude').value = e.lngLat.lng.toFixed(7);
+                    document.getElementById('cheLatitude').value = e.lngLat.lat.toFixed(7);
+                    state.placingChe = false;
+                    document.getElementById('placeCheBtn').classList.remove('active');
+                    state.map.getCanvas().style.cursor = '';
+                    refresh();
+                    return;
+                }
                 if (state.drawing) {
-                    if (isYardBlock()) {
-                        state.yardAnchor = [e.lngLat.lng, e.lngLat.lat];
-                        updateYardGeometry();
+                    if (isYardBlock() || isBerth()) {
+                        const anchor = [e.lngLat.lng, e.lngLat.lat];
+                        if (isYardBlock()) {
+                            state.yardAnchor = anchor;
+                            updateYardGeometry();
+                        } else {
+                            state.berthAnchor = anchor;
+                            updateBerthGeometry();
+                        }
                         state.drawing = false;
                         document.getElementById('saveAreaBtn').disabled = false;
                         document.getElementById('selectModeBtn').classList.add('active');
@@ -897,6 +1030,18 @@
                         document.getElementById('drawingInfo').classList.remove('active');
                         document.getElementById('cancelDrawBtn').style.display = 'none';
                         state.map.getCanvas().style.cursor = '';
+                        return;
+                    }
+                    if (document.getElementById('areaType').value !== 'road' && currentDrawingShape() === 'rectangle') {
+                        const current = lngLatToLocal([e.lngLat.lng, e.lngLat.lat]);
+                        if (!state.rectangleStart) {
+                            state.rectangleStart = current;
+                            state.polygon = [[e.lngLat.lng, e.lngLat.lat]];
+                            refresh();
+                        } else {
+                            setEditorCoordinates(rectangleFromCorners(state.rectangleStart, current));
+                            finishPolygon();
+                        }
                         return;
                     }
                     state.polygon.push([e.lngLat.lng, e.lngLat.lat]);
@@ -910,9 +1055,10 @@
                         return;
                     }
                 }
-                const selectableLayers = ['areas-poly', 'roads-line'].filter(layer => state.map.getLayer(layer));
+                const selectableLayers = ['ches-point', 'areas-poly', 'roads-line'].filter(layer => state.map.getLayer(layer));
                 if (selectableLayers.length) {
                     const selected = state.map.queryRenderedFeatures(e.point, { layers: selectableLayers })[0];
+                    if (selected && selected.layer.id === 'ches-point') selectChe(Number(selected.properties.id));
                     if (selected && selected.layer.id === 'areas-poly') selectArea(Number(selected.properties.id));
                     if (selected && selected.layer.id === 'roads-line') selectRoad(Number(selected.properties.id));
                 }
@@ -935,24 +1081,34 @@
             });
 
             state.map.on('mousedown', e => {
-                if (!state.selectedAreaId || !isYardBlock() || !state.map.getLayer('draw-poly')) return;
+                if (!state.selectedAreaId || (!isYardBlock() && !isBerth()) || !state.map.getLayer('draw-poly')) return;
                 const hits = state.map.queryRenderedFeatures(e.point, { layers: ['draw-poly'] });
                 if (!hits.length) return;
                 state.blockDrag = {
                     start: lngLatToLocal([e.lngLat.lng, e.lngLat.lat]),
-                    coordinates: normalizeCoordinates(document.getElementById('coordinates').value)
+                    coordinates: normalizeCoordinates(document.getElementById('coordinates').value).map(lngLatToLocal)
                 };
                 state.map.dragPan.disable();
             });
 
             state.map.on('mousemove', e => {
+                if (state.drawing && state.rectangleStart && currentDrawingShape() === 'rectangle' && !isYardBlock() && !isBerth()) {
+                    const current = lngLatToLocal([e.lngLat.lng, e.lngLat.lat]);
+                    setEditorCoordinates(rectangleFromCorners(state.rectangleStart, current));
+                    updateDrawSource();
+                    return;
+                }
                 if (!state.blockDrag) return;
                 const current = lngLatToLocal([e.lngLat.lng, e.lngLat.lat]);
                 const delta = [current[0] - state.blockDrag.start[0], current[1] - state.blockDrag.start[1]];
                 const moved = state.blockDrag.coordinates.map(point => [point[0] + delta[0], point[1] + delta[1]]);
                 setEditorCoordinates(moved);
-                state.yardAnchor = localToLngLat(moved[0]);
+                if (isYardBlock()) state.yardAnchor = localToLngLat(moved[0]);
+                if (isBerth()) state.berthAnchor = localToLngLat(moved[0]);
                 updateDrawSource();
+                updateYardSlotSource();
+                updateBerthBollardSource();
+                updateBerthWaterSideSource();
             });
 
             state.map.on('mouseup', () => {
@@ -964,7 +1120,7 @@
             });
             
             state.map.on('load', async () => {
-                await Promise.all([loadAreas(), loadRoads(), loadEquipmentTypes()]);
+                await Promise.all([loadAreas(), loadRoads(), loadChes(), loadEquipmentTypes()]);
                 refresh();
             });
         }
@@ -976,12 +1132,21 @@
                 finishPolygon();
             }
         }
+
+        function rectangleFromCorners(start, finish) {
+            return [
+                [start[0], start[1]],
+                [finish[0], start[1]],
+                [finish[0], finish[1]],
+                [start[0], finish[1]]
+            ];
+        }
         
         function finishPolygon() {
             if (state.polygon.length < 3) return;
             
             const localPolygon = state.polygon.map(lngLatToLocal);
-            document.getElementById('coordinates').value = JSON.stringify(localPolygon);
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
             document.getElementById('areaSize').value = calcArea(state.polygon).toFixed(2);
             document.getElementById('saveAreaBtn').disabled = false;
             
@@ -992,7 +1157,7 @@
         function finishRoad() {
             if (state.polygon.length < 2) return;
             const localPoints = state.polygon.map(lngLatToLocal);
-            document.getElementById('coordinates').value = JSON.stringify(localPoints);
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
             document.getElementById('areaSize').value = roadLength(localPoints).toFixed(2);
             document.getElementById('saveAreaBtn').disabled = false;
             exitDrawing(false);
@@ -1051,30 +1216,64 @@
             };
         }
 
-        function gridPoint(anchor, grid, lengthOffset, widthOffset) {
+        function geographicGridPoint(anchor, grid, lengthOffset, widthOffset) {
             const angle = grid.heading_deg * Math.PI / 180;
-            const heading = [Math.sin(angle), Math.cos(angle)];
-            const right = [Math.cos(angle), -Math.sin(angle)];
+            const east = Math.sin(angle) * lengthOffset + Math.cos(angle) * widthOffset;
+            const north = Math.cos(angle) * lengthOffset - Math.sin(angle) * widthOffset;
+            const meters = metersPerDegree(anchor[1]);
             return [
-                anchor[0] + heading[0] * lengthOffset + right[0] * widthOffset,
-                anchor[1] + heading[1] * lengthOffset + right[1] * widthOffset
+                anchor[0] + east / meters.lon,
+                anchor[1] + north / meters.lat
             ];
         }
 
         function updateYardGeometry() {
             if (!isYardBlock() || !state.yardAnchor) return;
             const grid = yardGridFromForm();
-            const anchor = lngLatToLocal(state.yardAnchor);
             const size = gridDimensions(grid);
-            const localRing = [
-                gridPoint(anchor, grid, 0, 0),
-                gridPoint(anchor, grid, size.length, 0),
-                gridPoint(anchor, grid, size.length, size.width),
-                gridPoint(anchor, grid, 0, size.width)
+            state.polygon = [
+                geographicGridPoint(state.yardAnchor, grid, 0, 0),
+                geographicGridPoint(state.yardAnchor, grid, size.length, 0),
+                geographicGridPoint(state.yardAnchor, grid, size.length, size.width),
+                geographicGridPoint(state.yardAnchor, grid, 0, size.width)
             ];
-            state.polygon = localRing.map(localToLngLat);
-            document.getElementById('coordinates').value = JSON.stringify(localRing.map(p => p.map(v => Number(v.toFixed(3)))));
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
             document.getElementById('areaSize').value = (size.length * size.width).toFixed(2);
+            document.getElementById('saveAreaBtn').disabled = false;
+            refresh();
+        }
+
+        function berthConfigFromForm() {
+            const count = Math.max(2, Number(document.getElementById('berthBollardCount').value) || 2);
+            const defaultSpacing = Math.max(0.1, Number(document.getElementById('berthDefaultSpacing').value) || 20);
+            const entered = document.getElementById('berthSpacings').value.split(',')
+                .map(value => Number(value.trim())).filter(value => Number.isFinite(value) && value > 0);
+            const spacings = Array.from({ length: count - 1 }, (_, index) => entered[index] || defaultSpacing);
+            return {
+                heading_deg: Number(document.getElementById('berthHeading').value) || 0,
+                length_m: Math.max(1, Number(document.getElementById('berthLength').value) || 300),
+                width_m: Math.max(1, Number(document.getElementById('berthWidth').value) || 20),
+                water_side: document.getElementById('berthWaterSide').value,
+                bollard_direction: document.getElementById('berthBollardDirection').value,
+                bollard_count: count,
+                default_bollard_spacing_m: defaultSpacing,
+                start_margin_m: Math.max(0, Number(document.getElementById('berthStartMargin').value) || 0),
+                end_margin_m: Math.max(0, Number(document.getElementById('berthEndMargin').value) || 0),
+                bollard_spacings: spacings
+            };
+        }
+
+        function updateBerthGeometry() {
+            if (!isBerth() || !state.berthAnchor) return;
+            const berth = berthConfigFromForm();
+            state.polygon = [
+                geographicGridPoint(state.berthAnchor, berth, 0, 0),
+                geographicGridPoint(state.berthAnchor, berth, berth.length_m, 0),
+                geographicGridPoint(state.berthAnchor, berth, berth.length_m, berth.width_m),
+                geographicGridPoint(state.berthAnchor, berth, 0, berth.width_m)
+            ];
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
+            document.getElementById('areaSize').value = (berth.length_m * berth.width_m).toFixed(2);
             document.getElementById('saveAreaBtn').disabled = false;
             refresh();
         }
@@ -1088,9 +1287,8 @@
             }
             area = Math.abs(area) / 2;
             const lat = ring[0][1];
-            const metersPerDegreeLat = 111000;
-            const metersPerDegreeLng = 111000 * Math.cos(lat * Math.PI / 180);
-            return area * metersPerDegreeLat * metersPerDegreeLng;
+            const meters = metersPerDegree(lat);
+            return area * meters.lat * meters.lon;
         }
 
         function origin() {
@@ -1104,28 +1302,40 @@
         }
 
         function metersPerDegree(originLat) {
+            const metersPerRadian = 6378137;
+            const metersPerDegreeLat = Math.PI * metersPerRadian / 180;
             return {
-                lat: 111000,
-                lon: 111000 * Math.cos(originLat * Math.PI / 180)
+                lat: metersPerDegreeLat,
+                lon: metersPerDegreeLat * Math.cos(originLat * Math.PI / 180)
             };
         }
 
         function lngLatToLocal(point) {
             const o = origin();
             const meters = metersPerDegree(o.lat);
+            const east = (point[0] - o.lon) * meters.lon;
+            const north = (point[1] - o.lat) * meters.lat;
+            const angle = numberValue('angle', state.locationData.angle || 0) * Math.PI / 180;
             return [
-                (point[0] - o.lon) * meters.lon,
-                (point[1] - o.lat) * meters.lat
+                east * Math.cos(angle) - north * Math.sin(angle),
+                east * Math.sin(angle) + north * Math.cos(angle)
             ].map(v => Number(v.toFixed(3)));
         }
 
         function localToLngLat(point) {
             const o = origin();
             const meters = metersPerDegree(o.lat);
+            const angle = numberValue('angle', state.locationData.angle || 0) * Math.PI / 180;
+            const east = Number(point[0]) * Math.cos(angle) + Number(point[1]) * Math.sin(angle);
+            const north = -Number(point[0]) * Math.sin(angle) + Number(point[1]) * Math.cos(angle);
             return [
-                o.lon + (Number(point[0]) / meters.lon),
-                o.lat + (Number(point[1]) / meters.lat)
+                o.lon + (east / meters.lon),
+                o.lat + (north / meters.lat)
             ];
+        }
+
+        function roundGeographicPoints(points) {
+            return points.map(point => point.map(value => Number(Number(value).toFixed(8))));
         }
 
         function normalizeCoordinates(value) {
@@ -1146,7 +1356,7 @@
         function setEditorCoordinates(localPoints) {
             const rounded = localPoints.map(point => point.map(value => Number(value.toFixed(3))));
             state.polygon = rounded.map(localToLngLat);
-            document.getElementById('coordinates').value = JSON.stringify(rounded);
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
             const isRoad = document.getElementById('areaType').value === 'road';
             document.getElementById('areaSize').value = (isRoad ? roadLength(rounded) : calcLocalArea(rounded)).toFixed(2);
             document.getElementById('saveAreaBtn').disabled = false;
@@ -1264,12 +1474,24 @@
             const options = state.equipmentTypes.map(item => `<option value="${item.id}">${item.name} (${item.equipment_type})</option>`).join('');
             document.getElementById('roadCheTypes').innerHTML = options;
             document.getElementById('parkingCheTypes').innerHTML = options;
+            document.getElementById('cheEquipmentType').innerHTML = `<option value="">-- Select type --</option>${options}`;
+            updateCheTypeInfo();
+        }
+
+        async function loadChes() {
+            if (!locationId) return;
+            const res = await fetch(`/minitos_core/locations/${locationId}/ches/`);
+            if (res.ok) {
+                const data = await res.json();
+                state.ches = data.results || data;
+            }
         }
         
         function refresh() {
             refreshLayers();
             refreshList();
             refreshRoadList();
+            refreshCheList();
         }
 
         function drawFeatureCollection() {
@@ -1292,10 +1514,10 @@
         function refreshLayers() {
             // Clear existing drawing and area layers
             clearEditMarkers();
-            ['draw-poly', 'draw-outline', 'draw-points', 'areas-poly', 'areas-outline', 'roads-line', 'yard-slots-fill', 'yard-slots-line'].forEach(id => {
+            ['draw-poly', 'draw-outline', 'draw-points', 'areas-poly', 'areas-outline', 'roads-line', 'yard-slots-fill', 'yard-slots-line', 'berth-bollards', 'berth-bollard-labels', 'berth-water-line', 'berth-water-arrow', 'ches-point', 'ches-label'].forEach(id => {
                 if (state.map.getLayer(id)) state.map.removeLayer(id);
             });
-            ['draw-source', 'areas-source', 'roads-source', 'yard-slots-source'].forEach(id => {
+            ['draw-source', 'areas-source', 'roads-source', 'yard-slots-source', 'berth-bollards-source', 'berth-water-source', 'ches-source'].forEach(id => {
                 if (state.map.getSource(id)) state.map.removeSource(id);
             });
             
@@ -1334,7 +1556,7 @@
             // Existing areas
             if (state.areas.length > 0) {
                 const features = state.areas.filter(a => a.id !== state.selectedAreaId).map(a => {
-                    const coords = normalizeCoordinates(a.coordinates).map(localToLngLat);
+                    const coords = normalizeCoordinates(a.coordinates);
                     if (coords.length > 0) coords.push(coords[0]);
                     return {
                         type: 'Feature',
@@ -1364,7 +1586,7 @@
                 const features = state.roads.filter(road => road.id !== state.selectedRoadId).map(road => ({
                     type: 'Feature',
                     properties: { id: road.id, width: Math.max(3, Number(road.lane_count) * 3) },
-                    geometry: { type: 'LineString', coordinates: normalizeCoordinates(road.points).map(localToLngLat) }
+                    geometry: { type: 'LineString', coordinates: normalizeCoordinates(road.points) }
                 }));
                 state.map.addSource('roads-source', { type: 'geojson', data: { type: 'FeatureCollection', features } });
                 state.map.addLayer({
@@ -1373,14 +1595,42 @@
                 });
             }
 
-            const slotFeatures = [];
-            state.areas.filter(a => a.area_type === 'yard block' && a.block_config).forEach(a => {
-                const coords = normalizeCoordinates(a.coordinates);
-                if (coords.length) slotFeatures.push(...yardSlotFeatures(coords[0], a.block_config));
-            });
-            if (isYardBlock() && state.yardAnchor) {
-                slotFeatures.push(...yardSlotFeatures(lngLatToLocal(state.yardAnchor), yardGridFromForm()));
+            const cheFeatures = state.ches.filter(che => che.latitude !== null && che.longitude !== null).map(che => ({
+                type: 'Feature',
+                properties: {
+                    id: che.pk,
+                    name: che.name,
+                    code: che.equipment_type_code,
+                    selected: che.pk === state.selectedCheId ? 1 : 0
+                },
+                geometry: { type: 'Point', coordinates: [Number(che.longitude), Number(che.latitude)] }
+            }));
+            const draftLatitude = Number(document.getElementById('cheLatitude').value);
+            const draftLongitude = Number(document.getElementById('cheLongitude').value);
+            if (!state.selectedCheId && Number.isFinite(draftLatitude) && Number.isFinite(draftLongitude)) {
+                cheFeatures.push({
+                    type: 'Feature', properties: { id: 0, name: 'New CHE', code: 'CHE', selected: 1 },
+                    geometry: { type: 'Point', coordinates: [draftLongitude, draftLatitude] }
+                });
             }
+            if (cheFeatures.length) {
+                state.map.addSource('ches-source', { type: 'geojson', data: { type: 'FeatureCollection', features: cheFeatures } });
+                state.map.addLayer({
+                    id: 'ches-point', type: 'circle', source: 'ches-source',
+                    paint: {
+                        'circle-radius': ['case', ['==', ['get', 'selected'], 1], 10, 7],
+                        'circle-color': ['case', ['==', ['get', 'selected'], 1], '#f97316', '#0f766e'],
+                        'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2
+                    }
+                });
+                state.map.addLayer({
+                    id: 'ches-label', type: 'symbol', source: 'ches-source',
+                    layout: { 'text-field': ['get', 'name'], 'text-size': 12, 'text-offset': [0, 1.3] },
+                    paint: { 'text-color': '#17333a', 'text-halo-color': '#ffffff', 'text-halo-width': 1 }
+                });
+            }
+
+            const slotFeatures = yardSlotFeaturesForMap();
             if (slotFeatures.length) {
                 state.map.addSource('yard-slots-source', { type: 'geojson', data: { type: 'FeatureCollection', features: slotFeatures } });
                 state.map.addLayer({
@@ -1392,7 +1642,121 @@
                     paint: { 'line-color': '#0f766e', 'line-width': 1 }
                 });
             }
+
+            const bollardFeatures = berthBollardFeaturesForMap();
+            if (bollardFeatures.length) {
+                state.map.addSource('berth-bollards-source', { type: 'geojson', data: { type: 'FeatureCollection', features: bollardFeatures } });
+                state.map.addLayer({
+                    id: 'berth-bollards', type: 'circle', source: 'berth-bollards-source',
+                    paint: { 'circle-radius': 5, 'circle-color': '#f8fafc', 'circle-stroke-color': '#0f766e', 'circle-stroke-width': 2 }
+                });
+                state.map.addLayer({
+                    id: 'berth-bollard-labels', type: 'symbol', source: 'berth-bollards-source',
+                    layout: { 'text-field': ['get', 'label'], 'text-size': 11, 'text-offset': [0, 1.2] },
+                    paint: { 'text-color': '#134e4a', 'text-halo-color': '#ffffff', 'text-halo-width': 1 }
+                });
+            }
+            const waterSideFeatures = berthWaterSideFeaturesForMap();
+            if (waterSideFeatures.length) {
+                state.map.addSource('berth-water-source', { type: 'geojson', data: { type: 'FeatureCollection', features: waterSideFeatures } });
+                state.map.addLayer({
+                    id: 'berth-water-line', type: 'line', source: 'berth-water-source',
+                    filter: ['==', '$type', 'LineString'],
+                    paint: { 'line-color': '#0284c7', 'line-width': 3, 'line-opacity': 0.9 }
+                });
+                state.map.addLayer({
+                    id: 'berth-water-arrow', type: 'symbol', source: 'berth-water-source',
+                    filter: ['==', '$type', 'Point'],
+                    layout: {
+                        'text-field': '▲\nSEA', 'text-size': 13,
+                        'text-rotate': ['get', 'bearing'], 'text-rotation-alignment': 'map',
+                        'text-allow-overlap': true
+                    },
+                    paint: { 'text-color': '#0369a1', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 }
+                });
+            }
             refreshEditMarkers();
+        }
+
+        function berthBollardFeaturesForMap() {
+            const features = [];
+            state.areas.filter(area => area.area_type === 'berth' && area.berth_config && area.id !== state.selectedAreaId)
+                .forEach(area => (area.berth_config.bollards || []).forEach(bollard => features.push({
+                    type: 'Feature', properties: { label: bollard.name || String(bollard.number) },
+                    geometry: { type: 'Point', coordinates: [Number(bollard.longitude), Number(bollard.latitude)] }
+                })));
+            if (isBerth() && state.berthAnchor) {
+                const berth = berthConfigFromForm();
+                const reverse = berth.bollard_direction === 'reverse';
+                let distance = reverse ? berth.length_m - berth.end_margin_m : berth.start_margin_m;
+                const sideOffset = berth.water_side === 'right' ? berth.width_m : 0;
+                for (let index = 0; index < berth.bollard_count; index += 1) {
+                    if (index > 0) distance += (reverse ? -1 : 1) * berth.bollard_spacings[index - 1];
+                    features.push({
+                        type: 'Feature', properties: { label: String(index + 1) },
+                        geometry: { type: 'Point', coordinates: geographicGridPoint(state.berthAnchor, berth, distance, sideOffset) }
+                    });
+                }
+            }
+            return features;
+        }
+
+        function updateBerthBollardSource() {
+            const source = state.map.getSource('berth-bollards-source');
+            if (source) source.setData({ type: 'FeatureCollection', features: berthBollardFeaturesForMap() });
+        }
+
+        function berthWaterSideFeaturesForMap() {
+            const features = [];
+            state.areas.filter(area => area.area_type === 'berth' && area.berth_config && area.id !== state.selectedAreaId)
+                .forEach(area => features.push(...waterSideIndicatorFeatures(
+                    [Number(area.berth_config.longitude), Number(area.berth_config.latitude)],
+                    area.berth_config
+                )));
+            if (isBerth() && state.berthAnchor) {
+                features.push(...waterSideIndicatorFeatures(state.berthAnchor, berthConfigFromForm()));
+            }
+            return features;
+        }
+
+        function waterSideIndicatorFeatures(anchor, berth) {
+            const isRight = berth.water_side === 'right';
+            const edgeOffset = isRight ? Number(berth.width_m) : 0;
+            const outsideOffset = edgeOffset + (isRight ? 15 : -15);
+            const midpoint = Number(berth.length_m) / 2;
+            const edge = geographicGridPoint(anchor, berth, midpoint, edgeOffset);
+            const outside = geographicGridPoint(anchor, berth, midpoint, outsideOffset);
+            return [
+                { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [edge, outside] } },
+                {
+                    type: 'Feature',
+                    properties: { bearing: ((Number(berth.heading_deg) + (isRight ? 90 : -90)) % 360 + 360) % 360 },
+                    geometry: { type: 'Point', coordinates: outside }
+                }
+            ];
+        }
+
+        function updateBerthWaterSideSource() {
+            const source = state.map.getSource('berth-water-source');
+            if (source) source.setData({ type: 'FeatureCollection', features: berthWaterSideFeaturesForMap() });
+        }
+
+        function yardSlotFeaturesForMap() {
+            const slotFeatures = [];
+            state.areas.filter(a => a.area_type === 'yard block' && a.block_config && a.id !== state.selectedAreaId).forEach(a => {
+                const coords = normalizeCoordinates(a.coordinates);
+                if (coords.length) slotFeatures.push(...yardSlotFeatures(coords[0], a.block_config));
+            });
+            if (isYardBlock() && state.yardAnchor) {
+                slotFeatures.push(...yardSlotFeatures(state.yardAnchor, yardGridFromForm()));
+            }
+            return slotFeatures;
+        }
+
+        function updateYardSlotSource() {
+            const source = state.map.getSource('yard-slots-source');
+            if (!source) return;
+            source.setData({ type: 'FeatureCollection', features: yardSlotFeaturesForMap() });
         }
 
         function yardSlotFeatures(anchor, source) {
@@ -1424,7 +1788,7 @@
                             center[0] + length * cos - width * sin,
                             center[1] + length * sin + width * cos
                         ])
-                        .map(([length, width]) => localToLngLat(gridPoint(anchor, grid, length, width)));
+                        .map(([length, width]) => geographicGridPoint(anchor, grid, length, width));
                     corners.push(corners[0]);
                     features.push({
                         type: 'Feature',
@@ -1485,6 +1849,130 @@
             }));
         }
 
+        function refreshCheList() {
+            const list = document.getElementById('cheList');
+            if (!state.ches.length) {
+                list.innerHTML = '<div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">No CHE yet</div>';
+                return;
+            }
+            list.innerHTML = state.ches.map(che => `
+                <div class="area-item ${state.selectedCheId === che.pk ? 'selected' : ''}" data-che-id="${che.pk}">
+                    <div class="area-item-info">
+                        <div class="area-item-name"><span class="color-swatch" style="background:#0f766e"></span>${che.name}</div>
+                        <div class="area-item-type">${che.equipment_type_code} &bull; ${che.tic40_power_state} &bull; ${che.tic40_activity_state} &bull; ${che.is_available ? 'Available' : 'Unavailable'}</div>
+                    </div>
+                    <div class="area-actions"><button type="button" onclick="selectChe(${che.pk})">Edit</button><button type="button" onclick="deleteChe(${che.pk})">Del</button></div>
+                </div>`).join('');
+            document.querySelectorAll('[data-che-id]').forEach(item => item.addEventListener('click', event => {
+                if (!event.target.tagName.match(/BUTTON/)) selectChe(Number(item.dataset.cheId));
+            }));
+        }
+
+        function updateCheTypeInfo() {
+            const selectedId = Number(document.getElementById('cheEquipmentType').value);
+            const equipmentType = state.equipmentTypes.find(item => item.id === selectedId);
+            document.getElementById('cheTypeInfo').textContent = equipmentType
+                ? `${equipmentType.equipment_type_display || equipmentType.name} | ${equipmentType.length_m} x ${equipmentType.width_m} x ${equipmentType.height_m} m | empty/full speed ${equipmentType.driving_speed_empty_kmh}/${equipmentType.driving_speed_full_load_kmh} km/h | ${equipmentType.energy_source_display || equipmentType.energy_source} | tank ${equipmentType.fuel_tank_capacity}`
+                : 'Select an equipment type';
+        }
+
+        function beginChePlacement() {
+            if (!locationId) return alert('Save the location first');
+            state.placingChe = true;
+            state.drawing = false;
+            document.getElementById('placeCheBtn').classList.add('active');
+            state.map.getCanvas().style.cursor = 'crosshair';
+        }
+
+        function clearCheForm() {
+            state.selectedCheId = null;
+            state.placingChe = false;
+            document.getElementById('cheName').value = '';
+            document.getElementById('cheEquipmentType').value = '';
+            document.getElementById('chePoweredOn').checked = false;
+            document.getElementById('cheWorking').checked = false;
+            document.getElementById('cheIsAvailable').checked = false;
+            document.getElementById('cheIsDispatched').checked = false;
+            document.getElementById('cheIsInMaintenance').checked = false;
+            document.getElementById('cheFuelLevel').value = 100;
+            document.getElementById('cheLatitude').value = '';
+            document.getElementById('cheLongitude').value = '';
+            document.getElementById('cheRotation').value = 0;
+            document.getElementById('placeCheBtn').classList.remove('active');
+            if (state.map) state.map.getCanvas().style.cursor = '';
+            updateCheTypeInfo();
+            refresh();
+        }
+
+        function selectChe(id) {
+            const che = state.ches.find(item => item.pk === id);
+            if (!che) return;
+            state.selectedCheId = id;
+            state.placingChe = false;
+            document.getElementById('cheName').value = che.name;
+            document.getElementById('cheEquipmentType').value = che.equipment_type;
+            document.getElementById('chePoweredOn').checked = Boolean(che.powered_on);
+            document.getElementById('cheWorking').checked = Boolean(che.working);
+            document.getElementById('cheIsAvailable').checked = Boolean(che.is_available);
+            document.getElementById('cheIsDispatched').checked = Boolean(che.is_dispatched);
+            document.getElementById('cheIsInMaintenance').checked = Boolean(che.is_in_maintenance);
+            document.getElementById('cheFuelLevel').value = che.fuel_level;
+            document.getElementById('cheLatitude').value = che.latitude ?? '';
+            document.getElementById('cheLongitude').value = che.longitude ?? '';
+            document.getElementById('cheRotation').value = che.rotation ?? 0;
+            updateCheTypeInfo();
+            document.querySelector('[data-tab="che"]').click();
+            refresh();
+        }
+
+        async function saveChe() {
+            const latitudeText = document.getElementById('cheLatitude').value.trim();
+            const longitudeText = document.getElementById('cheLongitude').value.trim();
+            const payload = {
+                name: document.getElementById('cheName').value.trim(),
+                equipment_type: Number(document.getElementById('cheEquipmentType').value),
+                powered_on: document.getElementById('chePoweredOn').checked,
+                working: document.getElementById('cheWorking').checked,
+                is_available: document.getElementById('cheIsAvailable').checked,
+                is_dispatched: document.getElementById('cheIsDispatched').checked,
+                is_in_maintenance: document.getElementById('cheIsInMaintenance').checked,
+                fuel_level: Number(document.getElementById('cheFuelLevel').value),
+                latitude: Number(latitudeText),
+                longitude: Number(longitudeText),
+                rotation: Number(document.getElementById('cheRotation').value) || 0
+            };
+            if (!payload.name || !payload.equipment_type) return alert('Enter a name and equipment type');
+            if (!latitudeText || !longitudeText || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) return alert('Place the CHE on the map');
+            const url = state.selectedCheId
+                ? `/minitos_core/locations/${locationId}/ches/${state.selectedCheId}/`
+                : `/minitos_core/locations/${locationId}/ches/`;
+            const res = await fetch(url, {
+                method: state.selectedCheId ? 'PUT' : 'POST',
+                headers: apiHeaders(), body: JSON.stringify(payload)
+            });
+            if (!res.ok) return alert('Error: ' + JSON.stringify(await res.json().catch(() => ({ detail: res.statusText }))));
+            clearCheForm();
+            await loadChes();
+            refresh();
+        }
+
+        async function deleteChe(id) {
+            if (!confirm('Delete this CHE?')) return;
+            const res = await fetch(`/minitos_core/locations/${locationId}/ches/${id}/`, { method: 'DELETE', headers: apiHeaders(false) });
+            if (!res.ok) return alert('Error deleting CHE');
+            if (state.selectedCheId === id) clearCheForm();
+            await loadChes();
+            refresh();
+        }
+
+        function apiHeaders(json = true) {
+            const headers = { 'X-CSRFToken': getCsrfToken() };
+            if (json) headers['Content-Type'] = 'application/json';
+            const token = localStorage.getItem('token');
+            if (token) headers.Authorization = `Bearer ${token}`;
+            return headers;
+        }
+
         function selectedValues(id) {
             return Array.from(document.getElementById(id).selectedOptions).map(option => Number(option.value));
         }
@@ -1506,11 +1994,15 @@
             document.getElementById('coordinates').value = JSON.stringify(normalizeCoordinates(a.coordinates));
             document.getElementById('isVisible').checked = a.is_visible;
             document.getElementById('saveAreaBtn').disabled = false;
-            state.polygon = normalizeCoordinates(a.coordinates).map(localToLngLat);
+            state.polygon = normalizeCoordinates(a.coordinates);
             state.yardAnchor = a.area_type === 'yard block' && normalizeCoordinates(a.coordinates).length
-                ? localToLngLat(normalizeCoordinates(a.coordinates)[0])
+                ? normalizeCoordinates(a.coordinates)[0]
+                : null;
+            state.berthAnchor = a.area_type === 'berth' && normalizeCoordinates(a.coordinates).length
+                ? normalizeCoordinates(a.coordinates)[0]
                 : null;
             if (a.block_config) populateYardGrid(a.block_config);
+            if (a.berth_config) populateBerth(a.berth_config);
             document.getElementById('parkingCapacity').value = 1;
             setSelectedValues('parkingCheTypes', []);
             if (a.parking_config) {
@@ -1539,6 +2031,25 @@
             });
             document.getElementById('gridBayUseHeading').checked = Boolean(grid.bay_use_heading_axis);
         }
+
+        function populateBerth(berth) {
+            const values = {
+                berthHeading: berth.heading_deg,
+                berthLength: berth.length_m,
+                berthWidth: berth.width_m,
+                berthWaterSide: berth.water_side,
+                berthBollardDirection: berth.bollard_direction,
+                berthBollardCount: berth.bollard_count,
+                berthDefaultSpacing: berth.default_bollard_spacing_m,
+                berthStartMargin: berth.start_margin_m,
+                berthEndMargin: berth.end_margin_m
+            };
+            Object.entries(values).forEach(([id, value]) => {
+                if (value !== null && value !== undefined) document.getElementById(id).value = value;
+            });
+            document.getElementById('berthSpacings').value = (berth.bollards || []).slice(1)
+                .map(bollard => Number(bollard.spacing_from_previous_m)).join(', ');
+        }
         
         function editArea(id) {
             selectArea(id);
@@ -1552,13 +2063,16 @@
             state.selectedRoadId = id;
             state.selectedAreaId = null;
             state.yardAnchor = null;
+            state.berthAnchor = null;
             document.getElementById('areaName').value = road.name;
             document.getElementById('areaType').value = 'road';
             document.getElementById('roadLaneCount').value = road.lane_count;
             document.getElementById('roadCapacity').value = road.capacity;
             document.getElementById('roadDirection').value = road.direction;
             setSelectedValues('roadCheTypes', road.allowed_che_types);
-            setEditorCoordinates(normalizeCoordinates(road.points));
+            state.polygon = normalizeCoordinates(road.points);
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
+            document.getElementById('areaSize').value = roadLength(state.polygon.map(lngLatToLocal)).toFixed(2);
             syncYardPanel();
             refresh();
         }
@@ -1631,18 +2145,29 @@
             } : { location: locationId, name, area_type: type, area, coordinates: coords, is_visible: visible };
             if (type === 'yard block') {
                 const grid = yardGridFromForm();
-                const anchor = state.yardAnchor || (coords.length ? localToLngLat(coords[0]) : null);
+                const anchor = state.yardAnchor || (coords.length ? coords[0] : null);
                 if (!anchor) {
                     alert('Click the map once to place the yard block');
                     return;
                 }
-                const localAnchor = lngLatToLocal(anchor);
                 payload.yard_grid = {
                     ...grid,
-                    x_position: localAnchor[0],
-                    y_position: localAnchor[1],
-                    anchor_lon: anchor[0],
-                    anchor_lat: anchor[1]
+                    longitude: anchor[0],
+                    latitude: anchor[1]
+                };
+            }
+            if (type === 'berth') {
+                const berth = berthConfigFromForm();
+                const anchor = state.berthAnchor || (coords.length ? coords[0] : null);
+                if (!anchor) {
+                    alert('Click the map once to place the berth');
+                    return;
+                }
+                payload.berth_settings = {
+                    ...berth,
+                    name: name || 'Berth',
+                    longitude: anchor[0],
+                    latitude: anchor[1]
                 };
             }
             if (type === 'parking') {
@@ -1701,6 +2226,7 @@
                 map_units_per_meter: parseFloat(document.getElementById('map_units_per_meter').value) || 1,
                 default_zoom: parseFloat(document.getElementById('default_zoom').value),
                 angle: parseFloat(document.getElementById('angle').value),
+                timezone: document.getElementById('timezone').value.trim() || 'UTC',
                 location_type: document.getElementById('location-type')?.value || 'TL'
             };
             
@@ -1719,6 +2245,8 @@
                 
                 if (res.ok) {
                     const result = await res.json();
+                    state.locationData = { ...state.locationData, ...data, id: result.id };
+                    if (state.map) state.map.setBearing(data.angle || 0);
                     alert('Saved!');
                     if (!locationId) window.location.href = `/terminal-editor/${result.id}/`;
                 } else {
@@ -1733,6 +2261,7 @@
             document.getElementById('name').value = state.locationData.name || '';
             document.getElementById('latitude').value = state.locationData.latitude || '';
             document.getElementById('longitude').value = state.locationData.longitude || '';
+            document.getElementById('timezone').value = state.locationData.timezone || 'UTC';
             document.getElementById('map_origin_latitude').value = state.locationData.map_origin_latitude || state.locationData.latitude || '';
             document.getElementById('map_origin_longitude').value = state.locationData.map_origin_longitude || state.locationData.longitude || '';
             document.getElementById('map_width_m').value = state.locationData.map_width_m || 1000;

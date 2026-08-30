@@ -25,7 +25,7 @@ for b in Block.objects.filter(location=location).order_by('name'):
 
 print(f"\n🎯 POINTS OF WORK ({PointOfWork.objects.filter(location=location).count()}):")
 for p in PointOfWork.objects.filter(location=location).order_by('code'):
-    print(f"   {p.code:15} {p.get_pow_type_display():25} ({p.x_position:.1f}, {p.y_position:.1f})")
+    print(f"   {p.code:15} {p.get_pow_type_display():25} ({p.latitude:.6f}, {p.longitude:.6f})")
 
 print(f"\n🔗 POW CONNECTIONS: {POWConnection.objects.all().count()}")
 

@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from minitos_core.models import Pile, Position
+from minitos_core.services.coordinates import offset_geographic
 
 
 def _value(value):
@@ -27,11 +28,11 @@ def _pile_center(block, bay, row):
     else:
         north_offset, east_offset = row_offset, bay_offset
 
-    x = _value(block.x_position)
-    y = _value(block.y_position)
-    x += heading_axis[0] * north_offset + right_axis[0] * east_offset
-    y += heading_axis[1] * north_offset + right_axis[1] * east_offset
-    return x, y
+    if block.latitude is None or block.longitude is None:
+        raise ValidationError('A yard block requires an anchor latitude and longitude.')
+    east = heading_axis[0] * north_offset + right_axis[0] * east_offset
+    north = heading_axis[1] * north_offset + right_axis[1] * east_offset
+    return offset_geographic(block.latitude, block.longitude, east, north)
 
 
 def models_q_protected_position():
@@ -59,7 +60,7 @@ def sync_yard_grid(block):
         raise ValidationError('The grid cannot be reduced because removed piles contain reserved or occupied positions.')
 
     for bay, row in sorted(desired):
-        x, y = _pile_center(block, bay, row)
+        latitude, longitude = _pile_center(block, bay, row)
         pile = existing.get((bay, row))
         if pile is None:
             pile = Pile.objects.create(
@@ -67,14 +68,14 @@ def sync_yard_grid(block):
                 bay=bay,
                 row=row,
                 tiers=block.max_tier,
-                x_position=x,
-                y_position=y,
+                latitude=latitude,
+                longitude=longitude,
             )
         else:
             pile.tiers = block.max_tier
-            pile.x_position = x
-            pile.y_position = y
-            pile.save(update_fields=['tiers', 'x_position', 'y_position'])
+            pile.latitude = latitude
+            pile.longitude = longitude
+            pile.save(update_fields=['tiers', 'latitude', 'longitude'])
 
         extra_positions = pile.positions.filter(tier__gt=block.max_tier)
         if extra_positions.filter(models_q_protected_position()).exists():

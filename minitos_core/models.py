@@ -1,7 +1,38 @@
 from django.db import models
-from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
+from django.db.models import Q
 from django.db.models.signals import post_save
 from django.core.exceptions import ValidationError
+from datetime import timedelta
+from decimal import Decimal, ROUND_CEILING
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+def validate_iana_timezone(value):
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        raise ValidationError('Enter a valid IANA timezone such as Europe/Madrid.')
+
+
+def calculated_operation_minutes(total_moves, equipment_split, productivity_per_unit):
+    if not total_moves or not equipment_split or not productivity_per_unit:
+        return None
+    hourly_productivity = Decimal(equipment_split) * Decimal(productivity_per_unit)
+    if hourly_productivity <= 0:
+        return None
+    return int(
+        (Decimal(total_moves) * Decimal(60) / hourly_productivity).quantize(
+            Decimal('1'), rounding=ROUND_CEILING
+        )
+    )
+
+
+def format_duration_minutes(minutes):
+    if minutes is None:
+        return None
+    hours, remaining_minutes = divmod(int(minutes), 60)
+    return f'{hours} hours and {remaining_minutes} minutes'
 
 
 class IntegerRangeField(models.IntegerField):
@@ -146,8 +177,8 @@ class ContainerVisit(models.Model):
     )
     requires_power = models.BooleanField(default=0)
     is_imdg = models.BooleanField(default=0)
-    x_position = models.FloatField(blank=True, null=True)
-    y_position = models.FloatField(blank=True, null=True)
+    latitude = models.FloatField(blank=True, null=True)
+    longitude = models.FloatField(blank=True, null=True)
     z_position = models.FloatField(blank=True, null=True)
     bill_of_lading = models.CharField(max_length=20, blank=True, null=True)
     booking = models.CharField(max_length=20, blank=True, null=True)
@@ -218,10 +249,16 @@ class Location(models.Model):
     default_zoom = models.FloatField(
         blank=True,
         null=True,
-        validators=[RegexValidator(regex='^[0-9]*\.?[0-9]+$', message='Must be a positive number')],
+        validators=[RegexValidator(regex=r'^[0-9]*\.?[0-9]+$', message='Must be a positive number')],
         help_text='Default zoom level for map view'
     )
     angle = models.FloatField(blank=True, null=True, help_text='Rotation angle in degrees (0-360)')
+    timezone = models.CharField(
+        max_length=64,
+        default='UTC',
+        validators=[validate_iana_timezone],
+        help_text='IANA timezone used for local terminal operations',
+    )
 
     def __str__(self):
         return "%s" % (self.name)
@@ -257,13 +294,9 @@ class Block(models.Model):
     max_rows = IntegerRangeField(min_value=1, max_value=100)
     max_tier = IntegerRangeField(min_value=1, max_value=20)
 
-    # Legacy canvas coordinates (keep for backward compatibility)
-    x_position = models.FloatField(blank=True, null=True)
-    y_position = models.FloatField(blank=True, null=True)
-
     # Map anchor selected by the editor. At heading 0 the grid grows north and east.
-    anchor_lat = models.FloatField(blank=True, null=True, help_text='Latitude of the block drawing anchor')
-    anchor_lon = models.FloatField(blank=True, null=True, help_text='Longitude of the block drawing anchor')
+    latitude = models.FloatField(blank=True, null=True, help_text='Latitude of the block drawing anchor')
+    longitude = models.FloatField(blank=True, null=True, help_text='Longitude of the block drawing anchor')
     heading_deg = models.FloatField(blank=True, null=True, help_text='Block rotation/heading in degrees')
     slot_heading_deg = models.FloatField(default=0.0, help_text='Slot rotation relative to the block heading')
 
@@ -318,6 +351,15 @@ class Block(models.Model):
     class Meta:
         unique_together = ('location', 'name',)
 
+    def save(self, *args, **kwargs):
+        if self.latitude is None:
+            self.latitude = self.location.map_origin_latitude or self.location.latitude
+        if self.longitude is None:
+            self.longitude = self.location.map_origin_longitude or self.location.longitude
+        if self.latitude is None or self.longitude is None:
+            raise ValidationError('A block requires latitude and longitude coordinates.')
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return "%s-%s" % (self.location, self.name)
 
@@ -337,8 +379,8 @@ class Pile(models.Model):
     allows_40 = models.BooleanField(default=False)
     allows_45 = models.BooleanField(default=False)
 
-    x_position = models.FloatField(blank=True, null=True)
-    y_position = models.FloatField(blank=True, null=True)
+    latitude = models.FloatField(blank=True, null=True)
+    longitude = models.FloatField(blank=True, null=True)
 
     # Per-pile margin adjustments (meters) to handle special cases
     margin_top_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Top margin for this pile (m)')
@@ -615,26 +657,12 @@ class OrderLeg(models.Model):
 
 ###################################
 class Che(models.Model):
-    IL = 'IL'
-    WK = 'WK'
-    OF = 'OF'
-    BD = 'BD'
-    MA = 'MA'
-
-    STATUS_TYPES = [
-        (IL, 'Idle'),
-        (WK, 'Working'),
-        (OF, 'Offline'),
-        (BD, 'Breakdown'),
-        (MA, 'In Maintenance'),
-    ]
-
-    status = models.CharField(
-        max_length=2,
-        choices=STATUS_TYPES,
-        default=OF,
-    )
+    # Cached TIC4.0 power/activity facts plus MiniTOS operational assignment facts.
+    powered_on = models.BooleanField(default=False)
+    working = models.BooleanField(default=False)
     is_available = models.BooleanField(default=False)
+    is_dispatched = models.BooleanField(default=False)
+    is_in_maintenance = models.BooleanField(default=False)
     name = models.CharField(max_length=30, unique=True)
     equipment_type = models.ForeignKey(
         'EquipmentType',
@@ -651,45 +679,146 @@ class Che(models.Model):
     )
     # highlighted = models.TextField()
 
-    x_position = models.FloatField(blank=True, null=True)
-    y_position = models.FloatField(blank=True, null=True)
-    # position
-    twistlock_closed = models.BooleanField(default=False)
-
+    latitude = models.FloatField(blank=True, null=True)
+    longitude = models.FloatField(blank=True, null=True)
+    rotation = models.FloatField(blank=True, null=False, default=0.0)  # Rotation in degrees, default to 0.0
     location = models.ForeignKey(
         'Location',
         on_delete=models.CASCADE,
     )
 
-    fuel_level = models.IntegerField(default=100)
     last_maintenance = models.DateTimeField(blank=True, null=True)
+    state_updated_at = models.DateTimeField(auto_now=True)
     # assigned_tasks: This would be a ManyToMany or ForeignKey to a Task/Order model
 
     def __str__(self):
         return self.name
 
+    def _component_value(self, name, default):
+        if not self.pk:
+            return getattr(self, '_pending_component_values', {}).get(name, default)
+        from .services.che_components import get_che_legacy_value
+        return get_che_legacy_value(self, name, default)
+
+    def _set_component_value(self, name, value):
+        if not hasattr(self, '_pending_component_values'):
+            self._pending_component_values = {}
+        self._pending_component_values[name] = value
+
+    @property
+    def fuel_level(self):
+        return self._component_value('fuel_level', 100.0)
+
+    @fuel_level.setter
+    def fuel_level(self, value):
+        self._set_component_value('fuel_level', value)
+
+    @property
+    def twistlock_closed(self):
+        return self._component_value('twistlock_closed', False)
+
+    @twistlock_closed.setter
+    def twistlock_closed(self, value):
+        self._set_component_value('twistlock_closed', value)
+
+    @property
+    def running_hours(self):
+        return self._component_value('running_hours', 0.0)
+
+    @running_hours.setter
+    def running_hours(self, value):
+        self._set_component_value('running_hours', value)
+
+    @property
+    def running_hours_since_last_maintenance(self):
+        return self._component_value('running_hours_since_last_maintenance', 0.0)
+
+    @running_hours_since_last_maintenance.setter
+    def running_hours_since_last_maintenance(self, value):
+        self._set_component_value('running_hours_since_last_maintenance', value)
+
 
 ###################################
 class EquipmentType(models.Model):
     name = models.CharField(max_length=30, unique=True)
-    running_hours = models.IntegerField(default=0)
 
     TT = 'TT'
+    AVG = 'AVG'
     SC = 'SC'
+    AS = 'AS'
+    RS = 'RS'
+    TH = 'TH'
+    EH = 'EH'
+    FL = 'FL'
     RTG = 'RTG'
-    ASC = 'ASC'
+    ARTG = 'ARTG'
+    RGC = 'RGC'
+    RMG = 'RMG'
+    ARMG = 'ARMG'
     STS = 'STS'
 
     EQUIPMENT_TYPES = [
         (TT, 'Terminal Tractor'),
+        (AVG, 'Automated Guided Vehicle'),
         (SC, 'Shuttle Carrier'),
+        (AS, 'Auto Shuttle Carrier'),
+        (RS, 'Reach Stacker'),
+        (TH, 'Top Handler'),
+        (EH, 'Empty Handler'),
+        (FL, 'Forklift'),
         (RTG, 'RT Gantry'),
-        (ASC, 'Auto Stacking Crane'),
+        (ARTG, 'Auto Rail Gantry'),
+        (RGC, 'Rail Gantry Crane'),
+        (RMG, 'Rail Mounted Gantry Crane'),
+        (ARMG, 'Auto Rail Mounted Gantry Crane'),
         (STS, 'Ship to Shore'),
     ]
+    ## Is Yard Equipment, Quay Equipment, Rail Equipment, Gate Equipment, Horizontal Transport
+    is_horizontal_transport = models.BooleanField(default=False)
+    ## If can move containers within the yard
+    is_yard_equipment = models.BooleanField(default=False)
+    ## If can move containers from or to a vessel, barge, or train
+    is_quay_equipment = models.BooleanField(default=False)
+    is_rail_equipment = models.BooleanField(default=False)
+    ## if can move containers from or to a truck.
+    is_gate_equipment = models.BooleanField(default=False)
+    ## Equipment dimensions and capabilities
+    length_m = models.FloatField(default=0.0)
+    width_m = models.FloatField(default=0.0)
+    height_m = models.FloatField(default=0.0)
+    max_lift_weight_kg = models.FloatField(default=0.0)
+    is_twin_capeable = models.BooleanField(default=False)
+
+    ## Energy source: Diesel, Electric, Hybrid, etc.
+    Diesel = 'Diesel'
+    Electric = 'Electric'
+    Hybrid = 'Hybrid'
+    Gas = 'Gas'
+    Other = 'Other'
+
+    ENERGY_SOURCE_CHOICES = [
+        (Diesel, 'Diesel'),
+        (Electric, 'Electric'),
+        (Hybrid, 'Hybrid'),
+        (Gas, 'Gas'),
+        (Other, 'Other'),
+    ]
+    energy_source = models.CharField(
+        max_length=10,
+        choices=ENERGY_SOURCE_CHOICES,
+        default=Diesel,
+    )
+    ## Maintenance schedule and intervals
+    minor_maintenance_interval_hours = models.IntegerField(default=100000)
+    major_maintenance_interval_hours = models.IntegerField(default=500000)
+
+    ## Autromated or manual operation
+    is_automated = models.BooleanField(default=False)
+
+    stacking_capacity = models.IntegerField(default=1)
 
     equipment_type = models.CharField(
-        max_length=3,
+        max_length=4,
         choices=EQUIPMENT_TYPES,
         default=SC,
     )
@@ -697,18 +826,451 @@ class EquipmentType(models.Model):
     def __str__(self):
         return self.name
 
+    def _component_profile_value(self, name, default):
+        if not self.pk:
+            return getattr(self, '_pending_component_defaults', {}).get(name, default)
+        from .services.che_components import get_equipment_type_legacy_value
+        return get_equipment_type_legacy_value(self, name, default)
+
+    def _set_component_profile_value(self, name, value):
+        if not hasattr(self, '_pending_component_defaults'):
+            self._pending_component_defaults = {}
+        self._pending_component_defaults[name] = value
+
+    @property
+    def driving_speed_full_load_kmh(self):
+        return self._component_profile_value('driving_speed_full_load_kmh', 0.0)
+
+    @driving_speed_full_load_kmh.setter
+    def driving_speed_full_load_kmh(self, value):
+        self._set_component_profile_value('driving_speed_full_load_kmh', value)
+
+    @property
+    def driving_speed_empty_kmh(self):
+        return self._component_profile_value('driving_speed_empty_kmh', 0.0)
+
+    @driving_speed_empty_kmh.setter
+    def driving_speed_empty_kmh(self, value):
+        self._set_component_profile_value('driving_speed_empty_kmh', value)
+
+    @property
+    def lifting_speed_full_load_m_per_min(self):
+        return self._component_profile_value('lifting_speed_full_load_m_per_min', 0.0)
+
+    @lifting_speed_full_load_m_per_min.setter
+    def lifting_speed_full_load_m_per_min(self, value):
+        self._set_component_profile_value('lifting_speed_full_load_m_per_min', value)
+
+    @property
+    def lifting_speed_empty_m_per_min(self):
+        return self._component_profile_value('lifting_speed_empty_m_per_min', 0.0)
+
+    @lifting_speed_empty_m_per_min.setter
+    def lifting_speed_empty_m_per_min(self, value):
+        self._set_component_profile_value('lifting_speed_empty_m_per_min', value)
+
+    @property
+    def power_rating_kw(self):
+        return self._component_profile_value('power_rating_kw', 0.0)
+
+    @power_rating_kw.setter
+    def power_rating_kw(self, value):
+        self._set_component_profile_value('power_rating_kw', value)
+
+    @property
+    def engine_type(self):
+        return self._component_profile_value('engine_type', None)
+
+    @engine_type.setter
+    def engine_type(self, value):
+        self._set_component_profile_value('engine_type', value)
+
+    @property
+    def fuel_tank_capacity(self):
+        return self._component_profile_value('fuel_tank_capacity', 0.0)
+
+    @fuel_tank_capacity.setter
+    def fuel_tank_capacity(self, value):
+        self._set_component_profile_value('fuel_tank_capacity', value)
+
+    @property
+    def turning_radius_m(self):
+        return self._component_profile_value('turning_radius_m', 0.0)
+
+    @turning_radius_m.setter
+    def turning_radius_m(self, value):
+        self._set_component_profile_value('turning_radius_m', value)
+
 
 ###################################
-class EquipmentPart(models.Model):
-    name = models.CharField(max_length=30, unique=True)
-    running_hours = models.IntegerField(default=0)
-    equipment_type = models.ForeignKey(
-        'EquipmentType',
-        on_delete=models.RESTRICT,
-    )
+class ComponentType(models.Model):
+    CHE = 'che'
+    DRIVE = 'drive'
+    HOIST = 'hoist'
+    TROLLEY = 'trolley'
+    GANTRY = 'gantry'
+    BOOM = 'boom'
+    SPREADER = 'spreader'
+    POWER_SOURCE = 'energysupply'
+    ENERGY_STORE = 'energystoragesystem'
+    OTHER = 'other'
+
+    COMPONENT_TYPES = [
+        (CHE, 'CHE'),
+        (DRIVE, 'Drive'),
+        (HOIST, 'Hoist'),
+        (TROLLEY, 'Trolley'),
+        (GANTRY, 'Gantry'),
+        (BOOM, 'Boom'),
+        (SPREADER, 'Spreader'),
+        (POWER_SOURCE, 'Energy supply'),
+        (ENERGY_STORE, 'Energy storage system'),
+        (OTHER, 'Other'),
+    ]
+
+    code = models.CharField(max_length=24, choices=COMPONENT_TYPES, unique=True)
+    name = models.CharField(max_length=60)
+    tic40_subject = models.CharField(max_length=40, blank=True, default='')
+    description = models.TextField(blank=True, default='')
+    is_motion_component = models.BooleanField(default=False)
+    is_energy_component = models.BooleanField(default=False)
+    supports_multiple = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['name']
 
     def __str__(self):
         return self.name
+
+
+class EquipmentTypeComponent(models.Model):
+    equipment_type = models.ForeignKey(
+        'EquipmentType', related_name='component_profiles', on_delete=models.CASCADE
+    )
+    component_type = models.ForeignKey(
+        'ComponentType', related_name='equipment_type_profiles', on_delete=models.RESTRICT
+    )
+    role = models.CharField(max_length=40)
+    display_name = models.CharField(max_length=80)
+    parent_role = models.CharField(max_length=40, blank=True, default='')
+    is_required = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    quantity = models.PositiveSmallIntegerField(default=1, validators=[MinValueValidator(1)])
+    default_configuration = models.JSONField(blank=True, default=dict)
+
+    class Meta:
+        ordering = ['equipment_type__name', 'role']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['equipment_type', 'role'], name='unique_equipment_type_component_role'
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.equipment_type.name}: {self.display_name}'
+
+
+class CheComponent(models.Model):
+    che = models.ForeignKey('Che', related_name='components', on_delete=models.CASCADE)
+    component_type = models.ForeignKey(
+        'ComponentType', related_name='installed_components', on_delete=models.RESTRICT
+    )
+    template = models.ForeignKey(
+        'EquipmentTypeComponent', related_name='installed_components',
+        on_delete=models.SET_NULL, blank=True, null=True,
+    )
+    parent = models.ForeignKey(
+        'self', related_name='children', on_delete=models.SET_NULL, blank=True, null=True
+    )
+    role = models.CharField(max_length=40)
+    name = models.CharField(max_length=80)
+    manufacturer = models.CharField(max_length=80, blank=True, default='')
+    model = models.CharField(max_length=80, blank=True, default='')
+    serial_number = models.CharField(max_length=100, blank=True, default='')
+    installed_at = models.DateTimeField(blank=True, null=True)
+    removed_at = models.DateTimeField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(blank=True, default=dict)
+
+    class Meta:
+        ordering = ['che__name', 'role']
+        constraints = [
+            models.UniqueConstraint(fields=['che', 'role'], name='unique_che_component_role'),
+        ]
+
+    def __str__(self):
+        return f'{self.che.name}: {self.name}'
+
+
+class Engine(models.Model):
+    component = models.OneToOneField(
+        'CheComponent', related_name='engine', on_delete=models.CASCADE
+    )
+    engine_type = models.CharField(max_length=80, blank=True, default='')
+    fuel_type = models.CharField(max_length=40, blank=True, default='diesel')
+    rated_power_kw = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    nominal_rpm = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    running_hours = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    hours_since_maintenance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    def __str__(self):
+        return f'Engine for {self.component}'
+
+
+class Battery(models.Model):
+    component = models.OneToOneField(
+        'CheComponent', related_name='battery', on_delete=models.CASCADE
+    )
+    chemistry = models.CharField(max_length=40, blank=True, default='')
+    capacity_kwh = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    nominal_voltage_v = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    max_charge_power_kw = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    max_discharge_power_kw = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    minimum_soc_percent = models.FloatField(
+        default=0.0, validators=[MinValueValidator(0.0), MaxValueValidator(100.0)]
+    )
+    maximum_soc_percent = models.FloatField(
+        default=100.0, validators=[MinValueValidator(0.0), MaxValueValidator(100.0)]
+    )
+
+    def __str__(self):
+        return f'Battery for {self.component}'
+
+
+class EnergyTank(models.Model):
+    component = models.OneToOneField(
+        'CheComponent', related_name='energy_tank', on_delete=models.CASCADE
+    )
+    fuel_type = models.CharField(max_length=40, blank=True, default='diesel')
+    capacity_l = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+
+    def __str__(self):
+        return f'Energy tank for {self.component}'
+
+
+class MotionAxis(models.Model):
+    component = models.OneToOneField(
+        'CheComponent', related_name='motion_axis', on_delete=models.CASCADE
+    )
+    maximum_speed_empty_m_s = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    maximum_speed_loaded_m_s = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    maximum_acceleration_m_s2 = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    maximum_deceleration_m_s2 = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    motion_deadband_m_s = models.FloatField(default=0.01, validators=[MinValueValidator(0.0)])
+    minimum_position_m = models.FloatField(blank=True, null=True)
+    maximum_position_m = models.FloatField(blank=True, null=True)
+    turning_radius_m = models.FloatField(default=0.0, validators=[MinValueValidator(0.0)])
+    cumulative_motion_hours = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cumulative_distance_m = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+
+    def __str__(self):
+        return f'Motion axis for {self.component}'
+
+
+class Spreader(models.Model):
+    component = models.OneToOneField(
+        'CheComponent', related_name='spreader', on_delete=models.CASCADE
+    )
+    twin_capable = models.BooleanField(default=False)
+    tandem_capable = models.BooleanField(default=False)
+    supported_sizes_ft = models.JSONField(blank=True, default=list)
+    current_size_ft = models.PositiveSmallIntegerField(blank=True, null=True)
+    twistlocks_locked = models.BooleanField(default=False)
+    landed = models.BooleanField(default=False)
+    container_present = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f'Spreader for {self.component}'
+
+
+class SignalDefinition(models.Model):
+    BOOLEAN = 'boolean'
+    INTEGER = 'integer'
+    FLOAT = 'float'
+    STRING = 'string'
+    JSON = 'json'
+    DATA_TYPES = [
+        (BOOLEAN, 'Boolean'),
+        (INTEGER, 'Integer'),
+        (FLOAT, 'Float'),
+        (STRING, 'String'),
+        (JSON, 'JSON'),
+    ]
+
+    CURRENT = 'current'
+    STATE = 'state'
+    CUMULATIVE = 'cumulative'
+    EVENT = 'event'
+    VALUE_KINDS = [
+        (CURRENT, 'Current value'),
+        (STATE, 'State'),
+        (CUMULATIVE, 'Cumulative value'),
+        (EVENT, 'Event'),
+    ]
+
+    component_type = models.ForeignKey(
+        'ComponentType', related_name='signal_definitions', on_delete=models.CASCADE
+    )
+    code = models.CharField(max_length=100, unique=True)
+    name = models.CharField(max_length=100)
+    tic40_path = models.CharField(max_length=240, blank=True, default='')
+    data_type = models.CharField(max_length=12, choices=DATA_TYPES)
+    unit = models.CharField(max_length=30, blank=True, default='')
+    value_kind = models.CharField(max_length=12, choices=VALUE_KINDS, default=CURRENT)
+    standard_version = models.CharField(max_length=20, blank=True, default='2026.019')
+    description = models.TextField(blank=True, default='')
+    is_required_for_oee = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['component_type__name', 'code']
+
+    def __str__(self):
+        return self.code
+
+
+class SignalBinding(models.Model):
+    SPARKPLUG = 'sparkplug'
+    MQTT = 'mqtt'
+    REST = 'rest'
+    SIMULATOR = 'simulator'
+    MANUFACTURER = 'manufacturer'
+    MANUAL = 'manual'
+    SOURCE_PROTOCOLS = [
+        (SPARKPLUG, 'Sparkplug B'),
+        (MQTT, 'MQTT'),
+        (REST, 'REST API'),
+        (SIMULATOR, 'Simulator'),
+        (MANUFACTURER, 'Manufacturer interface'),
+        (MANUAL, 'Manual'),
+    ]
+
+    component = models.ForeignKey(
+        'CheComponent', related_name='signal_bindings', on_delete=models.CASCADE
+    )
+    signal_definition = models.ForeignKey(
+        'SignalDefinition', related_name='bindings', on_delete=models.RESTRICT
+    )
+    source_protocol = models.CharField(
+        max_length=16, choices=SOURCE_PROTOCOLS, default=SIMULATOR
+    )
+    source_metric = models.CharField(max_length=160)
+    source_topic = models.CharField(max_length=240, blank=True, default='')
+    scale_factor = models.FloatField(default=1.0)
+    offset = models.FloatField(default=0.0)
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['component__che__name', 'signal_definition__code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['component', 'signal_definition'], name='unique_component_signal_binding'
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.component}: {self.signal_definition.code}'
+
+
+class CurrentSignalValue(models.Model):
+    GOOD = 'good'
+    UNCERTAIN = 'uncertain'
+    BAD = 'bad'
+    STALE = 'stale'
+    QUALITIES = [
+        (GOOD, 'Good'),
+        (UNCERTAIN, 'Uncertain'),
+        (BAD, 'Bad'),
+        (STALE, 'Stale'),
+    ]
+
+    binding = models.OneToOneField(
+        'SignalBinding', related_name='current_value', on_delete=models.CASCADE
+    )
+    value = models.JSONField(blank=True, null=True)
+    source_timestamp = models.DateTimeField(blank=True, null=True)
+    recorded_at = models.DateTimeField(auto_now=True)
+    quality = models.CharField(max_length=10, choices=QUALITIES, default=GOOD)
+    sequence = models.PositiveBigIntegerField(blank=True, null=True)
+
+    def __str__(self):
+        return f'{self.binding.signal_definition.code}={self.value}'
+
+
+class OperationalStateInterval(models.Model):
+    OFF = 'off'
+    IDLE = 'idle'
+    WORKING = 'working'
+    FAULT = 'fault'
+    MAINTENANCE = 'maintenance'
+    UNKNOWN = 'unknown'
+    STATES = [
+        (OFF, 'Off'),
+        (IDLE, 'Idle'),
+        (WORKING, 'Working'),
+        (FAULT, 'Fault'),
+        (MAINTENANCE, 'Maintenance'),
+        (UNKNOWN, 'Unknown'),
+    ]
+
+    che = models.ForeignKey('Che', related_name='state_intervals', on_delete=models.CASCADE)
+    state = models.CharField(max_length=12, choices=STATES)
+    started_at = models.DateTimeField()
+    ended_at = models.DateTimeField(blank=True, null=True)
+    source = models.CharField(max_length=40, blank=True, default='derived')
+    reason = models.CharField(max_length=240, blank=True, default='')
+    confidence = models.FloatField(
+        default=1.0, validators=[MinValueValidator(0.0), MaxValueValidator(1.0)]
+    )
+
+    class Meta:
+        ordering = ['-started_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['che'], condition=Q(ended_at__isnull=True),
+                name='one_open_operational_state_per_che',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.che.name}: {self.get_state_display()}'
+
+
+class HandlingCycle(models.Model):
+    IN_PROGRESS = 'in_progress'
+    COMPLETED = 'completed'
+    FAILED = 'failed'
+    ABORTED = 'aborted'
+    RESULTS = [
+        (IN_PROGRESS, 'In progress'),
+        (COMPLETED, 'Completed'),
+        (FAILED, 'Failed'),
+        (ABORTED, 'Aborted'),
+    ]
+
+    che = models.ForeignKey('Che', related_name='handling_cycles', on_delete=models.CASCADE)
+    order_leg = models.ForeignKey(
+        'OrderLeg', related_name='handling_cycles', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    container_visit = models.ForeignKey(
+        'ContainerVisit', related_name='handling_cycles', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    started_at = models.DateTimeField()
+    ended_at = models.DateTimeField(blank=True, null=True)
+    result = models.CharField(max_length=12, choices=RESULTS, default=IN_PROGRESS)
+    ideal_cycle_seconds = models.PositiveIntegerField(blank=True, null=True)
+    start_latitude = models.FloatField(blank=True, null=True)
+    start_longitude = models.FloatField(blank=True, null=True)
+    end_latitude = models.FloatField(blank=True, null=True)
+    end_longitude = models.FloatField(blank=True, null=True)
+    metadata = models.JSONField(blank=True, default=dict)
+
+    class Meta:
+        ordering = ['-started_at']
+
+    def __str__(self):
+        return f'{self.che.name} cycle {self.pk or "new"}'
 
 
 
@@ -827,8 +1389,6 @@ class CarrierService(models.Model):
     window_start_time = models.TimeField(blank=True, null=True)
     window_end_time = models.TimeField(blank=True, null=True)
 
-    duration = IntegerRangeField(min_value=1, max_value=1440, blank=True, null=True, help_text='Duration in minutes')
-
     window_start_weekday = models.CharField(
         max_length=10,
         choices=WEEKDAYS,
@@ -847,6 +1407,44 @@ class CarrierService(models.Model):
 
     moves_in = models.IntegerField(default=0)
     moves_out = models.IntegerField(default=0)
+    vessel_length_m = models.FloatField(
+        blank=True, null=True,
+        help_text='Length overall in meters for vessel and barge services',
+    )
+
+    default_berth = models.ForeignKey(
+        'Berth', on_delete=models.SET_NULL, related_name='default_services',
+        blank=True, null=True,
+    )
+    default_start_bollard = models.ForeignKey(
+        'Bollard', on_delete=models.SET_NULL, related_name='services_starting_here',
+        blank=True, null=True,
+    )
+    default_end_bollard = models.ForeignKey(
+        'Bollard', on_delete=models.SET_NULL, related_name='services_ending_here',
+        blank=True, null=True,
+    )
+
+    primary_equipment_type = models.ForeignKey(
+        'EquipmentType', on_delete=models.SET_NULL,
+        related_name='primary_carrier_services', blank=True, null=True,
+        help_text='Primary entry/exit equipment used to calculate service productivity',
+    )
+    crane_split = models.DecimalField(
+        max_digits=6, decimal_places=2, default=Decimal('1.00'),
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text='Fractional number of primary equipment units assigned',
+    )
+    expected_productivity_per_crane = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal('25.00'),
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text='Expected moves per hour for each primary equipment unit',
+    )
+    horizontal_transport_per_crane = models.DecimalField(
+        max_digits=6, decimal_places=2, default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text='Horizontal transport units required per primary equipment unit',
+    )
 
     periodicity = models.CharField(max_length=20, choices=[
         ('Daily', 'Daily'),
@@ -857,6 +1455,54 @@ class CarrierService(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def expected_productivity_per_hour(self):
+        return self.crane_split * self.expected_productivity_per_crane
+
+    @property
+    def calculated_duration_minutes(self):
+        return calculated_operation_minutes(
+            self.moves_in + self.moves_out,
+            self.crane_split,
+            self.expected_productivity_per_crane,
+        )
+
+    @property
+    def calculated_duration_display(self):
+        return format_duration_minutes(self.calculated_duration_minutes)
+
+
+class CarrierServiceEquipmentRequirement(models.Model):
+    carrier_service = models.ForeignKey(
+        CarrierService, on_delete=models.CASCADE, related_name='equipment_requirements'
+    )
+    equipment_type = models.ForeignKey(
+        EquipmentType, on_delete=models.RESTRICT, related_name='service_requirements'
+    )
+    equipment_split = models.DecimalField(
+        max_digits=6, decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    expected_productivity_per_hour = models.DecimalField(
+        max_digits=8, decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    horizontal_transport_per_unit = models.DecimalField(
+        max_digits=6, decimal_places=2, default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['carrier_service', 'equipment_type'],
+                name='unique_equipment_requirement_per_service',
+            )
+        ]
+
+    def __str__(self):
+        return f'{self.carrier_service.name}: {self.equipment_type.name}'
 
 
 ###################################
@@ -912,6 +1558,18 @@ class CarrierVisit(models.Model):
     voyage_number = models.CharField(max_length=20, blank=True, null=True)
     carrier = models.CharField(max_length=50, blank=True, null=True)
     berth = models.CharField(max_length=10, blank=True, null=True)
+    planned_berth = models.ForeignKey(
+        'Berth', on_delete=models.SET_NULL, related_name='carrier_visits',
+        blank=True, null=True,
+    )
+    berth_start_bollard = models.ForeignKey(
+        'Bollard', on_delete=models.SET_NULL, related_name='visits_starting_here',
+        blank=True, null=True,
+    )
+    berth_end_bollard = models.ForeignKey(
+        'Bollard', on_delete=models.SET_NULL, related_name='visits_ending_here',
+        blank=True, null=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     last_updated = models.DateTimeField(auto_now=True)
 
@@ -934,8 +1592,79 @@ class CarrierVisit(models.Model):
     moves_restow = models.IntegerField(default=0)
     total_moves = models.IntegerField(default=0)
 
+    primary_equipment_type = models.ForeignKey(
+        'EquipmentType', on_delete=models.SET_NULL,
+        related_name='primary_carrier_visits', blank=True, null=True,
+    )
+    crane_split = models.DecimalField(
+        max_digits=6, decimal_places=2, default=Decimal('1.00'),
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    expected_productivity_per_crane = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal('25.00'),
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    horizontal_transport_per_crane = models.DecimalField(
+        max_digits=6, decimal_places=2, default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+
     def __str__(self):
         return f"{self.name} ({self.status})"
+
+    @property
+    def expected_productivity_per_hour(self):
+        return self.crane_split * self.expected_productivity_per_crane
+
+    @property
+    def calculated_duration_minutes(self):
+        return calculated_operation_minutes(
+            self.total_moves or self.moves_in + self.moves_out,
+            self.crane_split,
+            self.expected_productivity_per_crane,
+        )
+
+    @property
+    def calculated_duration_display(self):
+        return format_duration_minutes(self.calculated_duration_minutes)
+
+    def save(self, *args, **kwargs):
+        duration_minutes = self.calculated_duration_minutes
+        if self.eta and duration_minutes is not None:
+            self.etd = self.eta + timedelta(minutes=duration_minutes)
+        super().save(*args, **kwargs)
+
+
+class CarrierVisitEquipmentRequirement(models.Model):
+    carrier_visit = models.ForeignKey(
+        CarrierVisit, on_delete=models.CASCADE, related_name='equipment_requirements'
+    )
+    equipment_type = models.ForeignKey(
+        EquipmentType, on_delete=models.RESTRICT, related_name='visit_requirements'
+    )
+    equipment_split = models.DecimalField(
+        max_digits=6, decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    expected_productivity_per_hour = models.DecimalField(
+        max_digits=8, decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    horizontal_transport_per_unit = models.DecimalField(
+        max_digits=6, decimal_places=2, default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['carrier_visit', 'equipment_type'],
+                name='unique_equipment_requirement_per_visit',
+            )
+        ]
+
+    def __str__(self):
+        return f'{self.carrier_visit.name}: {self.equipment_type.name}'
 
 
 ###################################
@@ -1132,8 +1861,8 @@ class PointOfWork(models.Model):
         related_name='points_of_work'
     )
     code = models.CharField(max_length=20)
-    x_position = models.FloatField(blank=True, null=True)
-    y_position = models.FloatField(blank=True, null=True)
+    latitude = models.FloatField(blank=True, null=True)
+    longitude = models.FloatField(blank=True, null=True)
     max_throughput = models.IntegerField(blank=True, null=True, help_text='Maximum throughput in containers per hour')
     is_active = models.BooleanField(default=True)
 
@@ -1176,20 +1905,24 @@ class Area(models.Model):
     YARD = 'yard'
     QUAY = 'quay'
     WATER = 'water'
+    LAND = 'land'
     ROAD = 'road'
     BUILDING = 'building'
     YARD_BLOCK = 'yard block'
     PARKING = 'parking'
+    BERTH = 'berth'
 
     AREA_TYPE_CHOICES = [
         (TERMINAL_AREA, 'Terminal Area'),
         (YARD, 'Yard'),
         (QUAY, 'Quay'),
         (WATER, 'Water'),
+        (LAND, 'Land'),
         (ROAD, 'Road'),
         (BUILDING, 'Building'),
         (YARD_BLOCK, 'Yard Block'),
         (PARKING, 'Parking'),
+        (BERTH, 'Berth'),
     ]
 
     location = models.ForeignKey(
@@ -1215,7 +1948,7 @@ class Area(models.Model):
     coordinates = models.JSONField(
         default=list,
         blank=True,
-        help_text='Polygon coordinates in local map meters as [[x, y], ...]'
+        help_text='Polygon coordinates as GeoJSON-style [[longitude, latitude], ...]'
     )
 
     class Meta:
@@ -1226,13 +1959,77 @@ class Area(models.Model):
 
 
 ###################################
+class Berth(models.Model):
+    WATER_LEFT = 'left'
+    WATER_RIGHT = 'right'
+    WATER_SIDE_CHOICES = [
+        (WATER_LEFT, 'Left'),
+        (WATER_RIGHT, 'Right'),
+    ]
+    BOLLARDS_FORWARD = 'forward'
+    BOLLARDS_REVERSE = 'reverse'
+    BOLLARD_DIRECTION_CHOICES = [
+        (BOLLARDS_FORWARD, 'Start to end'),
+        (BOLLARDS_REVERSE, 'End to start'),
+    ]
+
+    location = models.ForeignKey(
+        'Location', on_delete=models.CASCADE, related_name='berths'
+    )
+    area = models.OneToOneField(
+        'Area', on_delete=models.CASCADE, related_name='berth_config'
+    )
+    name = models.CharField(max_length=100)
+    latitude = models.FloatField(help_text='Latitude of the berth start-left anchor')
+    longitude = models.FloatField(help_text='Longitude of the berth start-left anchor')
+    heading_deg = models.FloatField(default=0.0, help_text='Direction along the berth relative to true north')
+    length_m = models.FloatField(default=300.0)
+    width_m = models.FloatField(default=30.0)
+    water_side = models.CharField(
+        max_length=5, choices=WATER_SIDE_CHOICES, default=WATER_LEFT,
+    )
+    bollard_direction = models.CharField(
+        max_length=7, choices=BOLLARD_DIRECTION_CHOICES, default=BOLLARDS_FORWARD,
+    )
+    bollard_count = IntegerRangeField(min_value=2, max_value=200, default=15)
+    default_bollard_spacing_m = models.FloatField(default=20.0)
+    start_margin_m = models.FloatField(default=0.0)
+    end_margin_m = models.FloatField(default=0.0)
+
+    class Meta:
+        unique_together = ('location', 'name')
+
+    def __str__(self):
+        return f"{self.location.name} - {self.name}"
+
+
+class Bollard(models.Model):
+    berth = models.ForeignKey(
+        'Berth', on_delete=models.CASCADE, related_name='bollards'
+    )
+    number = models.PositiveIntegerField()
+    name = models.CharField(max_length=30)
+    distance_along_berth_m = models.FloatField(default=0.0)
+    spacing_from_previous_m = models.FloatField(blank=True, null=True)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+
+    class Meta:
+        ordering = ['number']
+        unique_together = ('berth', 'number')
+
+    def __str__(self):
+        return f"{self.berth.name} / {self.name}"
+
+
+###################################
 class RoutingNode(models.Model):
     location = models.ForeignKey(
         'Location', on_delete=models.CASCADE, related_name='routing_nodes'
     )
     name = models.CharField(max_length=100, blank=True, default='')
-    x_position = models.FloatField()
-    y_position = models.FloatField()
+    latitude = models.FloatField(blank=True, null=True)
+    longitude = models.FloatField(blank=True, null=True)
 
     def __str__(self):
         return self.name or f"Node {self.pk}"
@@ -1255,7 +2052,7 @@ class Road(models.Model):
     name = models.CharField(max_length=100)
     points = models.JSONField(
         default=list,
-        help_text='Ordered road centerline points in local map meters as [[x, y], ...]',
+        help_text='Ordered road centerline points as [[longitude, latitude], ...]',
     )
     lane_count = IntegerRangeField(min_value=1, max_value=20, default=1)
     capacity = models.PositiveIntegerField(default=1, help_text='Maximum CHEs on the road')
@@ -1321,3 +2118,247 @@ class TerminalConnection(models.Model):
     def __str__(self):
         target = self.block or self.parking_area
         return f"{self.node} -> {target}"
+
+
+###################################
+class ProcessHierarchy(models.Model):
+    GATE = 'gate'
+    RAIL = 'rail'
+    YARD = 'yard'
+    QUAY = 'quay'
+    OTHER = 'other'
+
+    PROCESS_AREA_CHOICES = [
+        (GATE, 'Gate'),
+        (RAIL, 'Rail'),
+        (YARD, 'Yard'),
+        (QUAY, 'Quay'),
+        (OTHER, 'Other'),
+    ]
+
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=30, unique=True)
+    process_area = models.CharField(
+        max_length=10,
+        choices=PROCESS_AREA_CHOICES,
+        default=OTHER,
+    )
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        related_name='children',
+        null=True,
+        blank=True,
+    )
+    description = models.TextField(blank=True, default='')
+    display_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['process_area', 'display_order', 'name']
+        verbose_name_plural = 'process hierarchies'
+
+    def __str__(self):
+        return f"{self.get_process_area_display()} / {self.name}"
+
+
+###################################
+class BusinessProcess(models.Model):
+    TRIGGER_MANUAL = 'manual'
+    TRIGGER_REST_API = 'rest_api'
+    TRIGGER_MQTT = 'mqtt'
+    TRIGGER_TIMER = 'timer'
+    TRIGGER_EVENT = 'event'
+
+    TRIGGER_CHOICES = [
+        (TRIGGER_MANUAL, 'Manual'),
+        (TRIGGER_REST_API, 'REST API'),
+        (TRIGGER_MQTT, 'MQTT'),
+        (TRIGGER_TIMER, 'Timer'),
+        (TRIGGER_EVENT, 'Application Event'),
+    ]
+
+    name = models.CharField(max_length=120)
+    code = models.CharField(max_length=40, unique=True)
+    hierarchy = models.ForeignKey(
+        'ProcessHierarchy',
+        on_delete=models.SET_NULL,
+        related_name='business_processes',
+        null=True,
+        blank=True,
+    )
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.CASCADE,
+        related_name='business_processes',
+        null=True,
+        blank=True,
+        help_text='Optional terminal-specific process specialization.',
+    )
+    description = models.TextField(blank=True, default='')
+    owner_role = models.CharField(max_length=80, blank=True, default='')
+    trigger_type = models.CharField(
+        max_length=12,
+        choices=TRIGGER_CHOICES,
+        default=TRIGGER_MANUAL,
+    )
+    input_schema = models.JSONField(default=dict, blank=True)
+    output_schema = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['hierarchy__process_area', 'hierarchy__display_order', 'name']
+
+    def __str__(self):
+        return self.name
+
+
+###################################
+class ProcessVersion(models.Model):
+    DRAFT = 'draft'
+    PUBLISHED = 'published'
+    RETIRED = 'retired'
+
+    STATUS_CHOICES = [
+        (DRAFT, 'Draft'),
+        (PUBLISHED, 'Published'),
+        (RETIRED, 'Retired'),
+    ]
+
+    business_process = models.ForeignKey(
+        'BusinessProcess',
+        on_delete=models.CASCADE,
+        related_name='versions',
+    )
+    version_number = models.PositiveIntegerField()
+    version_label = models.CharField(max_length=50, blank=True, default='')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=DRAFT)
+    is_current = models.BooleanField(default=False)
+    nodered_flow = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Node-RED flow JSON, typically a list of tab/node/config objects.',
+    )
+    input_signals = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Signals this process listens to, such as REST endpoints, MQTT topics, or application events.',
+    )
+    output_signals = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Signals this process emits, such as MQTT topics, REST calls, or SOP updates.',
+    )
+    sop_markdown = models.TextField(blank=True, default='')
+    mqtt_announcement_topic = models.CharField(
+        max_length=200,
+        blank=True,
+        default='',
+        help_text='Future MQTT topic for broadcasting process-version changes.',
+    )
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        related_name='process_versions',
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    published_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['business_process__name', '-version_number']
+        unique_together = ('business_process', 'version_number')
+
+    def clean(self):
+        if self.nodered_flow is not None and not isinstance(self.nodered_flow, (list, dict)):
+            raise ValidationError('Node-RED flow must be a JSON array or object.')
+        for field_name in ['input_signals', 'output_signals']:
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, list):
+                raise ValidationError({field_name: 'Signal definitions must be a JSON array.'})
+
+    def save(self, *args, **kwargs):
+        if self.is_current:
+            ProcessVersion.objects.filter(
+                business_process=self.business_process,
+                is_current=True,
+            ).exclude(pk=self.pk).update(is_current=False)
+        if self.status == self.PUBLISHED and self.published_at is None:
+            from django.utils import timezone
+            self.published_at = timezone.now()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        label = self.version_label or f"v{self.version_number}"
+        return f"{self.business_process.code} {label}"
+
+
+###################################
+class BusinessProcessExecution(models.Model):
+    QUEUED = 'queued'
+    RUNNING = 'running'
+    COMPLETED = 'completed'
+    FAILED = 'failed'
+    CANCELLED = 'cancelled'
+
+    STATUS_CHOICES = [
+        (QUEUED, 'Queued'),
+        (RUNNING, 'Running'),
+        (COMPLETED, 'Completed'),
+        (FAILED, 'Failed'),
+        (CANCELLED, 'Cancelled'),
+    ]
+
+    business_process = models.ForeignKey(
+        'BusinessProcess',
+        on_delete=models.CASCADE,
+        related_name='executions',
+    )
+    process_version = models.ForeignKey(
+        'ProcessVersion',
+        on_delete=models.PROTECT,
+        related_name='executions',
+    )
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.SET_NULL,
+        related_name='business_process_executions',
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=QUEUED)
+    trigger_source = models.CharField(max_length=120, blank=True, default='')
+    trigger_payload = models.JSONField(default=dict, blank=True)
+    result_payload = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True, default='')
+    requested_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        related_name='business_process_executions',
+        null=True,
+        blank=True,
+    )
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-started_at']
+
+    def clean(self):
+        if self.process_version_id and self.business_process_id:
+            if self.process_version.business_process_id != self.business_process_id:
+                raise ValidationError('Process version must belong to the selected business process.')
+
+    def mark_completed(self, result_payload=None):
+        from django.utils import timezone
+        self.status = self.COMPLETED
+        self.result_payload = result_payload or {}
+        self.completed_at = timezone.now()
+        self.save(update_fields=['status', 'result_payload', 'completed_at'])
+
+    def __str__(self):
+        return f"{self.business_process.code} execution #{self.pk}"

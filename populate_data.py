@@ -14,12 +14,25 @@ from minitos_core.models import (
     Location, CarrierService, ServiceCargoRoute, ISOType, POD, ContainerOwner,
     Block, PointOfWork, POWConnection, EquipmentType, Che
 )
+from minitos_core.services import local_to_geographic
 
 # Create or get location (Terminal)
 location, created = Location.objects.get_or_create(
     name='Test Terminal',
-    defaults={'location_type': 'TL'}
+    defaults={
+        'location_type': 'TL', 'latitude': 17.954711, 'longitude': -102.162543,
+        'map_origin_latitude': 17.954711, 'map_origin_longitude': -102.162543,
+    }
 )
+if location.map_origin_latitude is None or location.map_origin_longitude is None:
+    location.map_origin_latitude = location.latitude
+    location.map_origin_longitude = location.longitude
+    location.save(update_fields=['map_origin_latitude', 'map_origin_longitude'])
+
+
+def geo_fields(x_m, y_m):
+    latitude, longitude = local_to_geographic(location, x_m, y_m)
+    return {'latitude': latitude, 'longitude': longitude}
 print(f"\n{'='*60}")
 print(f"Location: {location.name} (Created: {created})")
 print(f"{'='*60}")
@@ -29,7 +42,7 @@ print(f"\n{'='*60}")
 print(f"Creating Yard Blocks and Transfer Zones")
 print(f"{'='*60}")
 
-# Define block layout: (name, x_position, y_position)
+# Define block layout in temporary terminal-local meters.
 block_layout = [
     ('A01', 100.0, 100.0),
     ('B01', 400.0, 100.0),
@@ -52,8 +65,7 @@ for block_name, x_pos, y_pos in block_layout:
             'max_bays': 25,
             'max_rows': 8,
             'max_tier': 5,
-            'x_position': x_pos,
-            'y_position': y_pos,
+            **geo_fields(x_pos, y_pos),
             'is_heapzone': False
         }
     )
@@ -71,8 +83,7 @@ for block_name, x_pos, y_pos in block_layout:
             'max_bays': 25,  # Same number of bays as the block
             'max_rows': 1,   # Only 1 row
             'max_tier': 1,   # Only 1 tier
-            'x_position': tz_x_pos,
-            'y_position': y_pos,
+            **geo_fields(tz_x_pos, y_pos),
             'is_heapzone': False
         }
     )
@@ -95,14 +106,14 @@ for block_name, _, _ in block_layout:
         defaults={
             'name': pow_name,
             'pow_type': PointOfWork.TERMINAL_AREA,
-            'x_position': blocks[block_name].x_position,
-            'y_position': blocks[block_name].y_position,
+            'latitude': blocks[block_name].latitude,
+            'longitude': blocks[block_name].longitude,
             'max_throughput': 500,
             'is_active': True
         }
     )
     pows[pow_name] = pow
-    print(f"POW {pow_name}: Terminal Area (Pos: {pow.x_position}, {pow.y_position})")
+    print(f"POW {pow_name}: Terminal Area (GPS: {pow.latitude}, {pow.longitude})")
 
 # Create STS POWs
 sts_pow_names = ['POW-STS01', 'POW-STS02']
@@ -113,8 +124,7 @@ for i, sts_pow_name in enumerate(sts_pow_names, 1):
         defaults={
             'name': sts_pow_name,
             'pow_type': PointOfWork.ENTRY_DEPARTURE_POINT,
-            'x_position': 250.0 + (i * 100),
-            'y_position': 50.0,
+            **geo_fields(250.0 + (i * 100), 50.0),
             'max_throughput': 300,
             'is_active': True
         }
@@ -129,8 +139,7 @@ gate_pow_in, created = PointOfWork.objects.get_or_create(
     defaults={
         'name': 'POW-Gate-In',
         'pow_type': PointOfWork.ENTRY_POINT,
-        'x_position': 0.0,
-        'y_position': 150.0,
+        **geo_fields(0.0, 150.0),
         'max_throughput': 200,
         'is_active': True
     }
@@ -144,8 +153,7 @@ gate_pow_out, created = PointOfWork.objects.get_or_create(
     defaults={
         'name': 'POW-Gate-Out',
         'pow_type': PointOfWork.DEPARTURE_POINT,
-        'x_position': 600.0,
-        'y_position': 150.0,
+        **geo_fields(600.0, 150.0),
         'max_throughput': 200,
         'is_active': True
     }
@@ -233,8 +241,7 @@ equipment_types = {}
 sts_type, created = EquipmentType.objects.get_or_create(
     name='Ship-to-Shore',
     defaults={
-        'equipment_type': 'STS',
-        'running_hours': 0
+        'equipment_type': 'STS'
     }
 )
 equipment_types['STS'] = sts_type
@@ -243,8 +250,7 @@ print(f"Equipment Type: STS (Ship-to-Shore Crane)")
 rtg_type, created = EquipmentType.objects.get_or_create(
     name='Rubber Tyred Gantry',
     defaults={
-        'equipment_type': 'RTG',
-        'running_hours': 0
+        'equipment_type': 'RTG'
     }
 )
 equipment_types['RTG'] = rtg_type
@@ -253,8 +259,7 @@ print(f"Equipment Type: RTG (Rubber Tyred Gantry)")
 tt_type, created = EquipmentType.objects.get_or_create(
     name='Terminal Truck',
     defaults={
-        'equipment_type': 'TT',
-        'running_hours': 0
+        'equipment_type': 'TT'
     }
 )
 equipment_types['TT'] = tt_type
@@ -273,11 +278,11 @@ for i in range(1, 3):  # 2 STS
         name=sts_name,
         defaults={
             'equipment_type': equipment_types['STS'],
-            'status': 'IL',  # Idle
+            'powered_on': True,
+            'working': False,
             'is_available': True,
             'location': location,
-            'x_position': 250.0 + (i * 100),
-            'y_position': 50.0,
+            **geo_fields(250.0 + (i * 100), 50.0),
             'fuel_level': 100,
             'current_block': None
         }
@@ -296,11 +301,12 @@ for block_idx, (block_name, _, _) in enumerate(block_layout, 1):
         name=rtg_name,
         defaults={
             'equipment_type': equipment_types['RTG'],
-            'status': 'IL',  # Idle
+            'powered_on': True,
+            'working': False,
             'is_available': True,
             'location': location,
-            'x_position': blocks[block_name].x_position,
-            'y_position': blocks[block_name].y_position,
+            'latitude': blocks[block_name].latitude,
+            'longitude': blocks[block_name].longitude,
             'fuel_level': 100,
             'current_block': blocks[block_name]
         }
@@ -319,11 +325,11 @@ for i in range(1, 6):  # 5 TT
         name=tt_name,
         defaults={
             'equipment_type': equipment_types['TT'],
-            'status': 'IL',  # Idle
+            'powered_on': True,
+            'working': False,
             'is_available': True,
             'location': location,
-            'x_position': 200.0 + (i * 50),
-            'y_position': 400.0,
+            **geo_fields(200.0 + (i * 50), 400.0),
             'fuel_level': 100,
             'current_block': None
         }
