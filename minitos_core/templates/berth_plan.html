@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ location.name }} - Berth Plan</title>
+    <style>
+        * { box-sizing: border-box; }
+        :root { --ink: #17333a; --muted: #64748b; --line: #d8e0e3; --accent: #e85d2a; --teal: #0f766e; --paper: #f7f9f9; }
+        body { margin: 0; height: 100vh; overflow: hidden; color: var(--ink); background: var(--paper); font-family: Inter, "Segoe UI", sans-serif; }
+        button, input, select { font: inherit; }
+        .topbar { height: 58px; display: flex; align-items: center; gap: 14px; padding: 0 18px; background: #fff; border-bottom: 1px solid var(--line); }
+        .topbar h1 { margin: 0 auto 0 0; font-size: 18px; font-weight: 700; letter-spacing: 0; }
+        .button, button { min-height: 34px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: #fff; cursor: pointer; text-decoration: none; }
+        button:hover, .button:hover { border-color: var(--accent); color: var(--accent); }
+        .primary { color: #fff; border-color: var(--accent); background: var(--accent); }
+        .primary:hover { color: #fff; background: #c84b1e; }
+        .workspace { height: calc(100vh - 58px); display: grid; grid-template-columns: 390px minmax(620px, 1fr); }
+        .sidebar { overflow-y: auto; padding: 16px; background: #fff; border-right: 1px solid var(--line); }
+        .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+        .section-head h2 { margin: 0; font-size: 14px; text-transform: uppercase; color: var(--muted); }
+        .service-list { display: grid; gap: 4px; margin-bottom: 18px; }
+        .service-item { width: 100%; text-align: left; border-left: 3px solid transparent; }
+        .service-item.active { border-left-color: var(--accent); color: var(--accent); background: #fff6f1; }
+        .form-section { padding: 14px 0 4px; border-top: 1px solid var(--line); }
+        .form-section h3 { margin: 0 0 10px; font-size: 13px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .field { min-width: 0; margin-bottom: 10px; }
+        .field.full { grid-column: 1 / -1; }
+        label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+        input, select { width: 100%; min-width: 0; height: 34px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background: #fff; }
+        input[type="checkbox"] { width: auto; height: auto; }
+        input[readonly], select:disabled { color: #526469; background: #edf2f2; }
+        .actions { display: flex; gap: 8px; position: sticky; bottom: -16px; padding: 12px 0 16px; background: #fff; }
+        .planner { min-width: 0; overflow: auto; }
+        .controls { position: sticky; top: 0; z-index: 8; display: flex; align-items: end; gap: 10px; padding: 10px 14px; background: #fff; border-bottom: 1px solid var(--line); }
+        .controls .field { width: 150px; margin: 0; }
+        .status { margin-left: auto; color: var(--muted); font-size: 12px; }
+        .plan { min-width: 760px; padding-bottom: 30px; }
+        .empty { padding: 60px 20px; color: var(--muted); text-align: center; }
+        .berth-row { display: grid; grid-template-columns: 120px minmax(640px, 1fr); border-bottom: 1px solid var(--line); }
+        .berth-label { position: sticky; left: 0; z-index: 5; padding: 14px 12px; background: #eef3f3; border-right: 1px solid var(--line); }
+        .berth-label strong { display: block; font-size: 13px; }
+        .berth-label span { color: var(--muted); font-size: 11px; }
+        .berth-track { position: relative; height: 100%; background-color: #fff; background-image: linear-gradient(to bottom, transparent 29px, #e9eeee 30px); background-size: 100% 30px; }
+        .scale-row { position: sticky; top: 55px; z-index: 6; display: grid; grid-template-columns: 112px minmax(640px, 1fr); height: 42px; background: #eef3f3; border-bottom: 1px solid var(--line); }
+        .axis-heading { padding: 6px 7px; color: var(--muted); border-right: 1px solid var(--line); font-size: 9px; font-weight: 700; }
+        .scale { position: relative; }
+        .track-row { display: grid; grid-template-columns: 112px minmax(640px, 1fr); }
+        .time-axis { position: relative; background: #f5f8f8; border-right: 1px solid var(--line); }
+        .bollard { position: absolute; bottom: 0; transform: translateX(-50%); height: 100%; border-left: 1px solid #9fb0b5; }
+        .bollard span { position: absolute; top: 5px; left: 4px; white-space: nowrap; font-size: 10px; color: var(--muted); }
+        .time-label { position: absolute; right: 7px; color: #65777c; font-size: 10px; line-height: 1.2; text-align: right; pointer-events: none; transform: translateY(-1px); }
+        .time-label.day { left: 7px; right: 7px; color: var(--ink); font-weight: 750; text-align: left; }
+        .visit { position: absolute; z-index: 3; min-width: 8px; overflow: hidden; padding: 4px 6px; border: 1px solid #115e59; border-radius: 3px; color: #fff; background: rgba(15,118,110,.88); font-size: 11px; }
+        .visit.preview { border-style: dashed; color: #9a3412; border-color: #ea580c; background: rgba(255,237,213,.90); }
+        .visit strong, .visit span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .legend { display: flex; gap: 14px; color: var(--muted); font-size: 11px; }
+        .timezone { padding-bottom: 8px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+        .route-list { display: grid; gap: 4px; margin-bottom: 10px; }
+        .route-item { width: 100%; padding: 7px 9px; text-align: left; font-size: 11px; }
+        .route-item.active { color: var(--accent); border-color: var(--accent); background: #fff6f1; }
+        .checkbox-field { display: flex; align-items: center; gap: 7px; min-height: 34px; }
+        .checkbox-field label { margin: 0; }
+        .route-actions { display: flex; gap: 7px; margin-bottom: 12px; }
+        .resource-row { margin-bottom: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 5px; background: #f8fafa; }
+        .resource-row .grid { grid-template-columns: 1fr 1fr; }
+        .resource-row button { width: 100%; }
+        .swatch { display: inline-block; width: 14px; height: 9px; margin-right: 4px; vertical-align: middle; background: var(--teal); }
+        .swatch.preview { border: 1px dashed #ea580c; background: #ffedd5; }
+        @media (max-width: 900px) { body { overflow: auto; } .workspace { height: auto; grid-template-columns: 1fr; } .sidebar { max-height: none; border-right: 0; } .planner { min-height: 700px; } }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <h1>{{ location.name }} Berth Plan</h1>
+        {% if can_edit_terminal %}<a class="button" href="{% url 'terminal_editor' location.id %}">Edit Layout</a>{% endif %}
+        <a class="button" href="{% url 'terminal_browser' %}">Terminals</a>
+    </header>
+    <main class="workspace">
+        <aside class="sidebar">
+            <div class="section-head"><h2>Vessel Services</h2><button id="newService" type="button">New</button></div>
+            <div class="service-list" id="serviceList"></div>
+            <form id="serviceForm">
+                <div class="form-section"><h3>Service</h3><div class="grid">
+                    <div class="field full"><label for="name">Name</label><input id="name" required maxlength="30"></div>
+                    <div class="field"><label for="carrier_service_type">Type</label><select id="carrier_service_type"><option>Vessel</option><option>Barge</option><option>Truck</option><option>Train</option></select></div>
+                    <div class="field"><label for="periodicity">Periodicity</label><select id="periodicity"><option>Daily</option><option selected>Weekly</option><option>Bi-weekly</option><option>Monthly</option></select></div>
+                    <div class="field"><label for="moves_in">Discharge moves</label><input id="moves_in" type="number" min="0" value="0" readonly></div>
+                    <div class="field"><label for="moves_out">Load moves</label><input id="moves_out" type="number" min="0" value="0" readonly></div>
+                </div></div>
+                <div class="form-section"><h3>Berthing Position</h3><div class="grid">
+                    <div class="field full"><label for="default_berth">Berth</label><select id="default_berth"></select></div>
+                    <div class="field"><label for="default_start_bollard">Initial bollard</label><select id="default_start_bollard"></select></div>
+                    <div class="field"><label for="vessel_length_m">Vessel length (m)</label><input id="vessel_length_m" type="number" min="1" step="0.1"></div>
+                    <div class="field full"><label for="default_end_bollard">Calculated final bollard</label><select id="default_end_bollard" disabled></select></div>
+                </div></div>
+                <div class="form-section"><h3>Operational Productivity</h3><div class="grid">
+                    <div class="field full"><label for="primary_equipment_type">Primary handling equipment</label><select id="primary_equipment_type"></select></div>
+                    <div class="field"><label for="crane_split">Equipment split</label><input id="crane_split" type="number" min="0.01" step="0.01" value="1"></div>
+                    <div class="field"><label for="expected_productivity_per_crane">Moves/hour per unit</label><input id="expected_productivity_per_crane" type="number" min="0.01" step="0.01" value="25"></div>
+                    <div class="field"><label for="expectedProductivity">Calculated moves/hour</label><input id="expectedProductivity" readonly></div>
+                    <div class="field"><label for="horizontal_transport_per_crane">Horizontal transport/unit</label><input id="horizontal_transport_per_crane" type="number" min="0" step="0.01" value="0"></div>
+                    <div class="field full"><label for="calculatedDuration">Calculated duration</label><input id="calculatedDuration" readonly></div>
+                </div>
+                <div class="section-head"><h3>Supporting Equipment</h3><button id="addResource" type="button">Add</button></div>
+                <div id="resourceRows"></div></div>
+                <div class="form-section"><h3>Recurrence</h3><div class="grid">
+                    <div class="field"><label for="start_date">Starts</label><input id="start_date" type="date" required></div>
+                    <div class="field"><label for="end_type">Ends</label><select id="end_type"><option value="no end date">No end date</option><option value="on this day">On this day</option><option value="after">After occurrences</option></select></div>
+                    <div class="field"><label for="end_date">End date</label><input id="end_date" type="date"></div>
+                    <div class="field"><label for="end_after_occurrences">Occurrences</label><input id="end_after_occurrences" type="number" min="1" max="100"></div>
+                    <div class="field"><label for="repeat">Repeat</label><select id="repeat"><option>Daily</option><option selected>Weekly</option><option>Monthly</option><option>Yearly</option></select></div>
+                    <div class="field"><label for="repeat_daily">Every N days</label><input id="repeat_daily" type="number" min="1" max="100"></div>
+                    <div class="field"><label for="repeat_weekly">Every N weeks</label><input id="repeat_weekly" type="number" min="1" max="100" value="1"></div>
+                    <div class="field"><label for="on_weekdays">Weekdays</label><input id="on_weekdays" placeholder="Monday, Thursday"></div>
+                    <div class="field"><label for="repeat_monthly">Every N months</label><input id="repeat_monthly" type="number" min="1" max="100"></div>
+                    <div class="field"><label for="repeat_yearly">Month number</label><input id="repeat_yearly" type="number" min="1" max="12"></div>
+                    <div class="field"><label for="on_monthly_pattern">Monthly pattern</label><select id="on_monthly_pattern"><option value=""></option><option>Day</option><option>Sunday</option><option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option></select></div>
+                    <div class="field"><label for="on_monthly_day">Day of month</label><input id="on_monthly_day" type="number" min="1" max="31"></div>
+                    <div class="field"><label for="on_monthly_week">Week</label><select id="on_monthly_week"><option value=""></option><option>First</option><option>Second</option><option>Third</option><option>Fourth</option><option>Last</option></select></div>
+                </div></div>
+                <div class="form-section"><h3>Window</h3><div class="grid">
+                    <div class="field"><label for="window_start_weekday">Start weekday</label><select id="window_start_weekday"></select></div>
+                    <div class="field"><label for="window_start_time">Start time</label><input id="window_start_time" type="time"></div>
+                    <div class="field"><label for="window_end_weekday">End weekday</label><select id="window_end_weekday"></select></div>
+                    <div class="field"><label for="window_end_time">End time</label><input id="window_end_time" type="time"></div>
+                    <div class="field"><label for="window_start_monthday">Start month day</label><input id="window_start_monthday" type="number" min="1" max="31"></div>
+                    <div class="field"><label for="window_end_monthday">End month day</label><input id="window_end_monthday" type="number" min="1" max="31"></div>
+                </div></div>
+                <div class="actions"><button class="primary" type="submit">Save Service</button><button id="generateVisits" type="button">Generate Visits</button></div>
+            </form>
+            <section class="form-section" id="cargoRoutesSection" hidden>
+                <div class="section-head"><h3>Cargo Routes</h3><button id="newCargoRoute" type="button">New</button></div>
+                <div class="route-list" id="cargoRouteList"></div>
+                <div class="grid">
+                    <div class="field"><label for="routeDirection">Move direction</label><select id="routeDirection"><option value="discharge">Discharge from service</option><option value="load">Load onto service</option></select></div>
+                    <div class="field"><label for="routeCounterpart">Connecting service</label><select id="routeCounterpart"></select></div>
+                    <div class="field"><label for="routePod">Port of discharge</label><select id="routePod"></select></div>
+                    <div class="field"><label for="routeIsoType">ISO type</label><select id="routeIsoType"></select></div>
+                    <div class="field"><label for="routeContainerType">Cargo state</label><select id="routeContainerType"><option value="FCL">Full</option><option value="MTY">Empty</option></select></div>
+                    <div class="field"><label for="routeContainerCount">Containers</label><input id="routeContainerCount" type="number" min="0" value="0"></div>
+                    <div class="field"><label for="routeDwell">Expected dwell (days)</label><input id="routeDwell" type="number" min="0" step="0.1" value="0"></div>
+                    <div class="field"><label for="routeHazards">Hazard codes</label><input id="routeHazards"></div>
+                    <div class="field full checkbox-field"><input id="routeReefer" type="checkbox"><label for="routeReefer">Reefer cargo</label></div>
+                </div>
+                <div class="route-actions"><button class="primary" id="saveCargoRoute" type="button">Save Route</button><button id="deleteCargoRoute" type="button">Delete</button></div>
+            </section>
+        </aside>
+        <section class="planner">
+            <div class="controls">
+                <div class="field"><label for="horizonStart">Plan starts</label><input id="horizonStart" type="date"></div>
+                <div class="field"><label for="horizonDays">Days shown</label><select id="horizonDays"><option>7</option><option>14</option><option>21</option><option>28</option></select></div>
+                <button id="refreshPlan" type="button">Refresh</button>
+                <div class="legend"><span><i class="swatch preview"></i>Service schedule</span><span><i class="swatch"></i>Generated visit</span></div>
+                <span class="timezone">{{ location.timezone }}</span>
+                <span class="status" id="status"></span>
+            </div>
+            <div class="plan" id="plan"></div>
+        </section>
+    </main>
+    {{ berths_data|json_script:"berths-data" }}
+    {{ services_data|json_script:"services-data" }}
+    {{ visits_data|json_script:"visits-data" }}
+    {{ cargo_routes_data|json_script:"cargo-routes-data" }}
+    {{ pods_data|json_script:"pods-data" }}
+    {{ iso_types_data|json_script:"iso-types-data" }}
+    {{ equipment_types_data|json_script:"equipment-types-data" }}
+    <script>
+        const locationId = {{ location.id }};
+        const terminalTimezone = '{{ location.timezone|escapejs }}';
+        let berths = JSON.parse(document.getElementById('berths-data').textContent);
+        let services = JSON.parse(document.getElementById('services-data').textContent);
+        let visits = JSON.parse(document.getElementById('visits-data').textContent);
+        let cargoRoutes = JSON.parse(document.getElementById('cargo-routes-data').textContent);
+        const pods = JSON.parse(document.getElementById('pods-data').textContent);
+        const isoTypes = JSON.parse(document.getElementById('iso-types-data').textContent);
+        const equipmentTypes = JSON.parse(document.getElementById('equipment-types-data').textContent);
+        let selectedServiceId = null;
+        let selectedCargoRouteId = null;
+        const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const fields = ['name','carrier_service_type','periodicity','moves_in','moves_out','default_berth','default_start_bollard','default_end_bollard','vessel_length_m','primary_equipment_type','crane_split','expected_productivity_per_crane','horizontal_transport_per_crane','start_date','end_type','end_date','end_after_occurrences','repeat','repeat_daily','repeat_weekly','on_weekdays','repeat_monthly','repeat_yearly','on_monthly_pattern','on_monthly_day','on_monthly_week','window_start_weekday','window_start_time','window_end_weekday','window_end_time','window_start_monthday','window_end_monthday'];
+        const numericFields = new Set(['moves_in','moves_out','default_berth','default_start_bollard','default_end_bollard','vessel_length_m','primary_equipment_type','crane_split','expected_productivity_per_crane','horizontal_transport_per_crane','end_after_occurrences','repeat_daily','repeat_weekly','repeat_monthly','repeat_yearly','on_monthly_day','window_start_monthday','window_end_monthday']);
+
+        function csrfToken() { return document.cookie.split('; ').find(row => row.startsWith('csrftoken='))?.split('=')[1] || ''; }
+        function apiHeaders() { return { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() }; }
+        function isoDate(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
+        function addDays(date, days) { const result = new Date(date); result.setDate(result.getDate() + days); return result; }
+        function parseLocalDate(value) { const [year, month, day] = value.split('-').map(Number); return new Date(year, month - 1, day); }
+        function nullable(value) { return value === '' ? null : value; }
+        function setStatus(message) { document.getElementById('status').textContent = message; }
+
+        function terminalWallDate(instant) {
+            const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+                timeZone: terminalTimezone, year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+            }).formatToParts(instant).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+            return new Date(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+        }
+
+        function initialize() {
+            const today = terminalWallDate(new Date());
+            document.getElementById('horizonStart').value = isoDate(today);
+            ['window_start_weekday','window_end_weekday'].forEach(id => {
+                document.getElementById(id).innerHTML = '<option value=""></option>' + weekdays.slice(1).concat(weekdays[0]).map(day => `<option>${day}</option>`).join('');
+            });
+            document.getElementById('default_berth').innerHTML = '<option value="">Unassigned</option>' + berths.map(berth => `<option value="${berth.id}">${berth.name}</option>`).join('');
+            document.getElementById('default_berth').addEventListener('change', () => { syncBollardOptions(); syncDerivedEndBollard(); renderPlan(); });
+            document.getElementById('default_start_bollard').addEventListener('change', () => { syncDerivedEndBollard(); renderPlan(); });
+            document.getElementById('vessel_length_m').addEventListener('input', () => { syncDerivedEndBollard(); renderPlan(); });
+            document.getElementById('carrier_service_type').addEventListener('change', syncServiceTypeFields);
+            fields.forEach(id => document.getElementById(id).addEventListener('input', () => { syncProductivity(); renderPlan(); }));
+            document.getElementById('addResource').addEventListener('click', () => addResourceRow());
+            document.getElementById('horizonStart').addEventListener('change', renderPlan);
+            document.getElementById('horizonDays').addEventListener('change', renderPlan);
+            document.getElementById('refreshPlan').addEventListener('click', refreshData);
+            document.getElementById('newService').addEventListener('click', clearService);
+            document.getElementById('generateVisits').addEventListener('click', generateVisits);
+            document.getElementById('serviceForm').addEventListener('submit', saveService);
+            document.getElementById('newCargoRoute').addEventListener('click', clearCargoRouteForm);
+            document.getElementById('saveCargoRoute').addEventListener('click', saveCargoRoute);
+            document.getElementById('deleteCargoRoute').addEventListener('click', deleteCargoRoute);
+            document.getElementById('routePod').innerHTML = '<option value="">Unassigned</option>' + pods.map(pod => `<option value="${pod.id}">${pod.uncode} · ${pod.name}</option>`).join('');
+            document.getElementById('routeIsoType').innerHTML = '<option value="">Select ISO type</option>' + isoTypes.map(iso => `<option value="${iso.id}">${iso.iso_type}</option>`).join('');
+            clearService();
+            renderServiceList();
+            renderPlan();
+        }
+
+        function syncBollardOptions(startValue = '', endValue = '') {
+            const berth = berths.find(item => item.id === Number(document.getElementById('default_berth').value));
+            const options = '<option value="">Unassigned</option>' + (berth?.bollards || []).map(item => `<option value="${item.id}">${item.name || item.number} (${Number(item.distance_along_berth_m).toFixed(1)} m)</option>`).join('');
+            document.getElementById('default_start_bollard').innerHTML = options;
+            document.getElementById('default_end_bollard').innerHTML = options;
+            document.getElementById('default_start_bollard').value = startValue || '';
+            document.getElementById('default_end_bollard').value = endValue || '';
+        }
+
+        function syncDerivedEndBollard() {
+            const berth = berths.find(item => item.id === Number(document.getElementById('default_berth').value));
+            const start = berth?.bollards.find(item => item.id === Number(document.getElementById('default_start_bollard').value));
+            const length = Number(document.getElementById('vessel_length_m').value);
+            if (!berth || !start || !length) {
+                document.getElementById('default_end_bollard').value = '';
+                return null;
+            }
+            const end = berth.bollards
+                .filter(item => item.number >= start.number)
+                .find(item => Math.abs(Number(item.distance_along_berth_m) - Number(start.distance_along_berth_m)) >= length);
+            document.getElementById('default_end_bollard').value = end?.id || '';
+            return end || null;
+        }
+
+        function syncServiceTypeFields() {
+            const isWaterService = ['Vessel', 'Barge'].includes(document.getElementById('carrier_service_type').value);
+            document.getElementById('vessel_length_m').disabled = !isWaterService;
+            if (!isWaterService) document.getElementById('vessel_length_m').value = '';
+            syncEquipmentOptions();
+            syncDerivedEndBollard();
+            syncProductivity();
+        }
+
+        function equipmentSupportsService(equipment, includeYard = false) {
+            if (equipment.is_horizontal_transport) return false;
+            const serviceType = document.getElementById('carrier_service_type').value;
+            if (includeYard && equipment.is_yard_equipment) return true;
+            if (['Vessel', 'Barge'].includes(serviceType)) return equipment.is_quay_equipment;
+            if (serviceType === 'Train') return equipment.is_rail_equipment;
+            if (serviceType === 'Truck') return equipment.is_gate_equipment;
+            return false;
+        }
+
+        function equipmentOptions(includeYard, selectedValue = '') {
+            return '<option value="">Select equipment</option>' + equipmentTypes
+                .filter(equipment => equipmentSupportsService(equipment, includeYard))
+                .map(equipment => `<option value="${equipment.id}" ${Number(selectedValue) === equipment.id ? 'selected' : ''}>${equipment.name} (${equipment.equipment_type}) · ${equipment.available_count}/${equipment.fleet_count} available</option>`)
+                .join('');
+        }
+
+        function syncEquipmentOptions() {
+            const primary = document.getElementById('primary_equipment_type');
+            const selected = primary.value;
+            primary.innerHTML = equipmentOptions(false, selected);
+            document.querySelectorAll('.resource-equipment').forEach(select => {
+                const value = select.value;
+                select.innerHTML = equipmentOptions(true, value);
+            });
+        }
+
+        function addResourceRow(requirement = {}) {
+            const row = document.createElement('div');
+            row.className = 'resource-row';
+            row.innerHTML = `<div class="grid">
+                <div class="field full"><label>Equipment type</label><select class="resource-equipment">${equipmentOptions(true, requirement.equipment_type)}</select></div>
+                <div class="field"><label>Equipment split</label><input class="resource-split" type="number" min="0.01" step="0.01" value="${requirement.equipment_split ?? 1}"></div>
+                <div class="field"><label>Moves/hour per unit</label><input class="resource-productivity" type="number" min="0.01" step="0.01" value="${requirement.expected_productivity_per_hour ?? 25}"></div>
+                <div class="field"><label>Horizontal transport/unit</label><input class="resource-horizontal" type="number" min="0" step="0.01" value="${requirement.horizontal_transport_per_unit ?? 0}"></div>
+                <div class="field"><label>&nbsp;</label><button class="remove-resource" type="button">Remove</button></div>
+            </div>`;
+            row.querySelector('.remove-resource').addEventListener('click', () => row.remove());
+            document.getElementById('resourceRows').appendChild(row);
+        }
+
+        function renderResourceRows(requirements = []) {
+            document.getElementById('resourceRows').innerHTML = '';
+            requirements.forEach(requirement => addResourceRow(requirement));
+        }
+
+        function resourcePayload() {
+            return Array.from(document.querySelectorAll('.resource-row')).map(row => ({
+                equipment_type: Number(row.querySelector('.resource-equipment').value),
+                equipment_split: Number(row.querySelector('.resource-split').value),
+                expected_productivity_per_hour: Number(row.querySelector('.resource-productivity').value),
+                horizontal_transport_per_unit: Number(row.querySelector('.resource-horizontal').value) || 0
+            })).filter(requirement => requirement.equipment_type);
+        }
+
+        function calculatedDurationMinutes(service = null) {
+            const moves = service ? Number(service.moves_in || 0) + Number(service.moves_out || 0) : Number(document.getElementById('moves_in').value || 0) + Number(document.getElementById('moves_out').value || 0);
+            const split = service ? Number(service.crane_split) : Number(document.getElementById('crane_split').value);
+            const productivity = service ? Number(service.expected_productivity_per_crane) : Number(document.getElementById('expected_productivity_per_crane').value);
+            return moves > 0 && split > 0 && productivity > 0 ? Math.ceil(moves * 60 / split / productivity) : null;
+        }
+
+        function durationDisplay(minutes) {
+            if (minutes === null) return 'Awaiting moves and productivity';
+            return `${Math.floor(minutes / 60)} hours and ${minutes % 60} minutes`;
+        }
+
+        function syncProductivity() {
+            const split = Number(document.getElementById('crane_split').value);
+            const productivity = Number(document.getElementById('expected_productivity_per_crane').value);
+            document.getElementById('expectedProductivity').value = split > 0 && productivity > 0 ? `${(split * productivity).toFixed(2)} moves/hour` : '';
+            document.getElementById('calculatedDuration').value = durationDisplay(calculatedDurationMinutes());
+        }
+
+        function clearService() {
+            selectedServiceId = null;
+            document.getElementById('serviceForm').reset();
+            document.getElementById('carrier_service_type').value = 'Vessel';
+            document.getElementById('periodicity').value = 'Weekly';
+            document.getElementById('repeat').value = 'Weekly';
+            document.getElementById('repeat_weekly').value = 1;
+            document.getElementById('moves_in').value = 0;
+            document.getElementById('moves_out').value = 0;
+            document.getElementById('crane_split').value = 1;
+            document.getElementById('expected_productivity_per_crane').value = 25;
+            document.getElementById('horizontal_transport_per_crane').value = 0;
+            document.getElementById('start_date').value = document.getElementById('horizonStart').value;
+            renderResourceRows();
+            syncBollardOptions(); syncServiceTypeFields();
+            document.getElementById('cargoRoutesSection').hidden = true;
+            cargoRoutes = [];
+            clearCargoRouteForm(); renderServiceList(); renderPlan();
+        }
+
+        async function selectService(id) {
+            const service = services.find(item => item.id === id); if (!service) return;
+            selectedServiceId = id;
+            fields.forEach(field => { document.getElementById(field).value = service[field] ?? ''; });
+            syncBollardOptions(service.default_start_bollard, service.default_end_bollard);
+            renderResourceRows(service.equipment_requirements || []);
+            syncServiceTypeFields();
+            document.getElementById('cargoRoutesSection').hidden = false;
+            await loadCargoRoutes(id);
+            clearCargoRouteForm(); renderServiceList(); renderPlan();
+        }
+
+        function renderServiceList() {
+            document.getElementById('serviceList').innerHTML = services.length ? services.map(service => `<button type="button" class="service-item ${service.id === selectedServiceId ? 'active' : ''}" data-id="${service.id}">${service.name}<br><small>${service.periodicity} · ${service.moves_in + service.moves_out} moves · ${Number(service.expected_productivity_per_hour).toFixed(1)} moves/hour</small></button>`).join('') : '<span class="empty">No services yet</span>';
+            document.querySelectorAll('.service-item').forEach(button => button.addEventListener('click', () => selectService(Number(button.dataset.id))));
+        }
+
+        async function loadCargoRoutes(serviceId) {
+            const response = await fetch(`/minitos_core/locations/${locationId}/carrier-services/${serviceId}/service-cargo-routes/`);
+            if (!response.ok) { cargoRoutes = []; setStatus('Unable to load cargo routes'); return; }
+            const data = await response.json();
+            cargoRoutes = data.results || data;
+            renderCargoRoutes();
+        }
+
+        function renderCargoRoutes() {
+            const list = document.getElementById('cargoRouteList');
+            list.innerHTML = cargoRoutes.length ? cargoRoutes.map(route => {
+                const discharge = route.inbound_carrier_service === selectedServiceId;
+                const counterpart = discharge ? route.outbound_carrier_service_name : route.inbound_carrier_service_name;
+                return `<button type="button" class="route-item ${route.id === selectedCargoRouteId ? 'active' : ''}" data-id="${route.id}">${discharge ? 'Discharge' : 'Load'} · ${route.container_count} ${route.container_type} · ${counterpart}</button>`;
+            }).join('') : '<span class="status">No cargo routes defined</span>';
+            document.querySelectorAll('.route-item').forEach(button => button.addEventListener('click', () => selectCargoRoute(Number(button.dataset.id))));
+        }
+
+        function syncCounterpartOptions(selectedValue = '') {
+            document.getElementById('routeCounterpart').innerHTML = '<option value="">Select service</option>' + services
+                .filter(service => service.id !== selectedServiceId)
+                .map(service => `<option value="${service.id}">${service.name}</option>`).join('');
+            document.getElementById('routeCounterpart').value = selectedValue || '';
+        }
+
+        function clearCargoRouteForm() {
+            selectedCargoRouteId = null;
+            document.getElementById('routeDirection').value = 'discharge';
+            syncCounterpartOptions();
+            document.getElementById('routePod').value = '';
+            document.getElementById('routeIsoType').value = '';
+            document.getElementById('routeContainerType').value = 'FCL';
+            document.getElementById('routeContainerCount').value = 0;
+            document.getElementById('routeDwell').value = 0;
+            document.getElementById('routeHazards').value = '';
+            document.getElementById('routeReefer').checked = false;
+            renderCargoRoutes();
+        }
+
+        function selectCargoRoute(id) {
+            const route = cargoRoutes.find(item => item.id === id); if (!route) return;
+            selectedCargoRouteId = id;
+            const discharge = route.inbound_carrier_service === selectedServiceId;
+            document.getElementById('routeDirection').value = discharge ? 'discharge' : 'load';
+            syncCounterpartOptions(discharge ? route.outbound_carrier_service : route.inbound_carrier_service);
+            document.getElementById('routePod').value = route.pod || '';
+            document.getElementById('routeIsoType').value = route.iso_type;
+            document.getElementById('routeContainerType').value = route.container_type;
+            document.getElementById('routeContainerCount').value = route.container_count;
+            document.getElementById('routeDwell').value = route.expected_dwell_time_days;
+            document.getElementById('routeHazards').value = route.hazard_codes || '';
+            document.getElementById('routeReefer').checked = route.is_reefer;
+            renderCargoRoutes();
+        }
+
+        async function saveCargoRoute() {
+            if (!selectedServiceId) { setStatus('Save the service before adding cargo routes'); return; }
+            const counterpart = Number(document.getElementById('routeCounterpart').value);
+            const isoType = Number(document.getElementById('routeIsoType').value);
+            if (!counterpart || !isoType) { setStatus('Connecting service and ISO type are required'); return; }
+            const discharge = document.getElementById('routeDirection').value === 'discharge';
+            const payload = {
+                inbound_carrier_service: discharge ? selectedServiceId : counterpart,
+                outbound_carrier_service: discharge ? counterpart : selectedServiceId,
+                pod: Number(document.getElementById('routePod').value) || null,
+                iso_type: isoType,
+                container_type: document.getElementById('routeContainerType').value,
+                container_count: Math.max(0, Number(document.getElementById('routeContainerCount').value) || 0),
+                expected_dwell_time_days: Math.max(0, Number(document.getElementById('routeDwell').value) || 0),
+                hazard_codes: document.getElementById('routeHazards').value.trim() || null,
+                is_reefer: document.getElementById('routeReefer').checked
+            };
+            const base = `/minitos_core/locations/${locationId}/carrier-services/${selectedServiceId}/service-cargo-routes/`;
+            const response = await fetch(selectedCargoRouteId ? `${base}${selectedCargoRouteId}/` : base, {
+                method: selectedCargoRouteId ? 'PATCH' : 'POST', headers: apiHeaders(), body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (!response.ok) { setStatus(JSON.stringify(data)); return; }
+            await refreshData(); setStatus('Cargo route saved; service moves recalculated');
+        }
+
+        async function deleteCargoRoute() {
+            if (!selectedServiceId || !selectedCargoRouteId) return;
+            const response = await fetch(`/minitos_core/locations/${locationId}/carrier-services/${selectedServiceId}/service-cargo-routes/${selectedCargoRouteId}/`, {
+                method: 'DELETE', headers: { 'X-CSRFToken': csrfToken() }
+            });
+            if (!response.ok) { setStatus('Unable to delete cargo route'); return; }
+            await refreshData(); setStatus('Cargo route deleted; service moves recalculated');
+        }
+
+        function formPayload() {
+            const payload = { location: locationId };
+            fields.forEach(field => {
+                const value = document.getElementById(field).value;
+                payload[field] = numericFields.has(field) ? (value === '' ? null : Number(value)) : nullable(value);
+            });
+            payload.moves_in = payload.moves_in || 0; payload.moves_out = payload.moves_out || 0;
+            payload.equipment_requirements = resourcePayload();
+            payload.calculated_duration_minutes = calculatedDurationMinutes(payload);
+            return payload;
+        }
+
+        async function saveService(event) {
+            event.preventDefault();
+            const url = selectedServiceId ? `/minitos_core/carrier-services/${selectedServiceId}/` : '/minitos_core/carrier-services/';
+            const response = await fetch(url, { method: selectedServiceId ? 'PATCH' : 'POST', headers: apiHeaders(), body: JSON.stringify(formPayload()) });
+            const data = await response.json();
+            if (!response.ok) { setStatus(JSON.stringify(data)); return; }
+            selectedServiceId = data.id; await refreshData(); setStatus('Service saved');
+        }
+
+        async function generateVisits() {
+            if (!selectedServiceId) { setStatus('Save the service before generating visits'); return; }
+            const start = document.getElementById('horizonStart').value;
+            const end = isoDate(addDays(parseLocalDate(start), Number(document.getElementById('horizonDays').value) - 1));
+            const response = await fetch(`/minitos_core/carrier-services/${selectedServiceId}/generate-visits/`, { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ start_date: start, end_date: end }) });
+            const data = await response.json();
+            if (!response.ok) { setStatus(JSON.stringify(data)); return; }
+            await refreshData(); setStatus(`${data.created_count} visit(s) created`);
+        }
+
+        async function refreshData() {
+            const [serviceResponse, visitResponse, berthResponse] = await Promise.all([
+                fetch(`/minitos_core/carrier-services/?location=${locationId}`),
+                fetch(`/minitos_core/locations/${locationId}/carrier-visits/`),
+                fetch(`/minitos_core/locations/${locationId}/berths/`)
+            ]);
+            const serviceData = await serviceResponse.json(), visitData = await visitResponse.json(), berthData = await berthResponse.json();
+            services = serviceData.results || serviceData; visits = visitData.results || visitData; berths = berthData.results || berthData;
+            renderServiceList(); if (selectedServiceId) await selectService(selectedServiceId); else renderPlan();
+        }
+
+        function draftOrSelectedService() {
+            const payload = formPayload(); payload.id = selectedServiceId; return payload.name && payload.default_berth ? payload : null;
+        }
+
+        function occurrences(service, start, days) {
+            const result = [], serviceStart = parseLocalDate(service.start_date || isoDate(start));
+            for (let offset = 0; offset < days; offset += 1) {
+                const date = addDays(start, offset); if (date < serviceStart) continue;
+                const elapsed = Math.round((date - serviceStart) / 86400000);
+                let include = false;
+                if (service.repeat === 'Daily') include = elapsed % Math.max(service.repeat_daily || 1, 1) === 0;
+                if (service.repeat === 'Weekly') {
+                    const wanted = (service.on_weekdays || service.window_start_weekday || weekdays[serviceStart.getDay()]).split(',').map(value => value.trim());
+                    include = wanted.includes(weekdays[date.getDay()]) && Math.floor(elapsed / 7) % Math.max(service.repeat_weekly || 1, 1) === 0;
+                }
+                if (service.repeat === 'Monthly') include = date.getDate() === Number(service.on_monthly_day || serviceStart.getDate());
+                if (service.repeat === 'Yearly') include = date.getMonth() + 1 === Number(service.repeat_yearly || serviceStart.getMonth() + 1) && date.getDate() === Number(service.on_monthly_day || serviceStart.getDate());
+                if (include) result.push(date);
+            }
+            return result;
+        }
+
+        function windowFor(service, date) {
+            const start = new Date(date), [sh, sm] = (service.window_start_time || '00:00').slice(0,5).split(':').map(Number); start.setHours(sh, sm, 0, 0);
+            const end = new Date(start);
+            const duration = Number(service.calculated_duration_minutes || calculatedDurationMinutes(service));
+            if (duration) end.setMinutes(end.getMinutes() + duration);
+            else {
+                const [eh, em] = (service.window_end_time || service.window_start_time || '01:00').slice(0,5).split(':').map(Number);
+                const startDay = weekdays.indexOf(service.window_start_weekday || weekdays[start.getDay()]);
+                const endDay = weekdays.indexOf(service.window_end_weekday || service.window_start_weekday || weekdays[start.getDay()]);
+                end.setDate(end.getDate() + ((endDay - startDay + 7) % 7)); end.setHours(eh, em, 0, 0); if (end <= start) end.setDate(end.getDate() + 1);
+            }
+            return [start, end];
+        }
+
+        function berthPosition(berth, startId, endId) {
+            const start = berth.bollards.find(item => item.id === Number(startId));
+            const end = berth.bollards.find(item => item.id === Number(endId));
+            if (!start || !end) return null;
+            const startDistance = Number(start.distance_along_berth_m);
+            const endDistance = Number(end.distance_along_berth_m);
+            return [
+                100 * Math.min(startDistance, endDistance) / berth.length_m,
+                100 * Math.abs(endDistance - startDistance) / berth.length_m
+            ];
+        }
+
+        function timeAxisLabels(horizonStart, days) {
+            const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            return Array.from({ length: days * 4 }, (_, index) => {
+                const tick = new Date(horizonStart);
+                tick.setHours(index * 6, 0, 0, 0);
+                const isDayStart = index % 4 === 0;
+                const text = isDayStart
+                    ? `${weekdays[tick.getDay()].slice(0, 3)} ${tick.getDate()} ${monthNames[tick.getMonth()]}<br>00:00`
+                    : `${String(tick.getHours()).padStart(2, '0')}:00`;
+                return `<span class="time-label ${isDayStart ? 'day' : ''}" style="top:${index * 30}px">${text}</span>`;
+            }).join('');
+        }
+
+        function renderPlan() {
+            const plan = document.getElementById('plan');
+            if (!berths.length) { plan.innerHTML = '<div class="empty">Create a berth in the terminal editor to start planning.</div>'; return; }
+            const horizonStart = parseLocalDate(document.getElementById('horizonStart').value), days = Number(document.getElementById('horizonDays').value), horizonEnd = addDays(horizonStart, days);
+            const draft = draftOrSelectedService();
+            plan.innerHTML = berths.map(berth => {
+                const ticks = berth.bollards.map(bollard => `<div class="bollard" style="left:${100 * bollard.distance_along_berth_m / berth.length_m}%"><span>${bollard.name || bollard.number}<br>${Number(bollard.distance_along_berth_m).toFixed(0)}m</span></div>`).join('');
+                const labels = timeAxisLabels(horizonStart, days);
+                const blocks = [];
+                visits.filter(visit => visit.planned_berth === berth.id && visit.eta && visit.etd).forEach(visit => {
+                    const start = terminalWallDate(new Date(visit.eta)), end = terminalWallDate(new Date(visit.etd)); if (end < horizonStart || start >= horizonEnd) return;
+                    const position = berthPosition(berth, visit.berth_start_bollard, visit.berth_end_bollard); if (!position) return;
+                    blocks.push(blockHtml(visit.name, start, end, horizonStart, days, position, false, `${visit.total_moves || 0} moves · ${visit.calculated_duration_display || ''}`));
+                });
+                if (draft && Number(draft.default_berth) === berth.id) {
+                    const position = berthPosition(berth, draft.default_start_bollard, draft.default_end_bollard);
+                    if (position) occurrences(draft, horizonStart, days).forEach(date => { const [start,end] = windowFor(draft,date); blocks.push(blockHtml(draft.name,start,end,horizonStart,days,position,true,`${draft.moves_in + draft.moves_out} moves · ${durationDisplay(calculatedDurationMinutes(draft))}`)); });
+                }
+                return `<div class="berth-row"><div class="berth-label"><strong>${berth.name}</strong><span>${berth.length_m} m · ${berth.bollard_count} bollards</span></div><div><div class="scale-row"><div class="axis-heading">DATE / TIME<br>${terminalTimezone}</div><div class="scale">${ticks}</div></div><div class="track-row" style="height:${days * 120}px"><div class="time-axis">${labels}</div><div class="berth-track">${blocks.join('')}</div></div></div></div>`;
+            }).join('');
+        }
+
+        function blockHtml(name, start, end, horizonStart, days, position, preview, detail) {
+            const minutes = days * 1440, top = 100 * (start - horizonStart) / 60000 / minutes, height = Math.max(.5, 100 * (end - start) / 60000 / minutes);
+            return `<div class="visit ${preview ? 'preview' : ''}" style="left:${position[0]}%;width:${Math.max(position[1],1)}%;top:${top}%;height:${height}%"><strong>${name}</strong><span>${detail}</span></div>`;
+        }
+
+        initialize();
+    </script>
+</body>
+</html>
