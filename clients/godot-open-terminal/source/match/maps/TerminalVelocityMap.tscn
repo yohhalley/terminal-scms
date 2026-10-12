@@ -1,0 +1,89 @@
+[gd_scene load_steps=7 format=3 uid="uid://dxfjlm1jijyt6"]
+
+[ext_resource type="PackedScene" uid="uid://b7c1crf36x1li" path="res://source/match/Map.tscn" id="1_yl5nm"]
+[ext_resource type="Material" uid="uid://co8vfcoqqs5i8" path="res://source/match/resources/materials/terrain.material.tres" id="2_e0xfl"]
+[ext_resource type="PackedScene" uid="uid://bf3jjdafqvh0w" path="res://source/match/units/non-player/ResourceA.tscn" id="3_4f1ac"]
+[ext_resource type="PackedScene" uid="uid://bufgjfa3ne3uk" path="res://source/match/units/non-player/ResourceB.tscn" id="4_vksej"]
+[ext_resource type="PackedScene" uid="uid://btor1402wkw8k" path="res://source/match/decorations/RockLargeA.tscn" id="5_7wt10"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_43n1t"]
+resource_local_to_scene = true
+material = ExtResource("2_e0xfl")
+size = Vector2(100, 100)
+center_offset = Vector3(50, 0, 50)
+
+[node name="Map" instance=ExtResource("1_yl5nm")]
+size = Vector2(100, 100)
+
+[node name="BlackBackgroundFixingAntiAliasingBug" parent="Geometry" index="0"]
+metadata/_edit_lock_ = true
+
+[node name="Terrain" parent="Geometry" index="1"]
+mesh = SubResource("PlaneMesh_43n1t")
+metadata/_edit_lock_ = true
+
+[node name="Marker3D" type="Marker3D" parent="SpawnPoints" index="0"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 10, 0, 7.8801)
+
+[node name="Marker3D2" type="Marker3D" parent="SpawnPoints" index="1"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 35, 0, 10)
+
+[node name="Marker3D3" type="Marker3D" parent="SpawnPoints" index="2"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 65, 0, 10)
+
+[node name="Marker3D4" type="Marker3D" parent="SpawnPoints" index="3"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 90, 0, 7.95858)
+
+[node name="Marker3D5" type="Marker3D" parent="SpawnPoints" index="4"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 90, 0, 94.1386)
+
+[node name="Marker3D6" type="Marker3D" parent="SpawnPoints" index="5"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 65, 0, 90)
+
+[node name="Marker3D7" type="Marker3D" parent="SpawnPoints" index="6"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 34.6144, 0.0239906, 89.9979)
+
+[node name="Marker3D8" type="Marker3D" parent="SpawnPoints" index="7"]
+transform = Transform3D(-1, 0, -8.74228e-08, 0, 1, 0, 8.74228e-08, 0, -1, 8.77544, 1.78566, 90.2188)
+
+[node name="quay" type="Node3D" parent="Resources" index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.6766, 0, -11.6608)
+
+[node name="gate" type="Node3D" parent="Resources" index="1"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.6766, 0, 67.426)
+
+[node name="GIN1" parent="Resources/gate" index="0" instance=ExtResource("3_4f1ac")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 33.9538, 0, 23.5681)
+
+[node name="GIN2" parent="Resources/gate" index="1" instance=ExtResource("3_4f1ac")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 29.2844, 0, 23.6309)
+
+[node name="GIN3" parent="Resources/gate" index="2" instance=ExtResource("3_4f1ac")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 24.1221, 0, 23.7621)
+
+[node name="GIN4" parent="Resources/gate" index="3" instance=ExtResource("4_vksej")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 18.8734, 0, 23.751)
+
+[node name="GIN5" parent="Resources/gate" index="4" instance=ExtResource("3_4f1ac")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 50.224, 0, 23.5681)
+
+[node name="GOUT1" parent="Resources/gate" index="5" instance=ExtResource("3_4f1ac")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 44.9648, 0, 23.6309)
+
+[node name="GOUT2" parent="Resources/gate" index="6" instance=ExtResource("3_4f1ac")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 39.6491, 0, 23.7621)
+
+[node name="GOUT3" parent="Resources/gate" index="7" instance=ExtResource("3_4f1ac")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 62.2987, 0, 23.5681)
+
+[node name="GOUT4" parent="Resources/gate" index="8" instance=ExtResource("3_4f1ac")]
+transform = Transform3D(-0.97989, 0, -0.199539, 0, 1, 0, 0.199539, 0, -0.97989, 56.3216, 0, 23.6309)
+
+[node name="yard" type="Node3D" parent="Resources" index="2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.6766, 0, 36.5336)
+
+[node name="Wall0" type="Node3D" parent="Decorations" index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 47.0328, 0, 0)
+
+[node name="RockLargeA" parent="Decorations/Wall0" index="0" instance=ExtResource("5_7wt10")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 50.5615, 1.90735e-06, 0.669174)

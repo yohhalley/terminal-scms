@@ -1,0 +1,112 @@
+{
+  "name": "Che-OEE-Downtime",
+  "parameters": {
+    "dbConnection": {
+      "dataType": "String",
+      "value": "mes_core"
+    }
+  },
+  "tagType": "UdtType",
+  "tags": [
+    {
+      "name": "Unplanned Downtime",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Production Rate",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Estimated Finish Time",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Start Time",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Failed Orders",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "WorkOrder",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "ID",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "OEE Quality",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "OEE Availability",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Schedule ID",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Target Orders",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Units",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Standard Rate",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "OEE",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "OEE Performance",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "RunID",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Total Time",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Total Orders",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Current Time",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Successful Orders",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Planned Downtime",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Order Count",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Run Time",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "Scheduled Rate",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "End Time",
+      "tagType": "AtomicTag"
+    }
+  ]
+} 

@@ -1,0 +1,469 @@
+{
+  "name": "CHE-Dispatch",
+  "parameters": [
+    {
+      "name": "dbConnection",
+      "value": "mes_core"
+    }
+  ],
+  "tagType": "UdtType",
+  "tags": [
+    {
+      "name": "Sprinter State",
+      "tagType": "AtomicTag",
+      "dataType": "String",
+      "valueSource": "memory"
+    },
+    {
+      "name": "State Run Time",
+      "tagType": "AtomicTag",
+      "dataType": "Float4",
+      "valueSource": "memory"
+    },
+    {
+      "name": "State Start Time",
+      "tagType": "AtomicTag",
+      "dataType": "DateTime",
+      "valueSource": "memory"
+    },
+    {
+      "name": "State Reason",
+      "tagType": "AtomicTag",
+      "dataType": "String",
+      "valueSource": "memory"
+    },
+    {
+      "name": "Enable",
+      "tagType": "AtomicTag",
+      "dataType": "Boolean",
+      "valueSource": "memory"
+    },
+    {
+      "name": "RunID",
+      "tagType": "AtomicTag",
+      "dataType": "String",
+      "valueSource": "memory"
+    },
+    {
+      "name": "OEE Failed Orders",
+      "tagType": "UdtInstance",
+      "typeId": "mes_core/Che-OEE-Downtime",
+      "tags": [
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag",
+          "dataType": "String",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Failed Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Target Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Order Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Production Rate",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Estimated Finish Time",
+          "tagType": "AtomicTag",
+          "dataType": "DateTime",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Unplanned Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Planned Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Availability",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Performance",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Quality",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "OEE",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Productivity Setpoint",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Current Speed",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Setpoint",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Percent",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Count",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Percent Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        }
+      ]
+    },
+    {
+      "name": "OEE Order Start",
+      "tagType": "UdtInstance",
+      "typeId": "mes_core/Che-OEE-Downtime",
+      "tags": [
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag",
+          "dataType": "String",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Failed Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Target Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Order Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Production Rate",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Estimated Finish Time",
+          "tagType": "AtomicTag",
+          "dataType": "DateTime",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Unplanned Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Planned Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Availability",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Performance",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Quality",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "OEE",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Productivity Setpoint",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Current Speed",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Setpoint",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Percent",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Count",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Percent Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        }
+      ]
+    },
+    {
+      "name": "OEE Order Complete",
+      "tagType": "UdtInstance",
+      "typeId": "mes_core/Che-OEE-Downtime",
+      "tags": [
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag",
+          "dataType": "String",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Failed Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Target Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Order Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Production Rate",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Estimated Finish Time",
+          "tagType": "AtomicTag",
+          "dataType": "DateTime",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Unplanned Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Planned Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Downtime",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Availability",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Performance",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Quality",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "OEE",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Productivity Setpoint",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Current Speed",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Setpoint",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Percent",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Count",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Speed Deviation Percent Time",
+          "tagType": "AtomicTag",
+          "dataType": "Float4",
+          "valueSource": "memory"
+        }
+      ]
+    },
+    {
+      "name": "SprinterID",
+      "tagType": "AtomicTag"
+    }
+  ]
+} 

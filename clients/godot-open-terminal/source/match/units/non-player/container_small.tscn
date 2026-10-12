@@ -1,0 +1,11 @@
+[gd_scene load_steps=2 format=3 uid="uid://byxje1nyqarhy"]
+
+[ext_resource type="ArrayMesh" uid="uid://up0k8rqbkcqn" path="res://source/match/units/non-player/cargo.obj" id="2_pqujj"]
+
+[node name="Node3D" type="Node3D"]
+
+[node name="Node3D" type="Node3D" parent="."]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Node3D"]
+transform = Transform3D(0.00707107, 1.60554e-26, 0.00707107, 3.48787e-18, 0.01, -3.48787e-18, -0.00707107, 4.93259e-18, 0.00707107, 0, 0, 0)
+mesh = ExtResource("2_pqujj")

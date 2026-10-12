@@ -1,0 +1,201 @@
+{
+  "name": "CHE Query Dispatch",
+  "parameters": {
+    "dbConnection": {
+      "dataType": "String",
+      "value": {
+        "bindType": "parameter",
+        "binding": "{dbConnection}"
+      }
+    },
+    "sprinterID": {
+      "dataType": "Integer",
+      "value": {
+        "bindType": "parameter",
+        "binding": "{sprinterID}"
+      }
+    }
+  },
+  "tagType": "UdtType",
+  "tags": [
+    {
+      "valueSource": "memory",
+      "dataType": "Boolean",
+      "name": "Enable",
+      "value": true,
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "memory",
+      "dataType": "DateTime",
+      "name": "State Start Time",
+      "formatString": "yyyy-MM-dd h:mm:ss aa",
+      "tagType": "AtomicTag"
+    },
+    {
+      "name": "OEE Failed Orders",
+      "typeId": "mes_core/Che-OEE-Downtime",
+      "tagType": "UdtInstance",
+      "tags": [
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag",
+          "dataType": "String",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Failed Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Target Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        }
+      ]
+    },
+    {
+      "name": "OEE Order Start",
+      "typeId": "mes_core/Che-OEE-Downtime",
+      "parameters": {
+        "dbConnection": {
+          "dataType": "String",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{dbConnection}"
+          }
+        },
+        "sprinterID": {
+          "dataType": "Integer",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{sprinterID}"
+          }
+        }
+      },
+      "tagType": "UdtInstance",
+      "tags": [
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag",
+          "dataType": "String",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Failed Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Target Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        }
+      ]
+    },
+    {
+      "name": "OEE Order Complete",
+      "typeId": "mes_core/Che-OEE-Downtime",
+      "parameters": {
+        "dbConnection": {
+          "dataType": "String",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{dbConnection}"
+          }
+        },
+        "sprinterID": {
+          "dataType": "Integer",
+          "value": {
+            "bindType": "parameter",
+            "binding": "{sprinterID}"
+          }
+        }
+      },
+      "tagType": "UdtInstance",
+      "tags": [
+        {
+          "name": "RunID",
+          "tagType": "AtomicTag",
+          "dataType": "String",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Failed Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Target Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        },
+        {
+          "name": "Total Orders",
+          "tagType": "AtomicTag",
+          "dataType": "Int4",
+          "valueSource": "memory"
+        }
+      ]
+    },
+    {
+      "valueSource": "expr",
+      "expression": "{sprinterID}",
+      "name": "SprinterID",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "name": "RunID",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "expression": "datediff({[.]State Start Time},now(),'second')",
+      "name": "State Run Time",
+      "tagType": "AtomicTag"
+    },
+    {
+      "valueSource": "expr",
+      "eventScripts": [
+        {
+          "eventid": "valueChanged",
+          "script": "\timport system\n\tfrom datetime import datetime\n\timport time\n\tdb = 'mes_core'\n\tenable = system.tag.readBlocking(\"[.]Enable\")[0].value\n\tif not initialChange:\n\t\tstamp = datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")\n\t\tsystem.tag.writeBlocking([\"[.]State Start Time\"],[stamp])\n\t\n\tif enable == 1 and not initialChange:\n\t\n\t\tsprinter = system.tag.readBlocking(\"[.]SprinterID\")[0].value\n\t\treason = (currentValue.value if currentValue.quality.isGood() else 0)\n\t\trun = system.tag.readBlocking(\"[.]RunID\")[0].value\n\t\t\n\t\tstamp = datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")\n\t\tsystem.tag.writeBlocking([\"[.]State Start Time\"],[stamp])\n\t\treasonCode = currentValue.value\n\t\trunID = system.tag.readBlocking(\"[.]RunID\")[0].value\n\t\tsprinterID = system.tag.readBlocking(\"[.]SprinterID\")[0].value\n\t\tdata = system.db.runPrepQuery('select ID,ReasonName FROM statereason where ReasonCode = ? and ParentID = ?',[reasonCode,sprinterID],db)\n\t\tfor row in data:\n\t\t\treasonID = row[0]\n\t\t\treasonName = row[1]\n\t\tendQuery = 'update statehistory set EndDateTime = ? where SprinterID = ? and EndDateTime is NULL'\n\t\tquery = '''insert into statehistory\n\t\t(StateReasonID,RunID,ReasonName,\n\t\tSprinterID,ReasonCode,StartDateTime) \n\t\tVALUES\n\t\t(?,?,?,\n\t\t?,?,?) '''\n\t\tsystem.db.runSFPrepUpdate(endQuery,[stamp,sprinterID],[db])\n\n\t\tsystem.db.runSFPrepUpdate(query,[reasonID, runID, reasonName, sprinterID, currentValue.value, stamp],[db])\n\t"
+        }
+      ],
+      "expression": "{[.]../State}",
+      "name": "Sprinter State",
+      "tagType": "AtomicTag"
+    },
+    {
+      "datasource": {
+        "bindType": "parameter",
+        "binding": "{dbConnection}"
+      },
+      "valueSource": "db",
+      "dataType": "DataSet",
+      "query": "select * from statereason where ParentID = {sprinterID}",
+      "name": "State Reason",
+      "tagType": "AtomicTag"
+    }
+  ]
+} 
