@@ -42,7 +42,7 @@ const CP_CONNECT = 0x10
 const CP_PUBLISH = 0x30
 const CP_SUBSCRIBE = 0x82
 const CP_UNSUBSCRIBE = 0xa2
-const CP_PUBREC = 0x40
+const CP_PUBACK = 0x40
 const CP_SUBACK = 0x90
 const CP_UNSUBACK = 0xb0
 
@@ -60,32 +60,27 @@ signal broker_connected()
 signal broker_disconnected()
 signal broker_connection_failed()
 signal publish_acknowledge(pid)
+signal subscribe_acknowledge(pid)
+signal publish_failed(topic, error)
 
 var receivedbuffer : PackedByteArray = PackedByteArray()
 
 var common_name = null
 
-# Sparkplug B constants
-const SPARKPLUG_DATA_TYPES = {
-	1: "Boolean",
-	2: "Int",
-	3: "Float",
-	4: "String"
-}
+func senddata(data) -> int:
+	var error := ERR_UNCONFIGURED
 
-func senddata(data):
-	var E = 0
-
-	if sslsocket != null:
-		E = sslsocket.put_data(data)
-	elif socket != null:
-		E = socket.put_data(data)
-	elif websocket != null:
-		E = websocket.put_packet(data)
-	if E != 0:
-		print("bad senddata packet E=", E)#, ". Data: ", data)
+	if sslsocket != null and sslsocket.get_status() == StreamPeerTLS.STATUS_CONNECTED:
+		error = sslsocket.put_data(data)
+	elif socket != null and socket.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+		error = socket.put_data(data)
+	elif websocket != null and websocket.get_ready_state() == WebSocketPeer.STATE_OPEN:
+		error = websocket.put_packet(data)
+	if error != OK:
+		printerr("MQTT transport write failed with error ", error)
+	return error
 	
-func receiveintobuffer():
+func receiveintobuffer() -> int:
 	if sslsocket != null:
 		var sslsocketstatus = sslsocket.get_status()
 		if sslsocketstatus == StreamPeerTLS.STATUS_CONNECTED or sslsocketstatus == StreamPeerTLS.STATUS_HANDSHAKING:
@@ -100,14 +95,16 @@ func receiveintobuffer():
 			if n != 0:
 				assert (n > 0)
 				var sv = sslsocket.get_data(n)
-				assert (sv[0] == 0)  # error code
+				if sv[0] != OK:
+					return sv[0]
 				receivedbuffer.append_array(sv[1])
+		elif sslsocketstatus >= StreamPeerTLS.STATUS_ERROR:
+			return ERR_CONNECTION_ERROR
 				
-	elif socket != null and socket.get_status() == StreamPeerTCP.STATUS_CONNECTED:
-		var E = socket.poll()
-		if E != 0:
-			printerr("Socket poll error: ", E)
-			return E
+	elif socket != null:
+		socket.poll()
+		if socket.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			return ERR_CONNECTION_ERROR
 		var n = socket.get_available_bytes()
 		if n == -1:
 			printerr("get_available_bytes returned -1")
@@ -115,13 +112,19 @@ func receiveintobuffer():
 		if n != 0:
 			assert (n > 0)
 			var sv = socket.get_data(n)
-			assert (sv[0] == 0)  # error code
+			if sv[0] != OK:
+				return sv[0]
 			receivedbuffer.append_array(sv[1])
 			
 	elif websocket != null:
 		websocket.poll()
+		if websocket.get_ready_state() != WebSocketPeer.STATE_OPEN:
+			return ERR_CONNECTION_ERROR
 		while websocket.get_available_packet_count() != 0:
 			receivedbuffer.append_array(websocket.get_packet())
+	else:
+		return ERR_UNCONFIGURED
+	return OK
 	
 var pingticksnext0 = 0
 
@@ -185,7 +188,10 @@ func _process(delta):
 		brokerconnectmode = BCM_WAITING_CONNACK
 		
 	elif brokerconnectmode == BCM_WAITING_CONNACK or brokerconnectmode == BCM_CONNECTED:
-		receiveintobuffer()
+		var receive_error = receiveintobuffer()
+		if receive_error != OK:
+			_handle_transport_disconnect(receive_error)
+			return
 		while wait_msg():
 			pass
 		if brokerconnectmode == BCM_CONNECTED and pingticksnext0 < Time.get_ticks_msec():
@@ -195,8 +201,11 @@ func _process(delta):
 	elif brokerconnectmode == BCM_FAILED_CONNECTION:
 		cleanupsockets()
 
-func _ready():
+func _init():
 	regexbrokerurl.compile('^(tcp://|wss://|ws://|ssl://)?([^:\\s]+)(:\\d+)?(/\\S*)?$')
+
+
+func _ready():
 	if client_id == "":
 		randomize()
 		client_id = "rr%d" % randi()
@@ -287,6 +296,17 @@ func cleanupsockets(retval=false):
 	brokerconnectmode = BCM_NOCONNECTION
 	return retval
 
+
+func _handle_transport_disconnect(error: int):
+	var was_connected = brokerconnectmode == BCM_CONNECTED
+	if verbose_level:
+		print("MQTT transport disconnected with error ", error)
+	cleanupsockets()
+	if was_connected:
+		broker_disconnected.emit()
+	else:
+		broker_connection_failed.emit()
+
 func connect_to_broker(brokerurl):
 	assert (brokerconnectmode == BCM_NOCONNECTION)
 	var brokermatch = regexbrokerurl.search(brokerurl)
@@ -344,6 +364,10 @@ func disconnect_from_server():
 	
 
 func publish(stopic, smsg, retain=false, qos=0):
+	if brokerconnectmode != BCM_CONNECTED:
+		printerr("MQTT publish rejected while disconnected: ", stopic)
+		publish_failed.emit(stopic, ERR_UNCONFIGURED)
+		return -1
 	var msg = smsg.to_ascii_buffer() if not binarymessages else smsg
 	var topic = stopic.to_ascii_buffer()
 	
@@ -359,10 +383,14 @@ func publish(stopic, smsg, retain=false, qos=0):
 		encodeshortint(pkt, pid)
 	pkt.append_array(msg)
 	assert (len(pkt) - remstartpos == sz)
-	senddata(pkt)
+	var send_error = senddata(pkt)
+	if send_error != OK:
+		publish_failed.emit(stopic, send_error)
+		_handle_transport_disconnect(send_error)
+		return -1
 	if verbose_level >= 2:
 		print("CP_PUBLISH%s%s topic=%s msg=%s" % [ "[%d]"%pid if qos else "", " <retain>" if retain else "", stopic, smsg])
-	return pid
+	return pid if qos > 0 else 0
 
 func subscribe(stopic, qos=0):
 	pid += 1
@@ -379,7 +407,9 @@ func subscribe(stopic, qos=0):
 	assert (len(pkt) - remstartpos == sz)
 	if verbose_level:
 		print("SUBSCRIBE[%d] topic=%s" % [pid, stopic])
-	senddata(pkt)
+	if senddata(pkt) != OK:
+		return -1
+	return pid
 
 func pingreq():
 	if verbose_level >= 2:
@@ -401,68 +431,6 @@ func unsubscribe(stopic):
 		print("UNSUBSCRIBE[%d] topic=%s" % [pid, stopic])
 	assert (len(pkt) - remstartpos == sz)
 	senddata(pkt)
-
-func _decode_sparkplug_message(message):
-	# Convert the binary message to a PackedByteArray
-	var bytes = PackedByteArray()
-	for i in range(message.length()):
-		bytes.append(message.ord_at(i))
-	
-	# Basic Sparkplug B decoding
-	# The format is typically: [sequence][metric_name][data_type][value]
-	var decoded = {}
-	var pos = 0
-	
-	# Skip the sequence number (first 4 bytes)
-	pos += 4
-	
-	# Read metric name length
-	var name_length = bytes[pos]
-	pos += 1
-	
-	# Read metric name
-	var metric_name = ""
-	for i in range(name_length):
-		metric_name += char(bytes[pos + i])
-	pos += name_length
-	
-	# Read data type
-	var data_type = bytes[pos]
-	pos += 1
-	
-	# Read value based on data type
-	match data_type:
-		1: # Boolean
-			decoded[metric_name] = bytes[pos] != 0
-			pos += 1
-		2: # Int
-			decoded[metric_name] = bytes[pos] | (bytes[pos + 1] << 8) | (bytes[pos + 2] << 16) | (bytes[pos + 3] << 24)
-			pos += 4
-		3: # Float
-			var float_bytes = PackedByteArray([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]])
-			decoded[metric_name] = float_bytes.decode_float(0)
-			pos += 4
-		4: # String
-			var str_length = bytes[pos]
-			pos += 1
-			var str_value = ""
-			for i in range(str_length):
-				str_value += char(bytes[pos + i])
-			decoded[metric_name] = str_value
-			pos += str_length
-	
-	return decoded
-
-func _handle_message(topic, message):
-	# Check if this is a Sparkplug B message
-	if topic.begins_with("spBv1.0/"):
-		var decoded_message = _decode_sparkplug_message(message)
-		if decoded_message:
-			emit_signal("received_message", topic, decoded_message)
-			return
-	
-	# For non-Sparkplug messages, emit as is
-	emit_signal("received_message", topic, message)
 
 func wait_msg():
 	var n = receivedbuffer.size()
@@ -499,7 +467,7 @@ func wait_msg():
 		
 		if verbose_level >= 2:
 			print("received topic=", topic, " msg=", msg)
-		_handle_message(topic, msg)
+		received_message.emit(topic, msg)
 		
 		if op & 6 == 2:
 			senddata(PackedByteArray([0x40, 0x02, (pid1 >> 8), (pid1 & 0xFF)]))
@@ -519,18 +487,19 @@ func wait_msg():
 				print("Bad connection retcode=", retcode) # see https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html
 			emit_signal("broker_connection_failed")
 
-	elif op == CP_PUBREC:
+	elif op == CP_PUBACK:
 		assert (sz == 2)
 		var apid = (receivedbuffer[i]<<8) + receivedbuffer[i+1]
 		if verbose_level >= 2:
 			print("PUBACK[%d]" % apid)
-		emit_signal("publish_acknowledgewait_msg", apid)
+		emit_signal("publish_acknowledge", apid)
 
 	elif op == CP_SUBACK:
 		assert (sz == 3)
 		var apid = (receivedbuffer[i]<<8) + receivedbuffer[i+1]
 		if verbose_level:
 			print("SUBACK[%d] ret=%02x" % [apid, receivedbuffer[i+2]])
+		subscribe_acknowledge.emit(apid)
 		#if receivedbuffer[i+2] == 0x80:
 		#	E = FAILED
 

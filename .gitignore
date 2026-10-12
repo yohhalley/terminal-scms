@@ -1,3 +1,5 @@
 .env
-timebase/
-
+.DS_Store
+**/.DS_Store
+historian/timebase/runtime/
+integrations/flowfuse/runtime/

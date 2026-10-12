@@ -9,6 +9,7 @@ from django.contrib.auth.views import LoginView
 from django.http import JsonResponse
 from django.core.exceptions import PermissionDenied, ValidationError as DjangoValidationError
 from django.utils import timezone as django_timezone
+from django.utils.dateparse import parse_datetime
 from zoneinfo import ZoneInfo
 
 from rest_framework.parsers import JSONParser
@@ -16,15 +17,47 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.viewsets import ModelViewSet
 from django_filters import rest_framework as filters
 
-from .models import Location, Block, Pile, Position, ContainerOwner, ContainerUnit, ContainerVisit, CarrierVisit, ISOType, Che, EquipmentType, \
-    WorkQueue, Order, OrderLeg, CarrierService, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection, Area, Road, RoutingNode, ParkingArea, TerminalConnection, Berth, POD, validate_iana_timezone, ProcessHierarchy, BusinessProcess, ProcessVersion, BusinessProcessExecution, CheComponent, ComponentType, EquipmentTypeComponent, HandlingCycle, OperationalStateInterval, SignalBinding, SignalDefinition
-from .serializers import LocationSerializer, BlockSerializer, PileSerializer, PositionSerializer, UserSerializer, \
-    GroupSerializer, ContainerUnitSerializer, ContainerVisitSerializer, CheSerializer, WorkQueueSerializer, \
-    OrderSerializer, OrderLegSerializer, CarrierVisitSerializer, BulkContainerVisitSerializer, CarrierServiceSerializer, ServiceCargoRouteSerializer, VisitCargoRouteSerializer, PileBookingSerializer, PointOfWorkSerializer, POWConnectionSerializer, AreaSerializer, EquipmentTypeSerializer, RoadSerializer, RoutingNodeSerializer, ParkingAreaSerializer, TerminalConnectionSerializer, BerthSerializer, ProcessHierarchySerializer, BusinessProcessSerializer, ProcessVersionSerializer, BusinessProcessExecutionSerializer, CheComponentSerializer, ComponentTypeSerializer, CurrentSignalValueSerializer, EquipmentTypeComponentSerializer, HandlingCycleSerializer, OperationalStateIntervalSerializer, SignalBindingSerializer, SignalDefinitionSerializer
-from .services import accessible_terminals, generate_service_visits, terminal_capabilities
+from .models import (
+    AccessPolicy, BerthSegment, BusinessProcess, BusinessProcessExecution,
+    CarrierService, CarrierVisit, Che, CheComponent, CheOperatingScope,
+    ComponentType, ContainerOwner, ContainerUnit, ContainerVisit, EquipmentType,
+    EquipmentTypeComponent, HandlingCycle, InterfacePosition, ISOType, LayoutAsset,
+    LayoutPreset, LayoutVersion, LinearAxis, LinearMarker, Location,
+    OperationalPosition, OperationalStateInterval, Order, OrderLeg,
+    OrderRoutePlan, Pile, PileBooking, POD, PointOfWork, Position,
+    ProcessHierarchy, ProcessVersion, RouteEdge, RouteNode, ServiceCargoRoute,
+    SignalBinding, SignalDefinition, StorageGrid, TransferInterface,
+    VisitCargoRoute, WorkQueue, validate_iana_timezone,
+)
+from .serializers import (
+    AccessPolicySerializer, BerthSegmentSerializer, BulkContainerVisitSerializer,
+    BusinessProcessExecutionSerializer, BusinessProcessSerializer,
+    CarrierServiceSerializer, CarrierVisitSerializer, CheComponentSerializer,
+    CheOperatingScopeSerializer, CheSerializer, ComponentTypeSerializer,
+    ContainerUnitSerializer, ContainerVisitSerializer, CurrentSignalValueSerializer,
+    EquipmentTypeComponentSerializer, EquipmentTypeSerializer, GroupSerializer,
+    HandlingCycleSerializer, LayoutAssetSerializer, LayoutPresetSerializer,
+    LayoutVersionSerializer, LinearAxisSerializer, LinearMarkerSerializer,
+    LocationSerializer, OperationalPositionSerializer,
+    OperationalStateIntervalSerializer, OrderLegSerializer,
+    OrderRoutePlanSerializer, OrderSerializer, PileBookingSerializer,
+    PileSerializer, PointOfWorkSerializer, PositionSerializer,
+    ProcessHierarchySerializer, ProcessVersionSerializer, RouteEdgeSerializer,
+    RouteNodeSerializer, ServiceCargoRouteSerializer, SignalBindingSerializer,
+    SignalDefinitionSerializer, StorageGridSerializer,
+    TransferInterfaceSerializer, UserSerializer, VisitCargoRouteSerializer,
+    WorkQueueSerializer,
+)
+from .permissions import IsMESService
+from .services import (
+    EXECUTION_EVENTS, accessible_terminals, apply_execution_event, current_layout,
+    generate_service_visits, plan_order_route, publish_layout, release_order,
+    sync_road_junctions, terminal_capabilities, validate_layout,
+)
 
 ##################################################################
 
@@ -73,9 +106,23 @@ def terminal_editor_view(request, location_id=None):
     context = {
         'location': location,
         'location_id': location_id,
+        'layout': current_layout(location, request.user) if location else None,
         **capabilities,
     }
     return render(request, 'terminal_editor.html', context)
+
+
+@login_required(login_url='admin:login')
+def che_editor_view(request, location_id):
+    """Detailed CHE and component editor for a terminal."""
+    location = get_object_or_404(Location, pk=location_id, location_type__in=['TL', 'ID'])
+    capabilities = terminal_capabilities(request.user, location)
+    if not capabilities['can_edit_terminal']:
+        raise PermissionDenied
+    return render(request, 'che_editor.html', {
+        'location': location,
+        **capabilities,
+    })
 
 
 @login_required(login_url='admin:login')
@@ -84,7 +131,12 @@ def berth_plan_view(request, location_id):
     capabilities = terminal_capabilities(request.user, location)
     if not capabilities['can_manage_berth_plan']:
         raise PermissionDenied
-    berths = Berth.objects.filter(location=location).prefetch_related('bollards').order_by('name')
+    berths = BerthSegment.objects.filter(
+        quay_asset__layout_version__location=location,
+        quay_asset__layout_version__is_current=True,
+    ).select_related('quay_asset', 'quay_face_axis').prefetch_related(
+        'quay_face_axis__markers',
+    ).order_by('name')
     services = CarrierService.objects.filter(location=location).select_related(
         'default_berth', 'default_start_bollard', 'default_end_bollard'
     ).prefetch_related('equipment_requirements__equipment_type').order_by('name')
@@ -114,7 +166,7 @@ def berth_plan_view(request, location_id):
     return render(request, 'berth_plan.html', {
         'location': location,
         **capabilities,
-        'berths_data': BerthSerializer(berths, many=True).data,
+        'berths_data': BerthSegmentSerializer(berths, many=True).data,
         'services_data': CarrierServiceSerializer(services, many=True).data,
         'visits_data': CarrierVisitSerializer(visits, many=True).data,
         'cargo_routes_data': ServiceCargoRouteSerializer(cargo_routes, many=True).data,
@@ -290,13 +342,15 @@ class LocationViewSet(viewsets.ViewSet):
         return Response(serializer.data)
 
 
-class BlockViewSet(viewsets.ModelViewSet):
-    serializer_class = BlockSerializer
+class StorageGridViewSet(viewsets.ModelViewSet):
+    serializer_class = StorageGridSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         location_pk = self.kwargs.get('location_pk')
-        queryset = Block.objects.filter(location=location_pk)
+        queryset = StorageGrid.objects.filter(
+            layout_asset__layout_version__location_id=location_pk,
+        ).select_related('layout_asset__layout_version__location')
 
         # Filter by bay if provided
         bay = self.request.query_params.get('bay', None)
@@ -312,13 +366,15 @@ class BlockViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         location_pk = self.kwargs.get('location_pk')
-        location = get_object_or_404(Location, pk=location_pk)
-        serializer.save(location=location)
+        asset = serializer.validated_data.get('layout_asset')
+        if not asset or asset.layout_version.location_id != int(location_pk):
+            raise DRFValidationError('Storage grid asset must belong to this terminal.')
+        serializer.save()
 
     def retrieve(self, request, pk=None, location_pk=None):
-        queryset = Block.objects.filter(location=location_pk)
+        queryset = StorageGrid.objects.filter(layout_asset__layout_version__location_id=location_pk)
         block = get_object_or_404(queryset, pk=pk)
-        serializer = BlockSerializer(block)
+        serializer = StorageGridSerializer(block)
         return Response(serializer.data)
 
 
@@ -329,16 +385,22 @@ class CheViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Che.objects.filter(location_id=self.kwargs.get('location_pk')).select_related(
-            'equipment_type', 'location', 'current_block', 'current_user'
+            'equipment_type', 'location', 'current_asset', 'current_user'
         ).prefetch_related(
             'components__component_type', 'components__template',
             'components__signal_bindings__signal_definition',
             'components__signal_bindings__current_value', 'state_intervals',
+            'operating_scopes__axis__asset',
         )
 
     def perform_create(self, serializer):
         location = get_object_or_404(Location, pk=self.kwargs.get('location_pk'))
         serializer.save(location=location)
+
+    def perform_destroy(self, instance):
+        if instance.referenced_interfaces.exists():
+            raise DRFValidationError('Remove equipment-relative transfer references before deleting this CHE.')
+        instance.delete()
 
 
 class PileViewSet(viewsets.ViewSet):
@@ -347,25 +409,25 @@ class PileViewSet(viewsets.ViewSet):
     filterset_fields = ['bay', 'row']
     filter_backends = [filters.DjangoFilterBackend]
 
-    def list(self, request, location_pk=None, block_pk=None, *args, **kwargs):
+    def list(self, request, location_pk=None, storage_grid_pk=None, *args, **kwargs):
 
         bay = self.request.query_params.get('bay')
         row = self.request.query_params.get('row')
 
         if bay is not None and row is not None:
-            queryset = Pile.objects.filter(block__location=location_pk, block=block_pk, bay=bay, row=row)
+            queryset = Pile.objects.filter(storage_grid__layout_asset__layout_version__location=location_pk, storage_grid=storage_grid_pk, bay=bay, row=row)
         elif bay is not None:
-            queryset = Pile.objects.filter(block__location=location_pk, block=block_pk, bay=bay)
+            queryset = Pile.objects.filter(storage_grid__layout_asset__layout_version__location=location_pk, storage_grid=storage_grid_pk, bay=bay)
         elif row is not None:
-            queryset = Pile.objects.filter(block__location=location_pk, block=block_pk, row=row)
+            queryset = Pile.objects.filter(storage_grid__layout_asset__layout_version__location=location_pk, storage_grid=storage_grid_pk, row=row)
         else:
-            queryset = Pile.objects.filter(block__location=location_pk, block=block_pk)
+            queryset = Pile.objects.filter(storage_grid__layout_asset__layout_version__location=location_pk, storage_grid=storage_grid_pk)
         # piles = get_object_or_404(queryset, many=True)
         serializer = PileSerializer(queryset, many=True)
         return Response(serializer.data)
 
-    def retrieve(self, request, pk=None, block_pk=None, location_pk=None):
-        queryset = Pile.objects.filter(block__location=location_pk, block=block_pk)
+    def retrieve(self, request, pk=None, storage_grid_pk=None, location_pk=None):
+        queryset = Pile.objects.filter(storage_grid__layout_asset__layout_version__location=location_pk, storage_grid=storage_grid_pk)
         pile = get_object_or_404(queryset, pk=pk)
         serializer = PileSerializer(pile)
         return Response(serializer.data)
@@ -385,16 +447,20 @@ class PositionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         location_pk = self.kwargs.get('location_pk')
-        block_pk = self.kwargs.get('block_pk')
+        storage_grid_pk = self.kwargs.get('storage_grid_pk')
         pile_pk = self.kwargs.get('pile_pk')
-        return Position.objects.filter(pile__block__location=location_pk, pile__block=block_pk, pile=pile_pk)
+        return Position.objects.filter(
+            pile__storage_grid__layout_asset__layout_version__location=location_pk,
+            pile__storage_grid=storage_grid_pk,
+            pile=pile_pk,
+        )
 
-    def list(self, request, location_pk=None, block_pk=None, pile_pk=None):
+    def list(self, request, location_pk=None, storage_grid_pk=None, pile_pk=None):
         queryset = self.get_queryset()
         serializer = PositionSerializer(queryset, many=True)
         return Response(serializer.data)
 
-    def retrieve(self, request, pk=None, location_pk=None, block_pk=None, pile_pk=None):
+    def retrieve(self, request, pk=None, location_pk=None, storage_grid_pk=None, pile_pk=None):
         queryset = self.get_queryset()
         position = get_object_or_404(queryset, pk=pk)
         serializer = PositionSerializer(position)
@@ -439,6 +505,77 @@ class OrderViewSet(viewsets.ViewSet):
         order = get_object_or_404(queryset, pk=pk)
         serializer = OrderSerializer(order)
         return Response(serializer.data)
+
+    def _scoped_order(self, pk, location_pk, work_queue_pk):
+        return get_object_or_404(
+            Order.objects.filter(
+                work_queue=work_queue_pk,
+                work_queue__location=location_pk,
+            ),
+            pk=pk,
+        )
+
+    @transaction.atomic
+    def create(self, request, location_pk=None, work_queue_pk=None):
+        work_queue = get_object_or_404(
+            WorkQueue.objects.filter(location=location_pk),
+            pk=work_queue_pk,
+        )
+        payload = request.data.copy()
+        payload['work_queue'] = work_queue.pk
+        serializer = OrderSerializer(
+            data=payload,
+            context={'request': request, 'view': self},
+        )
+        serializer.is_valid(raise_exception=True)
+        order = serializer.save()
+        try:
+            plan_order_route(order)
+        except DjangoValidationError as exc:
+            raise DRFValidationError({'route': exc.messages})
+        return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def release(self, request, pk=None, location_pk=None, work_queue_pk=None):
+        order = self._scoped_order(pk, location_pk, work_queue_pk)
+        try:
+            order = release_order(order.pk)
+        except DjangoValidationError as exc:
+            raise DRFValidationError({'status': exc.messages})
+        return Response(OrderSerializer(order).data)
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='execution-callback',
+        permission_classes=[IsMESService],
+    )
+    def execution_callback(self, request, pk=None, location_pk=None, work_queue_pk=None):
+        order = self._scoped_order(pk, location_pk, work_queue_pk)
+        event = request.data.get('event')
+        if event not in EXECUTION_EVENTS:
+            raise DRFValidationError({
+                'event': f'Use one of: {", ".join(sorted(EXECUTION_EVENTS))}.'
+            })
+        occurred_at = None
+        if request.data.get('occurred_at'):
+            occurred_at = parse_datetime(request.data['occurred_at'])
+            if occurred_at is None:
+                raise DRFValidationError({'occurred_at': 'Use an ISO-8601 date-time.'})
+        try:
+            order = apply_execution_event(
+                order.pk,
+                event,
+                leg_id=request.data.get('leg_id'),
+                che_id=request.data.get('che_id'),
+                position_id=request.data.get('position_id'),
+                occurred_at=occurred_at,
+            )
+        except (DjangoValidationError, Order.DoesNotExist, OrderLeg.DoesNotExist,
+                ContainerVisit.DoesNotExist, Position.DoesNotExist, Che.DoesNotExist) as exc:
+            messages = getattr(exc, 'messages', [str(exc)])
+            raise DRFValidationError({'execution': messages})
+        return Response(OrderSerializer(order).data)
 
 
 class OrderLegViewSet(viewsets.ViewSet):
@@ -604,46 +741,314 @@ class PointOfWorkViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.DjangoFilterBackend]
 
 
-class POWConnectionViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing POW connections.
-    """
-    queryset = POWConnection.objects.all().order_by('from_pow__code', 'to_pow__code')
-    serializer_class = POWConnectionSerializer
+class LayoutVersionViewSet(viewsets.ModelViewSet):
+    serializer_class = LayoutVersionSerializer
     permission_classes = [permissions.IsAuthenticated]
-    filterset_fields = ['from_pow', 'to_pow', 'is_enabled', 'is_bidirectional']
-    filter_backends = [filters.DjangoFilterBackend]
-
-
-class AreaViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing terminal areas.
-    """
-    serializer_class = AreaSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    filterset_fields = ['location', 'area_type', 'is_visible']
-    filter_backends = [filters.DjangoFilterBackend]
+    pagination_class = None
 
     def get_queryset(self):
-        queryset = Area.objects.all().order_by('location__name', 'area_type', 'name')
-        location_pk = self.kwargs.get('location_pk')
-        if location_pk is not None:
-            queryset = queryset.filter(location=location_pk)
-        return queryset
+        return LayoutVersion.objects.filter(
+            location_id=self.kwargs.get('location_pk')
+        ).select_related('location', 'created_by').order_by('-version')
 
     def perform_create(self, serializer):
-        location_pk = self.kwargs.get('location_pk')
-        if location_pk is not None:
-            location = get_object_or_404(Location, pk=location_pk)
-            serializer.save(location=location)
-        else:
-            serializer.save()
+        location = get_object_or_404(Location, pk=self.kwargs.get('location_pk'))
+        next_version = (location.layout_versions.aggregate(value=models.Max('version'))['value'] or 0) + 1
+        make_current = serializer.validated_data.get('is_current', False)
+        if make_current:
+            location.layout_versions.filter(is_current=True).update(is_current=False)
+        serializer.save(
+            location=location,
+            version=next_version,
+            created_by=self.request.user,
+        )
+
+    @action(detail=True, methods=['get'], url_path='validate')
+    def validate_definition(self, request, *args, **kwargs):
+        return Response(validate_layout(self.get_object()))
+
+    @action(detail=True, methods=['post'])
+    def publish(self, request, *args, **kwargs):
+        try:
+            layout = publish_layout(self.get_object())
+        except DjangoValidationError as exc:
+            return Response({'detail': exc.messages}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(LayoutVersionSerializer(layout).data)
+
+
+class CurrentLayoutScopedViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+    layout_lookup = 'layout_version'
+
+    def selected_layout(self):
+        location = get_object_or_404(Location, pk=self.kwargs.get('location_pk'))
+        requested = self.request.query_params.get('layout_version') or self.request.data.get('layout_version')
+        if requested:
+            return get_object_or_404(LayoutVersion, pk=requested, location=location)
+        return current_layout(location, self.request.user)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.request.method in {'POST', 'PUT', 'PATCH'}:
+            context['layout_version'] = self.selected_layout()
+        return context
+
+
+class LayoutAssetViewSet(CurrentLayoutScopedViewSet):
+    serializer_class = LayoutAssetSerializer
+
+    def get_queryset(self):
+        queryset = LayoutAsset.objects.filter(
+            layout_version__location_id=self.kwargs.get('location_pk')
+        ).select_related('layout_version', 'parent', 'access_policy').prefetch_related(
+            'linear_axes__markers', 'transfer_interfaces__positions',
+            'berth_segments__quay_face_axis__markers',
+        )
+        requested = self.request.query_params.get('layout_version')
+        return queryset.filter(layout_version_id=requested) if requested else queryset.filter(layout_version__is_current=True)
+
+    def perform_create(self, serializer):
+        layout = self.selected_layout()
+        parent = serializer.validated_data.get('parent')
+        policy = serializer.validated_data.get('access_policy')
+        if parent and parent.layout_version_id != layout.pk:
+            raise DRFValidationError('Parent asset must belong to this terminal layout.')
+        if policy and policy.layout_version_id != layout.pk:
+            raise DRFValidationError('Access policy must belong to this terminal layout.')
+        serializer.save(layout_version=layout)
+
+
+class AccessPolicyViewSet(CurrentLayoutScopedViewSet):
+    serializer_class = AccessPolicySerializer
+
+    def get_queryset(self):
+        queryset = AccessPolicy.objects.filter(
+            layout_version__location_id=self.kwargs.get('location_pk')
+        ).prefetch_related('allowed_che_types')
+        requested = self.request.query_params.get('layout_version')
+        return queryset.filter(layout_version_id=requested) if requested else queryset.filter(layout_version__is_current=True)
+
+    def perform_create(self, serializer):
+        serializer.save(layout_version=self.selected_layout())
+
+
+class LinearAxisViewSet(CurrentLayoutScopedViewSet):
+    serializer_class = LinearAxisSerializer
+
+    def get_queryset(self):
+        queryset = LinearAxis.objects.filter(
+            asset__layout_version__location_id=self.kwargs.get('location_pk')
+        ).select_related('asset', 'access_policy').prefetch_related('markers')
+        requested = self.request.query_params.get('layout_version')
+        return queryset.filter(asset__layout_version_id=requested) if requested else queryset.filter(asset__layout_version__is_current=True)
+
+    def perform_create(self, serializer):
+        asset = serializer.validated_data.get('asset')
+        if not asset or asset.layout_version.location_id != int(self.kwargs.get('location_pk')):
+            raise DRFValidationError('Axis asset must belong to this terminal.')
+        serializer.save()
 
     def perform_destroy(self, instance):
-        block = instance.block if instance.block_id else None
+        layout = instance.layout_version
         instance.delete()
-        if block:
-            block.delete()
+        sync_road_junctions(layout)
+
+
+class BerthSegmentViewSet(CurrentLayoutScopedViewSet):
+    serializer_class = BerthSegmentSerializer
+
+    def get_queryset(self):
+        queryset = BerthSegment.objects.filter(
+            quay_asset__layout_version__location_id=self.kwargs.get('location_pk')
+        ).select_related('quay_asset', 'quay_face_axis').prefetch_related('quay_face_axis__markers')
+        requested = self.request.query_params.get('layout_version')
+        return queryset.filter(quay_asset__layout_version_id=requested) if requested else queryset.filter(quay_asset__layout_version__is_current=True)
+
+    def perform_create(self, serializer):
+        quay = serializer.validated_data.get('quay_asset')
+        axis = serializer.validated_data.get('quay_face_axis')
+        location_id = int(self.kwargs.get('location_pk'))
+        if not quay or quay.layout_version.location_id != location_id:
+            raise DRFValidationError('Quay asset must belong to this terminal.')
+        if not axis or axis.asset_id != quay.pk:
+            raise DRFValidationError('Quay face axis must belong to the selected quay.')
+        serializer.save()
+
+
+class TransferInterfaceViewSet(CurrentLayoutScopedViewSet):
+    serializer_class = TransferInterfaceSerializer
+
+    def get_queryset(self):
+        queryset = TransferInterface.objects.filter(
+            asset__layout_version__location_id=self.kwargs.get('location_pk')
+        ).select_related(
+            'asset', 'storage_grid', 'axis', 'road_axis', 'access_policy', 'reference_che',
+        ).prefetch_related('positions')
+        requested = self.request.query_params.get('layout_version')
+        return queryset.filter(asset__layout_version_id=requested) if requested else queryset.filter(asset__layout_version__is_current=True)
+
+    def perform_create(self, serializer):
+        asset = serializer.validated_data.get('asset')
+        if not asset or asset.layout_version.location_id != int(self.kwargs.get('location_pk')):
+            raise DRFValidationError('Interface asset must belong to this terminal.')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        asset = instance.asset
+        instance.delete()
+        if not asset.transfer_interfaces.exists():
+            RouteNode.objects.filter(
+                layout_version=asset.layout_version,
+                asset=asset,
+                is_generated=True,
+                metadata__aggregate_kind='asset',
+            ).delete()
+
+
+class OperationalPositionViewSet(CurrentLayoutScopedViewSet):
+    serializer_class = OperationalPositionSerializer
+
+    def get_queryset(self):
+        queryset = OperationalPosition.objects.filter(
+            layout_version__location_id=self.kwargs.get('location_pk')
+        ).select_related('asset', 'stack_position', 'axis',
+                         'interface_position__transfer_interface__reference_che',
+                         'interface_position__transfer_interface__axis')
+        requested = self.request.query_params.get('layout_version')
+        return queryset.filter(layout_version_id=requested) if requested else queryset.filter(layout_version__is_current=True)
+
+    def perform_create(self, serializer):
+        layout = self.selected_layout()
+        asset = serializer.validated_data.get('asset')
+        axis = serializer.validated_data.get('axis')
+        if asset and asset.layout_version_id != layout.pk:
+            raise DRFValidationError('Operational position asset belongs to another layout.')
+        if axis and axis.asset.layout_version_id != layout.pk:
+            raise DRFValidationError('Operational position axis belongs to another layout.')
+        serializer.save(layout_version=layout)
+
+
+class RouteNodeViewSet(CurrentLayoutScopedViewSet):
+    serializer_class = RouteNodeSerializer
+
+    def get_queryset(self):
+        queryset = RouteNode.objects.filter(
+            layout_version__location_id=self.kwargs.get('location_pk')
+        ).select_related('asset', 'transfer_interface', 'operational_position',
+                         'transfer_interface__reference_che', 'transfer_interface__axis',
+                         'operational_position__interface_position__transfer_interface__reference_che',
+                         'operational_position__interface_position__transfer_interface__axis')
+        requested = self.request.query_params.get('layout_version')
+        return queryset.filter(layout_version_id=requested) if requested else queryset.filter(layout_version__is_current=True)
+
+    def perform_create(self, serializer):
+        layout = self.selected_layout()
+        asset = serializer.validated_data.get('asset')
+        position = serializer.validated_data.get('operational_position')
+        if asset and asset.layout_version_id != layout.pk:
+            raise DRFValidationError('Route node asset belongs to another layout.')
+        if position and position.layout_version_id != layout.pk:
+            raise DRFValidationError('Route node position belongs to another layout.')
+        serializer.save(layout_version=layout)
+
+    def perform_update(self, serializer):
+        if serializer.instance.is_generated:
+            raise DRFValidationError('Generated nodes are managed by their movement axis.')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.is_generated:
+            raise DRFValidationError('Generated nodes are managed by their movement axis.')
+        instance.delete()
+
+
+class RouteEdgeViewSet(CurrentLayoutScopedViewSet):
+    serializer_class = RouteEdgeSerializer
+
+    def get_queryset(self):
+        queryset = RouteEdge.objects.filter(
+            layout_version__location_id=self.kwargs.get('location_pk')
+        ).select_related('from_node', 'to_node', 'source_axis', 'access_policy').prefetch_related('requirements')
+        requested = self.request.query_params.get('layout_version')
+        return queryset.filter(layout_version_id=requested) if requested else queryset.filter(layout_version__is_current=True)
+
+    def perform_create(self, serializer):
+        layout = self.selected_layout()
+        first = serializer.validated_data.get('from_node')
+        second = serializer.validated_data.get('to_node')
+        if not first or not second or any(
+            node.layout_version_id != layout.pk for node in (first, second)
+        ):
+            raise DRFValidationError('Route edge nodes must belong to this terminal layout.')
+        serializer.save(layout_version=layout)
+
+    def perform_update(self, serializer):
+        if serializer.instance.is_generated:
+            raise DRFValidationError('Generated connections are managed by their movement axis.')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.is_generated:
+            raise DRFValidationError('Generated connections are managed by their movement axis.')
+        instance.delete()
+
+
+class CheOperatingScopeViewSet(viewsets.ModelViewSet):
+    serializer_class = CheOperatingScopeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
+
+    def get_queryset(self):
+        location_id = self.kwargs.get('location_pk')
+        return CheOperatingScope.objects.filter(
+            models.Q(che__location_id=location_id)
+            | models.Q(equipment_type__che__location_id=location_id)
+            | models.Q(asset__layout_version__location_id=location_id)
+            | models.Q(axis__asset__layout_version__location_id=location_id)
+            | models.Q(service_lane_axis__asset__layout_version__location_id=location_id)
+        ).select_related('che', 'equipment_type', 'asset', 'axis', 'service_lane_axis').distinct()
+
+    def _validate_terminal(self, serializer):
+        location_id = int(self.kwargs.get('location_pk'))
+        asset = serializer.validated_data.get(
+            'asset', getattr(serializer.instance, 'asset', None)
+        )
+        axis = serializer.validated_data.get(
+            'axis', getattr(serializer.instance, 'axis', None)
+        )
+        service_lane_axis = serializer.validated_data.get(
+            'service_lane_axis', getattr(serializer.instance, 'service_lane_axis', None)
+        )
+        che = serializer.validated_data.get(
+            'che', getattr(serializer.instance, 'che', None)
+        )
+        topology_location_id = (
+            asset.layout_version.location_id if asset
+            else axis.asset.layout_version.location_id if axis
+            else None
+        )
+        if topology_location_id != location_id:
+            raise DRFValidationError('Operating scope topology must belong to this terminal.')
+        if che and che.location_id != location_id:
+            raise DRFValidationError('Operating scope CHE must belong to this terminal.')
+        if service_lane_axis and service_lane_axis.asset.layout_version.location_id != location_id:
+            raise DRFValidationError('Operating scope service lane must belong to this terminal.')
+
+    def perform_create(self, serializer):
+        self._validate_terminal(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_terminal(serializer)
+        serializer.save()
+
+
+class LayoutPresetViewSet(viewsets.ModelViewSet):
+    queryset = LayoutPreset.objects.filter(is_active=True).order_by('name', '-version')
+    serializer_class = LayoutPresetSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None
 
 
 class EquipmentTypeViewSet(viewsets.ModelViewSet):
@@ -820,53 +1225,6 @@ class HandlingCycleViewSet(viewsets.ModelViewSet):
             Che, pk=self.kwargs.get('che_pk'), location_id=self.kwargs.get('location_pk')
         )
         serializer.save(che=che)
-
-
-class RoadViewSet(viewsets.ModelViewSet):
-    serializer_class = RoadSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        return Road.objects.filter(location_id=self.kwargs.get('location_pk')).prefetch_related('allowed_che_types')
-
-    def perform_create(self, serializer):
-        location = get_object_or_404(Location, pk=self.kwargs.get('location_pk'))
-        serializer.save(location=location)
-
-    def perform_destroy(self, instance):
-        nodes = [instance.start_node, instance.end_node]
-        instance.delete()
-        for node in nodes:
-            if node and not node.starting_roads.exists() and not node.ending_roads.exists() and not node.terminal_connections.exists():
-                node.delete()
-
-
-class BerthViewSet(viewsets.ModelViewSet):
-    serializer_class = BerthSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        return Berth.objects.filter(location_id=self.kwargs.get('location_pk')).prefetch_related('bollards')
-
-
-class RoutingNodeViewSet(viewsets.ModelViewSet):
-    serializer_class = RoutingNodeSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    filterset_fields = ['location']
-    filter_backends = [filters.DjangoFilterBackend]
-
-    def get_queryset(self):
-        return RoutingNode.objects.all().order_by('location_id', 'id')
-
-
-class TerminalConnectionViewSet(viewsets.ModelViewSet):
-    serializer_class = TerminalConnectionSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    filterset_fields = ['node', 'block', 'parking_area', 'is_enabled']
-    filter_backends = [filters.DjangoFilterBackend]
-
-    def get_queryset(self):
-        return TerminalConnection.objects.all().order_by('node_id', 'id')
 
 
 class ProcessHierarchyViewSet(viewsets.ModelViewSet):

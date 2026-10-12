@@ -17,12 +17,10 @@ router.register(r'locations', views.LocationViewSet, basename='location')
 router.register(r'container-units', views.ContainerUnitViewSet, basename='containerunit')
 router.register(r'carrier-services', views.CarrierServiceViewSet, basename='carrier-service')
 router.register(r'points-of-work', views.PointOfWorkViewSet, basename='point-of-work')
-router.register(r'pow-connections', views.POWConnectionViewSet, basename='pow-connection')
 router.register(r'equipment-types', views.EquipmentTypeViewSet, basename='equipment-type')
 router.register(r'component-types', views.ComponentTypeViewSet, basename='component-type')
 router.register(r'signal-definitions', views.SignalDefinitionViewSet, basename='signal-definition')
-router.register(r'routing-nodes', views.RoutingNodeViewSet, basename='routing-node')
-router.register(r'terminal-connections', views.TerminalConnectionViewSet, basename='terminal-connection')
+router.register(r'layout-presets', views.LayoutPresetViewSet, basename='layout-preset')
 router.register(r'process-hierarchies', views.ProcessHierarchyViewSet, basename='process-hierarchy')
 router.register(r'business-processes', views.BusinessProcessViewSet, basename='business-process')
 router.register(r'process-versions', views.ProcessVersionViewSet, basename='process-version')
@@ -32,7 +30,17 @@ router.register(r'process-executions', views.BusinessProcessExecutionViewSet, ba
 # /locations/{pk}/
 
 location_router = nested_routers.NestedSimpleRouter(router, r'locations', lookup='location')
-location_router.register(r'blocks', views.BlockViewSet, basename='block')
+location_router.register(r'storage-grids', views.StorageGridViewSet, basename='storage-grid')
+location_router.register(r'layout-versions', views.LayoutVersionViewSet, basename='layout-version')
+location_router.register(r'layout-assets', views.LayoutAssetViewSet, basename='layout-asset')
+location_router.register(r'access-policies', views.AccessPolicyViewSet, basename='access-policy')
+location_router.register(r'linear-axes', views.LinearAxisViewSet, basename='linear-axis')
+location_router.register(r'berth-segments', views.BerthSegmentViewSet, basename='berth-segment')
+location_router.register(r'transfer-interfaces', views.TransferInterfaceViewSet, basename='transfer-interface')
+location_router.register(r'operational-positions', views.OperationalPositionViewSet, basename='operational-position')
+location_router.register(r'route-nodes', views.RouteNodeViewSet, basename='route-node')
+location_router.register(r'route-edges', views.RouteEdgeViewSet, basename='route-edge')
+location_router.register(r'che-operating-scopes', views.CheOperatingScopeViewSet, basename='che-operating-scope')
 
 location_router.register(r'ches', views.CheViewSet, basename='che')
 che_router = nested_routers.NestedSimpleRouter(location_router, r'ches', lookup='che')
@@ -64,9 +72,6 @@ container_visit_router = nested_routers.NestedSimpleRouter(location_router, r'co
 
 location_router.register(r'carrier-visits', views.CarrierVisitViewSet, basename='carrier-visit')
 location_router.register(r'carrier-services', views.CarrierServiceViewSet, basename='carrier-service')
-location_router.register(r'areas', views.AreaViewSet, basename='area')
-location_router.register(r'roads', views.RoadViewSet, basename='road')
-location_router.register(r'berths', views.BerthViewSet, basename='berth')
 carrier_service_router = nested_routers.NestedSimpleRouter(location_router, r'carrier-services', lookup='carrier_service')
 carrier_service_router.register(r'service-cargo-routes', views.ServiceCargoRouteViewSet, basename='service-cargo-route')
 
@@ -83,13 +88,15 @@ carrier_visit_router.register(r'pile-bookings', views.PileBookingViewSet, basena
 # /locations/{location_pk}/ches/{che_pk}/
 # /locations/{location_pk}/work_queues/{work_queue_pk}/
 
-block_router = nested_routers.NestedSimpleRouter(location_router, r'blocks', lookup='block')
-block_router.register(r'piles', views.PileViewSet, basename='pile')
+storage_grid_router = nested_routers.NestedSimpleRouter(
+    location_router, r'storage-grids', lookup='storage_grid'
+)
+storage_grid_router.register(r'piles', views.PileViewSet, basename='pile')
 ## generates:
 # /locations/{location_pk}/blocks/{block_pk}/piles/
 # /locations/{location_pk}/blocks/{block_pk}/piles/{pk}/
 
-pile_router = nested_routers.NestedSimpleRouter(block_router, r'piles', lookup='pile')
+pile_router = nested_routers.NestedSimpleRouter(storage_grid_router, r'piles', lookup='pile')
 pile_router.register(r'positions', views.PositionViewSet, basename='position')
 ## generates:
 # /locations/{location_pk}/blocks/{block_pk}/piles/{pile_pk}/positions/
@@ -110,7 +117,7 @@ order_router.register(r'order_legs', views.OrderLegViewSet, basename='order-leg'
 urlpatterns = [
     re_path(r'^', include(router.urls)),
     re_path(r'^', include(location_router.urls)),
-    re_path(r'^', include(block_router.urls)),
+    re_path(r'^', include(storage_grid_router.urls)),
     re_path(r'^', include(che_router.urls), name='index'),
     re_path(r'^', include(che_router.urls), name='partial_update'),
     re_path(r'^', include(che_component_router.urls)),

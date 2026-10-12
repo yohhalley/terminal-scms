@@ -4,8 +4,32 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers, generics
 from django.utils import timezone as django_timezone
 from zoneinfo import ZoneInfo
-from . models import Location, Block, Pile, Position, ContainerUnit, ContainerVisit, ISOType, ContainerOwner, Che, EquipmentType, WorkQueue, Order, OrderLeg, CarrierVisit, CarrierService, CarrierServiceEquipmentRequirement, CarrierVisitEquipmentRequirement, ServiceCargoRoute, VisitCargoRoute, PileBooking, PointOfWork, POWConnection, Area, Road, RoutingNode, ParkingArea, TerminalConnection, Berth, Bollard, ProcessHierarchy, BusinessProcess, ProcessVersion, BusinessProcessExecution, Battery, CheComponent, ComponentType, CurrentSignalValue, EnergyTank, Engine, EquipmentTypeComponent, HandlingCycle, MotionAxis, OperationalStateInterval, SignalBinding, SignalDefinition, Spreader
-from .services import berth_polygon, sync_berth_bollards, sync_yard_grid, vessel_end_bollard
+from .models import (
+    AccessPolicy, Battery, BerthSegment, BusinessProcess,
+    BusinessProcessExecution, CarrierService, CarrierServiceEquipmentRequirement,
+    CarrierVisit, CarrierVisitEquipmentRequirement, Che, CheComponent,
+    CheOperatingScope, ComponentType, ContainerOwner, ContainerUnit,
+    ContainerVisit, CurrentSignalValue, EnergyTank, Engine, EquipmentType,
+    EquipmentTypeComponent, HandlingCycle, InterfacePosition, ISOType, LayoutAsset,
+    LayoutPreset, LayoutVersion, LinearAxis, LinearMarker, Location, MotionAxis,
+    OperationalPosition, OperationalStateInterval, Order, OrderLeg,
+    OrderLegRouteEdge, OrderRoutePlan, Pile, PileBooking, PointOfWork, Position,
+    ProcessHierarchy, ProcessVersion, RouteEdge, RouteEdgeRequirement, RouteNode,
+    ServiceCargoRoute, SignalBinding, SignalDefinition, Spreader, StorageGrid,
+    TransferInterface, VisitCargoRoute, WorkQueue,
+)
+from .services import (
+    geographic_distance_m, publish_layout, sync_axis_graph, sync_berth_bollards,
+    sync_interface_positions, sync_yard_grid, validate_layout, vessel_end_bollard,
+)
+from .services.layout import (
+    geometry_bounds_center, move_asset_dependents, resolved_interface_point,
+    resolved_route_node_point, sync_block_crane_rail, polyline_length_m,
+)
+from .services.che_rails import (
+    align_che_pose, assign_che_to_rail, che_rail_assignment, che_rail_motion,
+    validate_che_rail_assignment,
+)
 
 
 ####  Position for container view
@@ -28,7 +52,7 @@ class PositionSerializer(serializers.ModelSerializer):
     container = ContainerVisitSerializerShort(many=True, read_only=True)
     
     def get_formatted_str(self, obj):
-        block_name = obj.pile.block.name
+        block_name = obj.pile.storage_grid.name
         bay = obj.pile.get_bay_name()
         row = obj.pile.get_row_name()
         tier = f"{obj.tier:02d}"
@@ -62,7 +86,7 @@ class PileSerializer(serializers.ModelSerializer):
     positions = PositionSerializer(many=True, read_only=True)
     
     def get_formatted_str(self, obj):
-        block_name = obj.block.name
+        block_name = obj.storage_grid.name
         bay = obj.get_bay_name()
         row = obj.get_row_name()
         return f"{block_name}.{bay}.{row}"
@@ -76,12 +100,12 @@ class PileSerializer(serializers.ModelSerializer):
     __str__ = serializers.SerializerMethodField(method_name='get_formatted_str')
     bay_name = serializers.SerializerMethodField(method_name='get_bay_name')
     row_name = serializers.SerializerMethodField(method_name='get_row_name')
-    block_name = serializers.CharField(source='block.name', read_only=True)
+    block_name = serializers.CharField(source='storage_grid.name', read_only=True)
 
     class Meta:
         model = Pile
         fields = [
-            'pk', 'block', 'block_name', 'bay', 'bay_name', 'row', 'row_name', 'tiers',
+            'pk', 'storage_grid', 'block_name', 'bay', 'bay_name', 'row', 'row_name', 'tiers',
             'allows_in', 'allows_out', 'is_restricted', 'allows_20', 'allows_40', 'allows_45',
             'latitude', 'longitude', '__str__', 'positions'
         ]
@@ -93,10 +117,10 @@ class PileSerializer(serializers.ModelSerializer):
                            .update(**validated_data)
         return pile
         
-####  Block
-class BlockSerializer(serializers.ModelSerializer):
-    location_name = serializers.CharField(source='location.name', read_only=True)
-    block_type_display = serializers.CharField(source='get_block_type_display', read_only=True)
+#### Storage grid
+class StorageGridSerializer(serializers.ModelSerializer):
+    location_name = serializers.CharField(source='layout_asset.layout_version.location.name', read_only=True)
+    grid_kind_display = serializers.CharField(source='get_grid_kind_display', read_only=True)
     piles = PileSerializer(many=True, read_only=True)
     
     # Statistics fields
@@ -109,8 +133,8 @@ class BlockSerializer(serializers.ModelSerializer):
     free_positions_45 = serializers.IntegerField(read_only=True)
 
     class Meta:
-        model = Block
-        fields = ['pk', 'name', 'location', 'location_name', 'block_type', 'block_type_display',
+        model = StorageGrid
+        fields = ['pk', 'name', 'layout_asset', 'location_name', 'grid_kind', 'grid_kind_display',
                  'max_bays', 'max_rows', 'max_tier', 'latitude', 'longitude',
                  'heading_deg', 'slot_heading_deg',
                  'pile_length_m', 'pile_width_m', 'pile_height_m',
@@ -120,7 +144,7 @@ class BlockSerializer(serializers.ModelSerializer):
                  'bay_spacing_m', 'row_spacing_m', 'is_heapzone',
                  'total_piles', 'total_positions_20', 'total_positions_40', 'total_positions_45',
                  'free_positions_20', 'free_positions_40', 'free_positions_45', 'piles']
-        extra_kwargs = {'location': {'required': False}}
+        extra_kwargs = {'layout_asset': {'required': False}}
 
     @transaction.atomic
     def create(self, validated_data):
@@ -399,11 +423,19 @@ class HandlingCycleSerializer(serializers.ModelSerializer):
 
 ####  Che
 class CheSerializer(serializers.ModelSerializer):
+    rail_motion = serializers.SerializerMethodField()
+    rail_assignment = serializers.SerializerMethodField()
+    rail_axis = serializers.PrimaryKeyRelatedField(
+        queryset=LinearAxis.objects.all(), required=False, allow_null=True, write_only=True,
+    )
+    rail_position_m = serializers.FloatField(required=False, allow_null=True, write_only=True)
+    rail_min_position_m = serializers.FloatField(required=False, allow_null=True, write_only=True)
+    rail_max_position_m = serializers.FloatField(required=False, allow_null=True, write_only=True)
     equipment_type_details = serializers.SerializerMethodField()
     equipment_type_name = serializers.CharField(source='equipment_type.name', read_only=True)
     equipment_type_code = serializers.CharField(source='equipment_type.equipment_type', read_only=True)
     location_name = serializers.CharField(source='location.name', read_only=True)
-    current_block_name = serializers.CharField(source='current_block.name', read_only=True, allow_null=True)
+    current_asset_name = serializers.CharField(source='current_asset.name', read_only=True, allow_null=True)
     current_user_name = serializers.CharField(source='current_user.username', read_only=True, allow_null=True)
     tic40_power_state = serializers.SerializerMethodField()
     tic40_activity_state = serializers.SerializerMethodField()
@@ -415,7 +447,6 @@ class CheSerializer(serializers.ModelSerializer):
     running_hours = serializers.FloatField(required=False, min_value=0)
     running_hours_since_last_maintenance = serializers.FloatField(required=False, min_value=0)
 
-    cblock = BlockSerializer(many=False, read_only=True)
     class Meta:
         model = Che
         fields = [
@@ -424,16 +455,24 @@ class CheSerializer(serializers.ModelSerializer):
             'dispatch_available',
             'is_dispatched', 'is_in_maintenance', 'tic40_power_state',
             'tic40_activity_state', 'active_operational_state',
-            'current_block', 'current_block_name', 'current_user', 'current_user_name',
+            'current_asset', 'current_asset_name', 'current_user', 'current_user_name',
             'location', 'location_name', 'twistlock_closed', 'latitude', 'longitude', 'rotation',
             'running_hours', 'running_hours_since_last_maintenance',
-            'fuel_level', 'last_maintenance', 'state_updated_at', 'components', 'cblock'
+            'fuel_level', 'last_maintenance', 'state_updated_at', 'components',
+            'rail_motion', 'rail_assignment', 'rail_axis', 'rail_position_m',
+            'rail_min_position_m', 'rail_max_position_m',
         ]
         read_only_fields = ['state_updated_at']
         extra_kwargs = {'location': {'required': False}}
 
     def get_equipment_type_details(self, obj):
         return EquipmentTypeSerializer(obj.equipment_type).data
+
+    def get_rail_motion(self, obj):
+        return che_rail_motion(obj)
+
+    def get_rail_assignment(self, obj):
+        return che_rail_assignment(obj)
 
     def get_tic40_power_state(self, obj):
         return 'ON' if obj.powered_on else 'OFF'
@@ -456,6 +495,11 @@ class CheSerializer(serializers.ModelSerializer):
         is_in_maintenance = attrs.get(
             'is_in_maintenance', getattr(current, 'is_in_maintenance', False)
         )
+        current_asset = attrs.get('current_asset', getattr(current, 'current_asset', None))
+        view = self.context.get('view')
+        location_id = getattr(current, 'location_id', None) or (
+            getattr(view, 'kwargs', {}).get('location_pk') if view else None
+        )
         errors = {}
         if working and not powered_on:
             errors['working'] = 'Working equipment must be powered on.'
@@ -465,8 +509,56 @@ class CheSerializer(serializers.ModelSerializer):
             errors['working'] = 'Equipment in maintenance cannot be working.'
         if is_in_maintenance and is_available:
             errors['is_available'] = 'Equipment in maintenance cannot be available.'
+        if current_asset and location_id and current_asset.layout_version.location_id != int(location_id):
+            errors['current_asset'] = 'Assigned area must belong to the CHE terminal.'
+        elif current_asset and current_asset.asset_kind not in LayoutAsset.CHE_PLACEMENT_KINDS:
+            errors['current_asset'] = (
+                'CHE may only be assigned to a quay, yard block, parking area, or rail area.'
+            )
+        rail_fields = {
+            'rail_axis', 'rail_position_m', 'rail_min_position_m', 'rail_max_position_m',
+        }
+        if rail_fields & attrs.keys():
+            equipment_type = attrs.get('equipment_type', getattr(current, 'equipment_type', None))
+            if not equipment_type:
+                errors['equipment_type'] = 'Select an equipment type before assigning a rail.'
+            axis = attrs.get('rail_axis')
+            assignment = che_rail_assignment(current) if current else None
+            if axis is None and current:
+                axis = LinearAxis.objects.filter(pk=assignment['axis_id']).first() if assignment else None
+            elif axis and assignment and assignment['axis_id'] != axis.pk:
+                assignment = None
+            if equipment_type:
+                probe = Che(
+                    pk=getattr(current, 'pk', None),
+                    equipment_type=equipment_type,
+                    current_asset=current_asset,
+                    location_id=int(location_id or attrs.get('location').pk),
+                    latitude=attrs.get('latitude', getattr(current, 'latitude', None)),
+                    longitude=attrs.get('longitude', getattr(current, 'longitude', None)),
+                )
+                try:
+                    validate_che_rail_assignment(
+                        probe,
+                        axis,
+                        attrs.get('rail_position_m', assignment['position_m'] if assignment else None),
+                        attrs.get('rail_min_position_m', assignment['min_position_m'] if assignment else None),
+                        attrs.get('rail_max_position_m', assignment['max_position_m'] if assignment else None),
+                    )
+                except DjangoValidationError as exc:
+                    errors.update(exc.message_dict)
         if errors:
             raise serializers.ValidationError(errors)
+        if {'current_asset', 'equipment_type', 'latitude', 'longitude', 'rotation'} & attrs.keys():
+            equipment_type = attrs.get('equipment_type', getattr(current, 'equipment_type', None))
+            if equipment_type and (location_id or attrs.get('location')):
+                probe = Che(pk=getattr(current, 'pk', None), equipment_type=equipment_type,
+                            current_asset=current_asset, location_id=int(location_id or attrs['location'].pk),
+                            latitude=attrs.get('latitude', getattr(current, 'latitude', None)),
+                            longitude=attrs.get('longitude', getattr(current, 'longitude', None)))
+                aligned = align_che_pose(probe, force=current is None or 'current_asset' in attrs or 'equipment_type' in attrs)
+                if aligned:
+                    attrs.update(aligned)
         return attrs
 
     def _pop_component_values(self, validated_data):
@@ -476,22 +568,49 @@ class CheSerializer(serializers.ModelSerializer):
         }
         return {name: validated_data.pop(name) for name in names if name in validated_data}
 
+    def _pop_rail_values(self, validated_data):
+        names = {
+            'rail_axis', 'rail_position_m', 'rail_min_position_m', 'rail_max_position_m',
+        }
+        return {name: validated_data.pop(name) for name in names if name in validated_data}
+
+    def _save_rail_values(self, che, values):
+        if not values:
+            return
+        axis = values.get('rail_axis')
+        assignment = che_rail_assignment(che)
+        if axis is None:
+            axis = LinearAxis.objects.filter(pk=assignment['axis_id']).first() if assignment else None
+        elif assignment and assignment['axis_id'] != axis.pk:
+            assignment = None
+        assign_che_to_rail(
+            che,
+            axis,
+            values.get('rail_position_m', assignment['position_m'] if assignment else None),
+            values.get('rail_min_position_m', assignment['min_position_m'] if assignment else None),
+            values.get('rail_max_position_m', assignment['max_position_m'] if assignment else None),
+        )
+
     @transaction.atomic
     def create(self, validated_data):
         component_values = self._pop_component_values(validated_data)
+        rail_values = self._pop_rail_values(validated_data)
         che = super().create(validated_data)
         from .services.che_components import apply_che_component_values
 
         apply_che_component_values(che, component_values)
+        self._save_rail_values(che, rail_values)
         return che
 
     @transaction.atomic
     def update(self, instance, validated_data):
         component_values = self._pop_component_values(validated_data)
+        rail_values = self._pop_rail_values(validated_data)
         che = super().update(instance, validated_data)
         from .services.che_components import apply_che_component_values
 
         apply_che_component_values(che, component_values)
+        self._save_rail_values(che, rail_values)
         return che
 
 class UserSerializer(serializers.HyperlinkedModelSerializer):
@@ -519,6 +638,7 @@ class ContainerVisitSerializer(serializers.ModelSerializer):
     ib_carrier_name = serializers.CharField(source='ib_carrier.name', read_only=True, allow_null=True)
     ob_carrier_name = serializers.CharField(source='ob_carrier.name', read_only=True, allow_null=True)
     category_display = serializers.CharField(source='get_category_display', read_only=True)
+    current_che_name = serializers.CharField(source='current_che.name', read_only=True, allow_null=True)
 
     class Meta:
         model = ContainerVisit
@@ -527,19 +647,104 @@ class ContainerVisitSerializer(serializers.ModelSerializer):
             'ib_carrier', 'ib_carrier_name', 'ob_carrier', 'ob_carrier_name',
             'location', 'location_name', 'position', 'eta', 'etd', 'weight',
             'pod', 'pod_name', 'pod2', 'pod2_name', 'requires_power', 'is_imdg',
-            'latitude', 'longitude', 'z_position', 'bill_of_lading', 'booking'
+            'latitude', 'longitude', 'z_position', 'bill_of_lading', 'booking',
+            'status', 'current_che', 'current_che_name', 'last_updated',
+        ]
+        read_only_fields = ['current_che', 'last_updated']
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        status_value = attrs.get('status', getattr(self.instance, 'status', ContainerVisit.PREADVISED))
+        current_che = getattr(self.instance, 'current_che', None) if self.instance else None
+        if status_value == ContainerVisit.ON_EQUIPMENT and not current_che:
+            raise serializers.ValidationError({
+                'status': 'Use the execution pickup service to place a container on equipment.'
+            })
+        if status_value != ContainerVisit.ON_EQUIPMENT and current_che:
+            raise serializers.ValidationError({
+                'status': 'Use the execution drop service to remove a container from equipment.'
+            })
+        return attrs
+
+class OrderLegRouteEdgeSerializer(serializers.ModelSerializer):
+    route_edge_code = serializers.CharField(source='route_edge.code', read_only=True)
+    edge_kind = serializers.CharField(source='route_edge.edge_kind', read_only=True)
+    movement_mode = serializers.CharField(source='route_edge.movement_mode', read_only=True)
+
+    class Meta:
+        model = OrderLegRouteEdge
+        fields = [
+            'id', 'sequence', 'route_edge', 'route_edge_code',
+            'edge_kind', 'movement_mode',
         ]
 
+
 class OrderLegSerializer(serializers.ModelSerializer):
+    start_position_code = serializers.CharField(source='start_position.code', read_only=True)
+    end_position_code = serializers.CharField(source='end_position.code', read_only=True)
+    route_edges = OrderLegRouteEdgeSerializer(many=True, read_only=True)
+
     class Meta:
         model = OrderLeg
-        fields = ['order', 'che','start_position','end_position']
+        fields = [
+            'id', 'order', 'route_plan', 'sequence', 'leg_kind', 'status', 'che',
+            'equipment_type', 'distance', 'start_position', 'end_position',
+            'start_position_code', 'end_position_code', 'route_edges',
+            'planned_start', 'planned_end', 'actual_start', 'actual_end',
+        ]
+
+
+class OrderRoutePlanSerializer(serializers.ModelSerializer):
+    legs = OrderLegSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = OrderRoutePlan
+        fields = [
+            'id', 'order', 'layout_version', 'version', 'status', 'calculated_at',
+            'cost', 'reason', 'legs',
+        ]
+        read_only_fields = ['calculated_at']
 
 class OrderSerializer(serializers.ModelSerializer):
     order_legs = OrderLegSerializer(many=True, read_only=True)
+    route_plans = OrderRoutePlanSerializer(many=True, read_only=True)
+    from_position_code = serializers.CharField(source='from_position.code', read_only=True)
+    to_position_code = serializers.CharField(source='to_position.code', read_only=True)
+
     class Meta:
         model = Order
-        fields = ['order_type', 'container_number', 'container_number', 'work_queue', 'etc', 'atc', 'from_position', 'to_position', 'order_legs']
+        fields = [
+            'id', 'order_type', 'status', 'priority', 'container_number', 'work_queue',
+            'etc', 'atc', 'released_at', 'completed_at',
+            'from_position', 'from_position_code', 'to_position', 'to_position_code',
+            'order_legs', 'route_plans',
+        ]
+        read_only_fields = ['status', 'atc', 'released_at', 'completed_at']
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        queue = attrs.get('work_queue', getattr(self.instance, 'work_queue', None))
+        container = attrs.get('container_number', getattr(self.instance, 'container_number', None))
+        start = attrs.get('from_position', getattr(self.instance, 'from_position', None))
+        finish = attrs.get('to_position', getattr(self.instance, 'to_position', None))
+        errors = {}
+        if self.instance is None and not start:
+            errors['from_position'] = 'A routed order requires a start position.'
+        if self.instance is None and not finish:
+            errors['to_position'] = 'A routed order requires an end position.'
+        if start and finish and start.layout_version_id != finish.layout_version_id:
+            errors['to_position'] = 'Start and end positions must use the same layout version.'
+        if start and finish and start.pk == finish.pk:
+            errors['to_position'] = 'Start and end positions must be different.'
+        if queue and queue.location_id:
+            for field, position in [('from_position', start), ('to_position', finish)]:
+                if position and position.layout_version.location_id != queue.location_id:
+                    errors[field] = 'Position belongs to another terminal.'
+            if container and container.location_id != queue.location_id:
+                errors['container_number'] = 'Container visit belongs to another terminal.'
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
         
 class WorkQueueSerializer(serializers.ModelSerializer):
     orders = OrderSerializer(many=True, read_only=True)
@@ -624,6 +829,29 @@ class CarrierVisitSerializer(serializers.ModelSerializer):
             'expected_productivity_per_hour', 'calculated_duration_minutes',
             'calculated_duration_display',
         ]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        berth = attrs.get('planned_berth', getattr(self.instance, 'planned_berth', None))
+        start = attrs.get('berth_start_bollard', getattr(self.instance, 'berth_start_bollard', None))
+        end = attrs.get('berth_end_bollard', getattr(self.instance, 'berth_end_bollard', None))
+        location = attrs.get('location', getattr(self.instance, 'location', None))
+        if berth and location and berth.quay_asset.layout_version.location_id != location.pk:
+            raise serializers.ValidationError({'planned_berth': 'The berth must belong to the visit terminal.'})
+        for field, marker in [
+            ('berth_start_bollard', start), ('berth_end_bollard', end),
+        ]:
+            if marker and not self._marker_is_on_berth(marker, berth):
+                raise serializers.ValidationError({field: 'The bollard must belong to the selected berth segment.'})
+        return attrs
+
+    @staticmethod
+    def _marker_is_on_berth(marker, berth):
+        if not berth or marker.axis_id != berth.quay_face_axis_id:
+            return False
+        low = min(berth.start_chainage_m, berth.end_chainage_m)
+        high = max(berth.start_chainage_m, berth.end_chainage_m)
+        return low <= marker.chainage_m <= high
 
 
 #### Bulk Container Creation Serializer
@@ -721,11 +949,11 @@ class CarrierServiceSerializer(serializers.ModelSerializer):
         vessel_length = attrs.get('vessel_length_m', getattr(self.instance, 'vessel_length_m', None))
         primary_equipment = attrs.get('primary_equipment_type', getattr(self.instance, 'primary_equipment_type', None))
         equipment_requirements = attrs.get('equipment_requirements')
-        if berth and location and berth.location_id != location.id:
+        if berth and location and berth.quay_asset.layout_version.location_id != location.id:
             raise serializers.ValidationError({'default_berth': 'The berth must belong to the service terminal.'})
-        if start and (not berth or start.berth_id != berth.id):
+        if start and not CarrierVisitSerializer._marker_is_on_berth(start, berth):
             raise serializers.ValidationError({'default_start_bollard': 'The start bollard must belong to the selected berth.'})
-        if end and (not berth or end.berth_id != berth.id):
+        if end and not CarrierVisitSerializer._marker_is_on_berth(end, berth):
             raise serializers.ValidationError({'default_end_bollard': 'The end bollard must belong to the selected berth.'})
         is_water_service = service_type in [CarrierService.VESSEL, CarrierService.BARGE]
         if is_water_service:
@@ -742,7 +970,7 @@ class CarrierServiceSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({'vessel_length_m': exc.messages})
         elif vessel_length is not None:
             raise serializers.ValidationError({'vessel_length_m': 'Only vessel and barge services have a vessel length.'})
-        elif start and end and start.number >= end.number:
+        elif start and end and start.sequence >= end.sequence:
             raise serializers.ValidationError('The end bollard must be after the start bollard.')
         if primary_equipment and not self._supports_service(primary_equipment, service_type):
             raise serializers.ValidationError({
@@ -854,245 +1082,689 @@ class PointOfWorkSerializer(serializers.ModelSerializer):
     class Meta:
         model = PointOfWork
         fields = [
-            'id', 'name', 'pow_type', 'pow_type_display', 'related_ches', 'related_ches_names',
-            'location', 'location_name', 'code', 'latitude', 'longitude',
-            'max_throughput', 'is_active'
+            'id', 'name', 'pow_type', 'pow_type_display', 'related_ches',
+            'related_ches_names', 'location', 'location_name', 'code',
+            'latitude', 'longitude', 'operational_position', 'route_node',
+            'max_throughput', 'is_active',
         ]
-
-
-class POWConnectionSerializer(serializers.ModelSerializer):
-    from_pow_name = serializers.CharField(source='from_pow.name', read_only=True)
-    from_pow_code = serializers.CharField(source='from_pow.code', read_only=True)
-    to_pow_name = serializers.CharField(source='to_pow.name', read_only=True)
-    to_pow_code = serializers.CharField(source='to_pow.code', read_only=True)
-
-    class Meta:
-        model = POWConnection
-        fields = [
-            'id', 'from_pow', 'from_pow_name', 'from_pow_code',
-            'to_pow', 'to_pow_name', 'to_pow_code',
-            'distance', 'max_throughput', 'is_bidirectional',
-            'cost', 'is_enabled'
-        ]
-
-
-class BollardSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Bollard
-        fields = [
-            'id', 'number', 'name', 'distance_along_berth_m',
-            'spacing_from_previous_m', 'latitude', 'longitude',
-        ]
-
-
-class BerthSerializer(serializers.ModelSerializer):
-    bollards = BollardSerializer(many=True, read_only=True)
-    bollard_spacings = serializers.ListField(
-        child=serializers.FloatField(min_value=0.01),
-        write_only=True,
-        required=False,
-    )
-
-    class Meta:
-        model = Berth
-        fields = [
-            'id', 'location', 'area', 'name', 'latitude', 'longitude',
-            'heading_deg', 'length_m', 'width_m', 'water_side',
-            'bollard_direction', 'bollard_count',
-            'default_bollard_spacing_m', 'start_margin_m', 'end_margin_m',
-            'bollard_spacings', 'bollards',
-        ]
-        extra_kwargs = {
-            'location': {'required': False},
-            'area': {'read_only': True},
-            'name': {'required': False},
-        }
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        count = int(attrs.get('bollard_count', getattr(self.instance, 'bollard_count', 15)))
-        spacing = float(attrs.get(
-            'default_bollard_spacing_m',
-            getattr(self.instance, 'default_bollard_spacing_m', 20.0),
-        ))
-        length = float(attrs.get('length_m', getattr(self.instance, 'length_m', 300.0)))
-        start_margin = float(attrs.get('start_margin_m', getattr(self.instance, 'start_margin_m', 0.0)))
-        end_margin = float(attrs.get('end_margin_m', getattr(self.instance, 'end_margin_m', 0.0)))
-        spacings = attrs.get('bollard_spacings')
-        if spacings is not None and len(spacings) != count - 1:
-            raise serializers.ValidationError({'bollard_spacings': f'Provide exactly {count - 1} spacing values.'})
-        occupied = start_margin + end_margin + sum(spacings if spacings is not None else [spacing] * (count - 1))
-        if occupied > length + 0.001:
-            raise serializers.ValidationError('Bollard spacings and margins exceed the berth length.')
+        location = attrs.get('location', getattr(self.instance, 'location', None))
+        position = attrs.get('operational_position', getattr(self.instance, 'operational_position', None))
+        node = attrs.get('route_node', getattr(self.instance, 'route_node', None))
+        if position and location and position.layout_version.location_id != location.pk:
+            raise serializers.ValidationError({'operational_position': 'Position belongs to another terminal.'})
+        if node and location and node.layout_version.location_id != location.pk:
+            raise serializers.ValidationError({'route_node': 'Route node belongs to another terminal.'})
+        return attrs
+
+
+class GeoJSONGeometryMixin:
+    geometry_types = {'Point', 'LineString', 'Polygon'}
+
+    def validate_geometry(self, value):
+        if not isinstance(value, dict) or value.get('type') not in self.geometry_types:
+            raise serializers.ValidationError('Use a GeoJSON Point, LineString, or Polygon geometry.')
+        coordinates = value.get('coordinates')
+        if not isinstance(coordinates, list) or not coordinates:
+            raise serializers.ValidationError('Geometry coordinates cannot be empty.')
+        return value
+
+    @staticmethod
+    def _validate_points(points):
+        if not isinstance(points, list) or len(points) < 2:
+            raise serializers.ValidationError('An axis requires at least two coordinate points.')
+        for point in points:
+            if not isinstance(point, list) or len(point) < 2:
+                raise serializers.ValidationError('Every point must be [longitude, latitude].')
+            longitude, latitude = float(point[0]), float(point[1])
+            if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
+                raise serializers.ValidationError('Coordinates must use valid WGS-84 longitude/latitude values.')
+        return points
+
+
+class LinearMarkerSerializer(serializers.ModelSerializer):
+    number = serializers.IntegerField(source='sequence', read_only=True)
+    distance_along_berth_m = serializers.FloatField(source='chainage_m', read_only=True)
+    spacing_from_previous_m = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LinearMarker
+        fields = [
+            'id', 'axis', 'marker_kind', 'sequence', 'number', 'code', 'name',
+            'chainage_m', 'distance_along_berth_m', 'lateral_offset_m',
+            'spacing_from_previous_m', 'latitude', 'longitude', 'metadata',
+        ]
+
+    def get_spacing_from_previous_m(self, obj):
+        return obj.metadata.get('spacing_from_previous_m')
+
+
+class AccessPolicySerializer(serializers.ModelSerializer):
+    layout_version = serializers.PrimaryKeyRelatedField(read_only=True)
+    allowed_che_type_names = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AccessPolicy
+        fields = [
+            'id', 'layout_version', 'code', 'name', 'allowed_che_types',
+            'allowed_che_type_names', 'allow_loaded', 'allow_empty',
+            'max_width_m', 'max_height_m', 'max_weight_t', 'rules',
+        ]
+        extra_kwargs = {'layout_version': {'required': False}}
+
+    def get_allowed_che_type_names(self, obj):
+        return list(obj.allowed_che_types.values_list('name', flat=True))
+
+
+class LinearAxisSerializer(GeoJSONGeometryMixin, serializers.ModelSerializer):
+    markers = LinearMarkerSerializer(many=True, read_only=True)
+    generated_edge_count = serializers.IntegerField(source='route_edges.count', read_only=True)
+
+    class Meta:
+        model = LinearAxis
+        fields = [
+            'id', 'asset', 'code', 'name', 'axis_kind', 'points', 'direction',
+            'lane_count', 'capacity', 'width_m', 'speed_limit_kph',
+            'access_policy', 'is_enabled', 'metadata', 'markers',
+            'generated_edge_count',
+        ]
+        extra_kwargs = {'asset': {'required': False}}
+
+    def validate_points(self, value):
+        return self._validate_points(value)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        asset = attrs.get('asset', getattr(self.instance, 'asset', self.context.get('asset')))
+        policy = attrs.get('access_policy', getattr(self.instance, 'access_policy', None))
+        axis_kind = attrs.get('axis_kind', getattr(self.instance, 'axis_kind', None))
+        if policy and asset and policy.layout_version_id != asset.layout_version_id:
+            raise serializers.ValidationError({'access_policy': 'Policy belongs to another layout version.'})
+        if self.instance and self.instance.road_interfaces.exists() and axis_kind != LinearAxis.ROAD_CENTERLINE:
+            raise serializers.ValidationError({'axis_kind': 'A road used by transfer interfaces must remain a road centerline.'})
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
-        spacings = validated_data.pop('bollard_spacings', None)
-        berth = super().create(validated_data)
-        return sync_berth_bollards(berth, spacings)
+        axis = super().create(validated_data)
+        try:
+            return sync_axis_graph(axis)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
 
     @transaction.atomic
     def update(self, instance, validated_data):
-        spacings = validated_data.pop('bollard_spacings', None)
-        berth = super().update(instance, validated_data)
-        return sync_berth_bollards(berth, spacings)
-
-
-class AreaSerializer(serializers.ModelSerializer):
-    location_name = serializers.CharField(source='location.name', read_only=True)
-    area_type_display = serializers.CharField(source='get_area_type_display', read_only=True)
-    yard_grid = serializers.JSONField(write_only=True, required=False)
-    block_config = serializers.SerializerMethodField()
-    parking_settings = serializers.JSONField(write_only=True, required=False)
-    parking_config = serializers.SerializerMethodField()
-    berth_settings = serializers.JSONField(write_only=True, required=False)
-    berth_config = serializers.SerializerMethodField()
-
-    def validate_coordinates(self, value):
-        if not isinstance(value, list) or len(value) < 3:
-            raise serializers.ValidationError('An area requires at least three coordinates.')
-        self._validate_geographic_points(value)
-        return value
-
-    @staticmethod
-    def _validate_geographic_points(points):
-        for point in points:
-            if not isinstance(point, list) or len(point) < 2:
-                raise serializers.ValidationError('Every coordinate must be [longitude, latitude].')
-            try:
-                longitude, latitude = float(point[0]), float(point[1])
-            except (TypeError, ValueError):
-                raise serializers.ValidationError('Coordinates must be numeric.')
-            if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
-                raise serializers.ValidationError('Coordinates must be valid longitude and latitude values.')
-
-    def get_block_config(self, obj):
-        if not obj.block_id:
-            return None
-        return BlockSerializer(obj.block, context=self.context).data
-
-    def get_parking_config(self, obj):
+        previous_points = [list(point) for point in instance.points or []]
+        axis = super().update(instance, validated_data)
         try:
-            parking = obj.parking_config
-        except ParkingArea.DoesNotExist:
-            return None
-        return ParkingAreaSerializer(parking, context=self.context).data
+            return sync_axis_graph(axis, previous_points=previous_points)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
 
-    def get_berth_config(self, obj):
-        try:
-            berth = obj.berth_config
-        except Berth.DoesNotExist:
-            return None
-        return BerthSerializer(berth, context=self.context).data
 
-    def _save_yard_block(self, area, grid):
-        if area.area_type != Area.YARD_BLOCK:
-            if area.block_id:
-                block = area.block
-                area.block = None
-                area.save(update_fields=['block'])
-                block.delete()
-            return area
+class BerthSegmentSerializer(serializers.ModelSerializer):
+    bollards = serializers.SerializerMethodField()
+    location = serializers.IntegerField(source='quay_asset.layout_version.location_id', read_only=True)
+    heading_deg = serializers.FloatField(source='quay_asset.heading_deg', read_only=True)
+    length_m = serializers.FloatField(read_only=True)
+    width_m = serializers.SerializerMethodField()
+    bollard_count = serializers.IntegerField(write_only=True, required=False, default=15, min_value=2)
+    default_bollard_spacing_m = serializers.FloatField(write_only=True, required=False, default=20.0, min_value=0.01)
+    start_margin_m = serializers.FloatField(write_only=True, required=False, default=0.0, min_value=0)
+    end_margin_m = serializers.FloatField(write_only=True, required=False, default=0.0, min_value=0)
+    bollard_spacings = serializers.ListField(
+        child=serializers.FloatField(min_value=0.01), write_only=True, required=False,
+    )
 
-        if not grid and area.block_id:
-            return area
-        if not grid:
-            raise serializers.ValidationError({'yard_grid': 'Yard block configuration is required.'})
+    class Meta:
+        model = BerthSegment
+        fields = [
+            'id', 'quay_asset', 'quay_face_axis', 'code', 'name',
+            'start_chainage_m', 'end_chainage_m', 'water_side',
+            'bollard_direction', 'is_active', 'location', 'heading_deg',
+            'length_m', 'width_m', 'bollard_count',
+            'default_bollard_spacing_m', 'start_margin_m', 'end_margin_m',
+            'bollard_spacings', 'bollards',
+        ]
+        extra_kwargs = {
+            'quay_asset': {'required': False},
+            'quay_face_axis': {'required': False},
+        }
 
-        grid = dict(grid)
-        grid['name'] = area.name
-        grid['location'] = area.location_id
-        serializer = BlockSerializer(
-            instance=area.block if area.block_id else None,
-            data=grid,
-            context=self.context,
-        )
-        serializer.is_valid(raise_exception=True)
-        block = serializer.save()
-        if area.block_id != block.pk:
-            area.block = block
-            area.save(update_fields=['block'])
-        return area
+    def get_bollards(self, obj):
+        return LinearMarkerSerializer(obj.bollards, many=True).data
 
-    def _save_parking(self, area, settings):
-        try:
-            parking = area.parking_config
-        except ParkingArea.DoesNotExist:
-            parking = None
-        if area.area_type != Area.PARKING:
-            if parking:
-                parking.delete()
-            return area
-        if settings is None and parking:
-            return area
-        settings = settings or {}
-        allowed = settings.pop('allowed_che_types', [])
-        if parking is None:
-            parking = ParkingArea.objects.create(area=area, **settings)
-        else:
-            for key, value in settings.items():
-                setattr(parking, key, value)
-            parking.save()
-        parking.allowed_che_types.set(allowed)
-        return area
+    def get_width_m(self, obj):
+        return float(obj.quay_asset.metadata.get('width_m', 0.0))
 
-    def _save_berth(self, area, settings):
-        try:
-            berth = area.berth_config
-        except Berth.DoesNotExist:
-            berth = None
-        if area.area_type != Area.BERTH:
-            if berth:
-                berth.delete()
-            return area
-        if settings is None and berth:
-            return area
-        if settings is None:
-            raise serializers.ValidationError({'berth_settings': 'Berth configuration is required.'})
-        serializer = BerthSerializer(
-            instance=berth,
-            data={**settings, 'location': area.location_id, 'name': area.name},
-            context=self.context,
-        )
-        serializer.is_valid(raise_exception=True)
-        berth = serializer.save(area=area)
-        area.coordinates = berth_polygon(
-            berth.latitude, berth.longitude, berth.heading_deg,
-            berth.length_m, berth.width_m,
-        )
-        area.area = berth.length_m * berth.width_m
-        area.save(update_fields=['coordinates', 'area'])
-        return area
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        quay = attrs.get('quay_asset', getattr(self.instance, 'quay_asset', self.context.get('quay_asset')))
+        axis = attrs.get('quay_face_axis', getattr(self.instance, 'quay_face_axis', self.context.get('quay_face_axis')))
+        if quay and quay.asset_kind != LayoutAsset.QUAY:
+            raise serializers.ValidationError({'quay_asset': 'A berth segment must belong to a quay.'})
+        if quay and axis and axis.asset_id != quay.pk:
+            raise serializers.ValidationError({'quay_face_axis': 'The quay face axis belongs to another asset.'})
+        if axis and axis.axis_kind != LinearAxis.QUAY_FACE:
+            raise serializers.ValidationError({'quay_face_axis': 'Select an axis with quay-face kind.'})
+        return attrs
+
+    def _bollard_values(self, validated_data):
+        return {
+            key: validated_data.pop(key)
+            for key in [
+                'bollard_count', 'default_bollard_spacing_m', 'start_margin_m',
+                'end_margin_m', 'bollard_spacings',
+            ]
+            if key in validated_data
+        }
 
     @transaction.atomic
     def create(self, validated_data):
-        grid = validated_data.pop('yard_grid', None)
-        parking = validated_data.pop('parking_settings', None)
-        berth = validated_data.pop('berth_settings', None)
-        area = super().create(validated_data)
-        self._save_yard_block(area, grid)
-        self._save_parking(area, parking)
-        return self._save_berth(area, berth)
+        values = self._bollard_values(validated_data)
+        berth = super().create(validated_data)
+        sync_berth_bollards(
+            berth, values.get('bollard_spacings'), values.get('bollard_count'),
+            values.get('default_bollard_spacing_m'), values.get('start_margin_m'),
+            values.get('end_margin_m'),
+        )
+        return berth
 
     @transaction.atomic
     def update(self, instance, validated_data):
-        grid = validated_data.pop('yard_grid', None)
-        parking = validated_data.pop('parking_settings', None)
-        berth = validated_data.pop('berth_settings', None)
-        area = super().update(instance, validated_data)
-        self._save_yard_block(area, grid)
-        self._save_parking(area, parking)
-        return self._save_berth(area, berth)
+        values = self._bollard_values(validated_data)
+        berth = super().update(instance, validated_data)
+        if values:
+            sync_berth_bollards(
+                berth, values.get('bollard_spacings'), values.get('bollard_count'),
+                values.get('default_bollard_spacing_m'), values.get('start_margin_m'),
+                values.get('end_margin_m'),
+            )
+        return berth
+
+
+class InterfacePositionSerializer(serializers.ModelSerializer):
+    operational_position_id = serializers.IntegerField(source='operational_position.id', read_only=True)
 
     class Meta:
-        model = Area
+        model = InterfacePosition
         fields = [
-            'id', 'location', 'location_name', 'name', 'area_type', 'area_type_display',
-            'area', 'is_visible', 'coordinates', 'yard_grid', 'block_config',
-            'parking_settings', 'parking_config', 'berth_settings', 'berth_config'
+            'id', 'transfer_interface', 'sequence', 'code', 'name', 'latitude',
+            'longitude', 'heading_deg', 'capacity', 'is_enabled', 'lane_index', 'position_index',
+            'operational_position_id',
         ]
+
+    def to_representation(self, instance):
+        result = super().to_representation(instance)
+        point = resolved_interface_point(instance)
+        result.update(longitude=point[0] if point else None, latitude=point[1] if point else None)
+        return result
+
+
+class TransferInterfaceSerializer(GeoJSONGeometryMixin, serializers.ModelSerializer):
+    positions = InterfacePositionSerializer(many=True, read_only=True)
+    position_count = serializers.IntegerField(write_only=True, required=False, min_value=1)
+
+    class Meta:
+        model = TransferInterface
+        fields = [
+            'id', 'asset', 'storage_grid', 'axis', 'road_axis', 'access_policy', 'code', 'name',
+            'interface_kind', 'side', 'geometry', 'bay_start', 'bay_end',
+            'row_start', 'row_end', 'capacity', 'cargo_may_rest',
+            'requires_vehicle_present', 'is_enabled', 'metadata',
+            'position_count', 'positions', 'lane_count', 'lane_spacing_m',
+            'position_reference', 'reference_che', 'longitudinal_offset_m',
+            'lateral_offset_m', 'position_spacing_m',
+        ]
+        extra_kwargs = {'asset': {'required': False}}
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        asset = attrs.get('asset', getattr(self.instance, 'asset', self.context.get('asset')))
+        grid = attrs.get('storage_grid', getattr(self.instance, 'storage_grid', None))
+        axis = attrs.get('axis', getattr(self.instance, 'axis', None))
+        road_axis = attrs.get('road_axis', getattr(self.instance, 'road_axis', None))
+        policy = attrs.get('access_policy', getattr(self.instance, 'access_policy', None))
+        if grid and asset and grid.layout_asset.layout_version_id != asset.layout_version_id:
+            raise serializers.ValidationError({'storage_grid': 'Grid belongs to another layout version.'})
+        if axis and asset and axis.asset.layout_version_id != asset.layout_version_id:
+            raise serializers.ValidationError({'axis': 'Axis belongs to another layout version.'})
+        if road_axis and asset and road_axis.asset.layout_version_id != asset.layout_version_id:
+            raise serializers.ValidationError({'road_axis': 'Road belongs to another layout version.'})
+        if road_axis and road_axis.axis_kind != LinearAxis.ROAD_CENTERLINE:
+            raise serializers.ValidationError({'road_axis': 'Select a road-centerline axis.'})
+        if policy and asset and policy.layout_version_id != asset.layout_version_id:
+            raise serializers.ValidationError({'access_policy': 'Policy belongs to another layout version.'})
+        import math
+        for field in ('lane_spacing_m', 'position_spacing_m', 'longitudinal_offset_m', 'lateral_offset_m'):
+            value = attrs.get(field, getattr(self.instance, field, 3.5 if field == 'lane_spacing_m' else 6.5 if field == 'position_spacing_m' else 0))
+            if not math.isfinite(value) or (field.endswith('spacing_m') and value <= 0):
+                raise serializers.ValidationError({field: 'Supply a finite value; spacing must be positive.'})
+        if attrs.get('lane_count', getattr(self.instance, 'lane_count', 1)) < 1:
+            raise serializers.ValidationError({'lane_count': 'At least one lane is required.'})
+        reference = attrs.get('position_reference', getattr(self.instance, 'position_reference', 'fixed'))
+        che = attrs.get('reference_che', getattr(self.instance, 'reference_che', None))
+        if (reference == 'che') != bool(che):
+            raise serializers.ValidationError({'reference_che': 'Select a CHE only for equipment-relative positions.'})
+        if che and asset and che.location_id != asset.layout_version.location_id:
+            raise serializers.ValidationError({'reference_che': 'Equipment belongs to another terminal.'})
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        count = validated_data.pop('position_count', None)
+        interface = super().create(validated_data)
+        try:
+            sync_interface_positions(interface, count)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+        return interface
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        count = validated_data.pop('position_count', None)
+        changed = set(validated_data)
+        interface = super().update(instance, validated_data)
+        if count is not None or changed:
+            try:
+                sync_interface_positions(interface, count)
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(exc.messages)
+        return interface
+
+
+class StorageGridSummarySerializer(serializers.ModelSerializer):
+    layout_asset = serializers.PrimaryKeyRelatedField(read_only=True)
+    pile_count = serializers.IntegerField(source='piles.count', read_only=True)
+    position_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StorageGrid
+        fields = [
+            'id', 'layout_asset', 'grid_kind', 'name', 'max_bays', 'max_rows',
+            'max_tier', 'latitude', 'longitude', 'heading_deg',
+            'slot_heading_deg', 'pile_length_m', 'pile_width_m', 'pile_height_m',
+            'initial_bay', 'initial_row', 'bay_order', 'row_order',
+            'bay_naming', 'row_naming', 'bay_use_heading_axis',
+            'padding_top_m', 'padding_bottom_m', 'padding_left_m',
+            'padding_right_m', 'bay_spacing_m', 'row_spacing_m', 'is_heapzone',
+            'pile_count', 'position_count',
+        ]
+        extra_kwargs = {'layout_asset': {'required': False}, 'name': {'required': False}}
+
+    def get_position_count(self, obj):
+        return Position.objects.filter(pile__storage_grid=obj).count()
+
+
+class LayoutAssetSerializer(GeoJSONGeometryMixin, serializers.ModelSerializer):
+    layout_version = serializers.PrimaryKeyRelatedField(read_only=True)
+    storage_grid_settings = serializers.JSONField(write_only=True, required=False)
+    storage_grid = StorageGridSummarySerializer(read_only=True)
+    linear_axes = LinearAxisSerializer(many=True, read_only=True)
+    transfer_interfaces = TransferInterfaceSerializer(many=True, read_only=True)
+    berth_segments = BerthSegmentSerializer(many=True, read_only=True)
+    asset_kind_display = serializers.CharField(source='get_asset_kind_display', read_only=True)
+
+    class Meta:
+        model = LayoutAsset
+        fields = [
+            'id', 'layout_version', 'parent', 'access_policy', 'code', 'name', 'asset_kind',
+            'asset_kind_display', 'geometry', 'heading_deg', 'elevation_m',
+            'is_visible', 'is_active', 'metadata', 'storage_grid_settings',
+            'storage_grid', 'linear_axes', 'transfer_interfaces',
+            'berth_segments',
+        ]
+        extra_kwargs = {'layout_version': {'required': False}}
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        layout = getattr(self.instance, 'layout_version', self.context.get('layout_version'))
+        parent = attrs.get('parent', getattr(self.instance, 'parent', None))
+        policy = attrs.get('access_policy', getattr(self.instance, 'access_policy', None))
+        if parent and layout and parent.layout_version_id != layout.pk:
+            raise serializers.ValidationError({'parent': 'Parent belongs to another layout version.'})
+        if policy and layout and policy.layout_version_id != layout.pk:
+            raise serializers.ValidationError({'access_policy': 'Policy belongs to another layout version.'})
+        if parent and policy and parent.layout_version_id != policy.layout_version_id:
+            raise serializers.ValidationError({'access_policy': 'Policy and parent must use the same layout version.'})
+        cursor, seen = parent, set()
+        while cursor:
+            if cursor.pk in seen or (self.instance and cursor.pk == self.instance.pk):
+                raise serializers.ValidationError({'parent': 'Asset hierarchy cannot contain cycles.'})
+            seen.add(cursor.pk)
+            cursor = cursor.parent
+        return attrs
+
+    def _save_grid(self, asset, settings):
+        try:
+            existing = asset.storage_grid
+        except StorageGrid.DoesNotExist:
+            existing = None
+        if asset.asset_kind != LayoutAsset.YARD_BLOCK:
+            if existing:
+                existing.delete()
+            return
+        if settings is None and existing:
+            return
+        if settings is None:
+            raise serializers.ValidationError({
+                'storage_grid_settings': 'A yard block requires storage grid settings.'
+            })
+        payload = {**settings, 'name': settings.get('name') or asset.name}
+        serializer = StorageGridSummarySerializer(existing, data=payload, context=self.context)
+        serializer.is_valid(raise_exception=True)
+        grid = serializer.save(layout_asset=asset)
+        try:
+            sync_yard_grid(grid)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({'storage_grid_settings': exc.messages})
+
+    def _sync_terminal_origin(self, asset):
+        if asset.asset_kind != LayoutAsset.TERMINAL:
+            return
+        try:
+            longitude, latitude = geometry_bounds_center(asset.geometry)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({'geometry': exc.messages})
+        location = asset.layout_version.location
+        location.map_origin_latitude = latitude
+        location.map_origin_longitude = longitude
+        location.save(update_fields=['map_origin_latitude', 'map_origin_longitude'])
+
+    @transaction.atomic
+    def create(self, validated_data):
+        settings = validated_data.pop('storage_grid_settings', None)
+        asset = super().create(validated_data)
+        self._save_grid(asset, settings)
+        sync_block_crane_rail(asset)
+        self._sync_terminal_origin(asset)
+        return asset
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        settings = validated_data.pop('storage_grid_settings', None)
+        old_geometry, old_heading = instance.geometry, instance.heading_deg
+        road_axes = list(instance.linear_axes.filter(axis_kind=LinearAxis.ROAD_CENTERLINE)) \
+            if instance.asset_kind == LayoutAsset.ROAD else []
+        previous_road_points = {
+            axis.pk: [list(point) for point in axis.points or []]
+            for axis in road_axes
+        }
+        asset = super().update(instance, validated_data)
+        try:
+            move_asset_dependents(
+                asset,
+                old_geometry,
+                old_heading,
+                skip_root_road_axes=asset.asset_kind == LayoutAsset.ROAD,
+            )
+            if asset.asset_kind == LayoutAsset.ROAD and asset.geometry.get('type') == 'LineString':
+                for axis in road_axes:
+                    axis.points = asset.geometry.get('coordinates', [])
+                    axis.save(update_fields=['points'])
+                    sync_axis_graph(axis, previous_points=previous_road_points[axis.pk])
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({'geometry': exc.messages})
+        self._save_grid(asset, settings)
+        sync_block_crane_rail(asset)
+        self._sync_terminal_origin(asset)
+        return asset
+
+
+class LayoutVersionSerializer(serializers.ModelSerializer):
+    location = serializers.PrimaryKeyRelatedField(read_only=True)
+    asset_count = serializers.IntegerField(source='assets.count', read_only=True)
+    node_count = serializers.IntegerField(source='route_nodes.count', read_only=True)
+    edge_count = serializers.IntegerField(source='route_edges.count', read_only=True)
+
+    class Meta:
+        model = LayoutVersion
+        fields = [
+            'id', 'location', 'version', 'name', 'status', 'is_current',
+            'based_on', 'notes', 'created_by', 'created_at', 'updated_at',
+            'published_at', 'asset_count', 'node_count', 'edge_count',
+        ]
+        read_only_fields = ['version', 'created_by', 'created_at', 'updated_at', 'published_at']
         extra_kwargs = {'location': {'required': False}}
+
+
+class OperationalPositionSerializer(serializers.ModelSerializer):
+    layout_version = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    def to_representation(self, instance):
+        result = super().to_representation(instance)
+        if instance.interface_position_id:
+            point = resolved_interface_point(instance.interface_position)
+            result.update(longitude=point[0] if point else None, latitude=point[1] if point else None)
+        return result
+
+    class Meta:
+        model = OperationalPosition
+        fields = '__all__'
+        extra_kwargs = {'layout_version': {'required': False}}
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        layout = getattr(self.instance, 'layout_version', self.context.get('layout_version'))
+        related = {
+            'asset': attrs.get('asset', getattr(self.instance, 'asset', None)),
+            'axis': attrs.get('axis', getattr(self.instance, 'axis', None)),
+            'stack_position': attrs.get('stack_position', getattr(self.instance, 'stack_position', None)),
+            'interface_position': attrs.get('interface_position', getattr(self.instance, 'interface_position', None)),
+        }
+        layout_ids = {
+            'asset': lambda value: value.layout_version_id,
+            'axis': lambda value: value.asset.layout_version_id,
+            'stack_position': lambda value: value.pile.storage_grid.layout_asset.layout_version_id,
+            'interface_position': lambda value: value.transfer_interface.asset.layout_version_id,
+        }
+        for field, value in related.items():
+            if value and layout and layout_ids[field](value) != layout.pk:
+                raise serializers.ValidationError({field: 'Object belongs to another layout version.'})
+        latitude = attrs.get('latitude', getattr(self.instance, 'latitude', None))
+        longitude = attrs.get('longitude', getattr(self.instance, 'longitude', None))
+        if (latitude is None) != (longitude is None):
+            raise serializers.ValidationError({'latitude': 'Latitude and longitude must be supplied together.'})
+        return attrs
+
+
+class RouteNodeSerializer(serializers.ModelSerializer):
+    layout_version = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    def to_representation(self, instance):
+        result = super().to_representation(instance)
+        result['point'] = resolved_route_node_point(instance)
+        return result
+
+    class Meta:
+        model = RouteNode
+        fields = '__all__'
+        read_only_fields = ['transfer_interface', 'is_generated']
+        extra_kwargs = {'layout_version': {'required': False}}
+
+    def validate_point(self, value):
+        if not isinstance(value, dict) or value.get('type') != 'Point':
+            raise serializers.ValidationError('A route node requires GeoJSON Point geometry.')
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        layout = getattr(self.instance, 'layout_version', self.context.get('layout_version'))
+        asset = attrs.get('asset', getattr(self.instance, 'asset', None))
+        position = attrs.get('operational_position', getattr(self.instance, 'operational_position', None))
+        transfer_interface = attrs.get('transfer_interface', getattr(self.instance, 'transfer_interface', None))
+        if asset and layout and asset.layout_version_id != layout.pk:
+            raise serializers.ValidationError({'asset': 'Asset belongs to another layout version.'})
+        if position and layout and position.layout_version_id != layout.pk:
+            raise serializers.ValidationError({'operational_position': 'Position belongs to another layout version.'})
+        if transfer_interface and layout and transfer_interface.layout_version.pk != layout.pk:
+            raise serializers.ValidationError({'transfer_interface': 'Interface belongs to another layout version.'})
+        return attrs
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        node = super().update(instance, validated_data)
+        connected_edges = RouteEdge.objects.filter(
+            models.Q(from_node=node) | models.Q(to_node=node),
+            is_generated=False,
+        ).select_related('from_node', 'to_node')
+        for edge in connected_edges:
+            edge.distance_m = geographic_distance_m(
+                edge.from_node.point['coordinates'], edge.to_node.point['coordinates'],
+            )
+            edge.save(update_fields=['distance_m'])
+        return node
+
+
+class RouteEdgeRequirementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RouteEdgeRequirement
+        fields = ['id', 'route_edge', 'component_type', 'role', 'minimum_quantity']
+        extra_kwargs = {'route_edge': {'required': False}}
+
+
+class RouteEdgeSerializer(serializers.ModelSerializer):
+    layout_version = serializers.PrimaryKeyRelatedField(read_only=True)
+    requirements = RouteEdgeRequirementSerializer(many=True, required=False)
+
+    def to_representation(self, instance):
+        result = super().to_representation(instance)
+        first, last = resolved_route_node_point(instance.from_node), resolved_route_node_point(instance.to_node)
+        result['distance_m'] = geographic_distance_m(first['coordinates'], last['coordinates']) if first and last else None
+        return result
+
+    class Meta:
+        model = RouteEdge
+        fields = [
+            'id', 'layout_version', 'code', 'name', 'from_node', 'to_node',
+            'edge_kind', 'movement_mode', 'source_axis', 'access_policy',
+            'distance_m', 'nominal_duration_seconds', 'capacity', 'base_cost',
+            'is_generated', 'is_enabled', 'metadata', 'requirements',
+        ]
+        read_only_fields = ['is_generated']
+        extra_kwargs = {
+            'layout_version': {'required': False},
+            'code': {'required': False, 'allow_blank': True},
+        }
+
+    @staticmethod
+    def _derived_code(first, second):
+        return f'{first.code[:45]}__TO__{second.code[:45]}'
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        layout = attrs.get('layout_version', getattr(self.instance, 'layout_version', self.context.get('layout_version')))
+        first = attrs.get('from_node', getattr(self.instance, 'from_node', None))
+        second = attrs.get('to_node', getattr(self.instance, 'to_node', None))
+        source_axis = attrs.get('source_axis', getattr(self.instance, 'source_axis', None))
+        policy = attrs.get('access_policy', getattr(self.instance, 'access_policy', None))
+        if first and second and first.pk == second.pk:
+            raise serializers.ValidationError({'to_node': 'An edge must connect two different nodes.'})
+        for field, value in [('from_node', first), ('to_node', second)]:
+            if value and layout and value.layout_version_id != layout.pk:
+                raise serializers.ValidationError({field: 'Node belongs to another layout version.'})
+        if first and second and first.layout_version_id != second.layout_version_id:
+            raise serializers.ValidationError({'to_node': 'Both nodes must belong to the same layout version.'})
+        if source_axis and layout and source_axis.asset.layout_version_id != layout.pk:
+            raise serializers.ValidationError({'source_axis': 'Axis belongs to another layout version.'})
+        if policy and layout and policy.layout_version_id != layout.pk:
+            raise serializers.ValidationError({'access_policy': 'Policy belongs to another layout version.'})
+        if first and second:
+            attrs['code'] = self._derived_code(first, second)
+            if not attrs.get('name'):
+                attrs['name'] = f'{first.name} to {second.name}'[:140]
+            duplicate = RouteEdge.objects.filter(layout_version=layout, code=attrs['code'])
+            if self.instance:
+                duplicate = duplicate.exclude(pk=self.instance.pk)
+            if duplicate.exists():
+                raise serializers.ValidationError({'to_node': 'This routing connection already exists.'})
+        return attrs
+
+    def _save_requirements(self, edge, requirements):
+        edge.requirements.all().delete()
+        RouteEdgeRequirement.objects.bulk_create([
+            RouteEdgeRequirement(route_edge=edge, **requirement)
+            for requirement in requirements
+        ])
+
+    @transaction.atomic
+    def create(self, validated_data):
+        requirements = validated_data.pop('requirements', [])
+        edge = super().create(validated_data)
+        self._save_requirements(edge, requirements)
+        return edge
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        requirements = validated_data.pop('requirements', None)
+        edge = super().update(instance, validated_data)
+        if requirements is not None:
+            self._save_requirements(edge, requirements)
+        return edge
+
+
+class CheOperatingScopeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CheOperatingScope
+        fields = '__all__'
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        che = attrs.get('che', getattr(self.instance, 'che', None))
+        equipment_type = attrs.get('equipment_type', getattr(self.instance, 'equipment_type', None))
+        asset = attrs.get('asset', getattr(self.instance, 'asset', None))
+        axis = attrs.get('axis', getattr(self.instance, 'axis', None))
+        service_lane_axis = attrs.get('service_lane_axis', getattr(self.instance, 'service_lane_axis', None))
+        min_chainage = attrs.get('min_chainage_m', getattr(self.instance, 'min_chainage_m', None))
+        max_chainage = attrs.get('max_chainage_m', getattr(self.instance, 'max_chainage_m', None))
+        bay_start = attrs.get('bay_start', getattr(self.instance, 'bay_start', None))
+        bay_end = attrs.get('bay_end', getattr(self.instance, 'bay_end', None))
+        row_start = attrs.get('row_start', getattr(self.instance, 'row_start', None))
+        row_end = attrs.get('row_end', getattr(self.instance, 'row_end', None))
+        errors = {}
+        if bool(che) == bool(equipment_type):
+            errors['che'] = 'Select exactly one CHE or equipment type.'
+        if not asset and not axis:
+            errors['asset'] = 'Select an asset or axis for this operating scope.'
+        if asset and axis and asset.layout_version_id != axis.asset.layout_version_id:
+            errors['axis'] = 'Axis and asset must belong to the same layout version.'
+        topology = asset or (axis.asset if axis else None)
+        if service_lane_axis:
+            if service_lane_axis.axis_kind != LinearAxis.ROAD_CENTERLINE:
+                errors['service_lane_axis'] = 'Select a road-centerline lane.'
+            elif topology and service_lane_axis.asset.layout_version_id != topology.layout_version_id:
+                errors['service_lane_axis'] = 'Service lane belongs to another layout version.'
+            elif topology and service_lane_axis.asset_id != topology.id:
+                errors['service_lane_axis'] = 'Service lane must belong to the scoped layout asset.'
+        if che and (asset or axis):
+            layout_location_id = asset.layout_version.location_id if asset else axis.asset.layout_version.location_id
+            if che.location_id != layout_location_id:
+                errors['che'] = 'CHE and operating scope must belong to the same terminal.'
+        if min_chainage is not None and max_chainage is not None and min_chainage > max_chainage:
+            errors['max_chainage_m'] = 'Maximum chainage must be at least minimum chainage.'
+        if (min_chainage is not None or max_chainage is not None) and not axis:
+            errors['axis'] = 'Chainage limits require a movement axis.'
+        if axis and len(axis.points or []) >= 2:
+            length = polyline_length_m(axis.points)
+            if min_chainage is not None and not 0 <= min_chainage <= length:
+                errors['min_chainage_m'] = f'Minimum chainage must be between 0 and {length:.2f} m.'
+            if max_chainage is not None and not 0 <= max_chainage <= length:
+                errors['max_chainage_m'] = f'Maximum chainage must be between 0 and {length:.2f} m.'
+        if bay_start is not None and bay_end is not None and bay_start > bay_end:
+            errors['bay_end'] = 'End bay must be at least start bay.'
+        if row_start is not None and row_end is not None and row_start > row_end:
+            errors['row_end'] = 'End row must be at least start row.'
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
+
+
+class LayoutPresetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LayoutPreset
+        fields = '__all__'
 
 
 class EquipmentTypeSerializer(serializers.ModelSerializer):
@@ -1154,106 +1826,6 @@ class EquipmentTypeSerializer(serializers.ModelSerializer):
             setattr(instance, name, value)
         instance.save()
         return instance
-
-
-class RoutingNodeSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = RoutingNode
-        fields = ['id', 'location', 'name', 'latitude', 'longitude']
-
-
-class RoadSerializer(serializers.ModelSerializer):
-    allowed_che_type_details = EquipmentTypeSerializer(
-        source='allowed_che_types', many=True, read_only=True
-    )
-    start_node_details = RoutingNodeSerializer(source='start_node', read_only=True)
-    end_node_details = RoutingNodeSerializer(source='end_node', read_only=True)
-
-    class Meta:
-        model = Road
-        fields = [
-            'id', 'location', 'name', 'points', 'lane_count', 'capacity', 'direction',
-            'allowed_che_types', 'allowed_che_type_details', 'start_node', 'end_node',
-            'start_node_details', 'end_node_details', 'is_enabled'
-        ]
-        extra_kwargs = {
-            'location': {'required': False},
-            'start_node': {'read_only': True},
-            'end_node': {'read_only': True},
-        }
-
-    def validate_points(self, value):
-        if not isinstance(value, list) or len(value) < 2:
-            raise serializers.ValidationError('A road requires at least two points.')
-        for point in value:
-            if not isinstance(point, list) or len(point) < 2:
-                raise serializers.ValidationError('Every road point must be [longitude, latitude].')
-            try:
-                longitude, latitude = float(point[0]), float(point[1])
-            except (TypeError, ValueError):
-                raise serializers.ValidationError('Road point coordinates must be numeric.')
-            if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
-                raise serializers.ValidationError('Road points must contain valid longitude and latitude values.')
-        return value
-
-    def _sync_endpoint_nodes(self, road):
-        first, last = road.points[0], road.points[-1]
-        if road.start_node_id is None:
-            road.start_node = RoutingNode.objects.create(
-                location=road.location, name=f'{road.name} start',
-                longitude=first[0], latitude=first[1]
-            )
-        else:
-            road.start_node.longitude, road.start_node.latitude = first[0], first[1]
-            road.start_node.name = f'{road.name} start'
-            road.start_node.save(update_fields=['name', 'longitude', 'latitude'])
-        if road.end_node_id is None:
-            road.end_node = RoutingNode.objects.create(
-                location=road.location, name=f'{road.name} end',
-                longitude=last[0], latitude=last[1]
-            )
-        else:
-            road.end_node.longitude, road.end_node.latitude = last[0], last[1]
-            road.end_node.name = f'{road.name} end'
-            road.end_node.save(update_fields=['name', 'longitude', 'latitude'])
-        road.save(update_fields=['start_node', 'end_node'])
-        return road
-
-    @transaction.atomic
-    def create(self, validated_data):
-        return self._sync_endpoint_nodes(super().create(validated_data))
-
-    @transaction.atomic
-    def update(self, instance, validated_data):
-        return self._sync_endpoint_nodes(super().update(instance, validated_data))
-
-
-class ParkingAreaSerializer(serializers.ModelSerializer):
-    allowed_che_type_details = EquipmentTypeSerializer(
-        source='allowed_che_types', many=True, read_only=True
-    )
-
-    class Meta:
-        model = ParkingArea
-        fields = ['id', 'area', 'capacity', 'allowed_che_types', 'allowed_che_type_details']
-        extra_kwargs = {'area': {'read_only': True}}
-
-
-class TerminalConnectionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = TerminalConnection
-        fields = ['id', 'node', 'block', 'parking_area', 'is_bidirectional', 'cost', 'is_enabled']
-
-    def validate(self, attrs):
-        block = attrs.get('block', getattr(self.instance, 'block', None))
-        parking = attrs.get('parking_area', getattr(self.instance, 'parking_area', None))
-        node = attrs.get('node', getattr(self.instance, 'node', None))
-        if bool(block) == bool(parking):
-            raise serializers.ValidationError('Select exactly one block or parking area.')
-        target_location = block.location_id if block else parking.area.location_id
-        if node and node.location_id != target_location:
-            raise serializers.ValidationError('The node and connected asset must belong to the same terminal.')
-        return attrs
 
 
 class ProcessHierarchySerializer(serializers.ModelSerializer):
@@ -1396,10 +1968,9 @@ class BusinessProcessExecutionSerializer(serializers.ModelSerializer):
 
 ####  Location
 class LocationSerializer(serializers.ModelSerializer):
-    blocks = BlockSerializer(many=True, read_only=True)
     ches = CheSerializer(many=True, read_only=True)
-    areas = AreaSerializer(many=True, read_only=True)
-    berths = BerthSerializer(many=True, read_only=True)
+    layout_versions = LayoutVersionSerializer(many=True, read_only=True)
+    current_layout = serializers.SerializerMethodField()
     timezone_utc_offset_minutes = serializers.SerializerMethodField()
     local_datetime = serializers.SerializerMethodField()
 
@@ -1412,6 +1983,10 @@ class LocationSerializer(serializers.ModelSerializer):
     def get_local_datetime(self, obj):
         return self._local_now(obj).isoformat()
 
+    def get_current_layout(self, obj):
+        layout = obj.layout_versions.filter(is_current=True).first()
+        return LayoutVersionSerializer(layout).data if layout else None
+
     class Meta:
         model = Location
         fields = [
@@ -1419,5 +1994,5 @@ class LocationSerializer(serializers.ModelSerializer):
             'latitude', 'longitude', 'map_origin_latitude', 'map_origin_longitude',
             'map_width_m', 'map_height_m', 'map_units_per_meter',
             'default_zoom', 'angle', 'timezone', 'timezone_utc_offset_minutes', 'local_datetime',
-            'blocks', 'ches', 'areas', 'berths'
+            'ches', 'layout_versions', 'current_layout'
         ]

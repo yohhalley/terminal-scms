@@ -1,6 +1,9 @@
 *~
+.DS_Store
 .godot/
 tmp/
 *.translation
 misc/
 build/
+PythonFiles/
+third_party/Gazebo_Harbour_Models/upstream_source/**/*.import

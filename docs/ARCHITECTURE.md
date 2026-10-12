@@ -1,5 +1,22 @@
 # Architecture
 
+## Repository and deployment boundaries
+
+Terminal SCMS is a monorepo, but it is not a monolithic process. MiniTOS and
+Terminal OES have separate Docker images, databases, migrations, APIs, and
+runtime responsibilities. The root Compose project assembles those services
+into one installable product.
+
+Optional resource-heavy capabilities should use deployment profiles:
+
+- `core`: MiniTOS, Terminal OES, HiveMQ, and PostgreSQL.
+- `automation`: FlowFuse and its hosted Node-RED applications.
+- `historian`: Timebase.
+- `ai`: a future local or external language-model gateway.
+
+Only `core` is implemented today. Optional profiles will be added after their
+host-specific prerequisites have been completed and measured.
+
 ## Ownership
 
 | Domain | Authoritative owner |
@@ -31,4 +48,3 @@ QoS 1 guarantees at-least-once delivery, not exactly once. UUID inbox records ma
 - Versioned JSON events are used for business workflows such as order release, dispatch, pickup, drop, and completion.
 
 Tahu is an SDK/reference implementation for Sparkplug. It is not an automatic database replication product.
-

@@ -13,7 +13,15 @@ Timebase 2.0 is currently described by its documentation as a beta release. The 
 - Documented minimum: 4 cores and 8 GB RAM
 - Required ports 4511-4512 through 4571-4572: free
 
-Phase 1b is paused at the required human decision: whether browsers will access Timebase only on this computer or from other computers on the network. The runbook requires that answer before writing `timebase/.env` or its Compose file.
+Phase 1b has been answered: Timebase must be reachable from another computer on
+the local network. The intended topology is a Linux Docker host accessed from
+the development Mac. Do not generate host-specific `.env` or Compose files until
+the Linux host address, DNS name, storage path, CPU architecture, and Docker
+versions have been checked.
+
+Use a static DHCP reservation and a local DNS name for the Linux host. Keep the
+database and administrative ports restricted to the LAN; remote access should
+use a private overlay such as Tailscale or WireGuard instead of public port
+forwarding.
 
 After that answer, the runbook separately asks whether the Timebase AI assistant should use Anthropic, another provider, or remain unconfigured. Credentials and component client secrets must be entered by the user in the relevant Timebase interfaces and must never be placed in this repository.
-

@@ -1,8 +1,8 @@
 extends Control
 
 var url = "http://localhost:8000/minitos_core"
-var user = "godot_user"
-var pwd = "R92llO4wRxKx5^g"
+var user = ""
+var pwd = ""
 
 func _ready():
 	$HTTPRequest.request_completed.connect(_on_request_completed)
@@ -48,7 +48,7 @@ func RequestBlockList(location_id):
 		"Authorization: " + auth
 	]
 	
-	var request_url = url + "/locations/" + location_id + "/blocks/"
+	var request_url = url + "/locations/" + location_id + "/storage-grids/"
 	print("Sending HTTP request:", request_url)
 	
 	# Send GET request to the specified endpoint with headers

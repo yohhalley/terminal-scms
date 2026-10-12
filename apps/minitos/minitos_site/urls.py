@@ -17,7 +17,10 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 from rest_framework.urlpatterns import format_suffix_patterns
-from minitos_core.views import berth_plan_view, landing_page, terminal_browser_view, terminal_editor_view
+from minitos_core.views import (
+    berth_plan_view, che_editor_view, landing_page, terminal_browser_view,
+    terminal_editor_view,
+)
 
 
 urlpatterns = [
@@ -26,6 +29,8 @@ urlpatterns = [
     path('terminal-editor/', terminal_browser_view, name='location_select'),
     path('terminal-editor/new/', terminal_editor_view, name='terminal_editor_new'),
     path('terminal-editor/<int:location_id>/', terminal_editor_view, name='terminal_editor'),
+    path('terminals/<int:location_id>/equipment/', che_editor_view, name='che_editor'),
+    path('che-editor/<int:location_id>/', che_editor_view, name='che_editor_legacy'),
     path('terminals/<int:location_id>/berth-plan/', berth_plan_view, name='berth_plan'),
     path('terminal-editor/<int:location_id>/berth-plan/', berth_plan_view, name='berth_plan_legacy'),
     path('api_auth/', include('rest_framework.urls')),

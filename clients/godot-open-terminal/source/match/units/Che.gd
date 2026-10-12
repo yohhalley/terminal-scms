@@ -7,9 +7,12 @@ var equipment_type_id: int = 0
 var equipment_type_name: String = ""
 var equipment_type_code: String = ""  # TT, SC, RTG, ASC, STS
 
-# Status and State
-var status: String = "OF"  # IL, WK, OF, BD, MA
-var is_available: bool = false # Available for assignment
+# TIC4.0 power/activity facts and MiniTOS operational assignment facts.
+var powered_on: bool = false
+var working: bool = false
+var is_available: bool = false
+var is_dispatched: bool = false
+var is_in_maintenance: bool = false
 var fuel_level: float = 100.0  # Percentage 0.0 - 100.0
 var last_maintenance: String = "" # ISO8601 string or epoch ms
 
@@ -61,14 +64,15 @@ func _ready():
 	add_child(fuel_consumption_timer)
 	fuel_consumption_timer.start()
 	
-	_set_status("OF")  # Default to Offline on spawn
+	_set_powered_on(false)
 	
 	#Create and connect timer for status updates
 	_initialize_status_update_timer()
 
 	# Update status when action changes
-	action_changed.connect(func(new_action): 
-		_set_status("WK" if new_action != null else "IL")
+	action_changed.connect(func(new_action):
+		_set_working(new_action != null)
+		is_dispatched = new_action != null
 		_update_visual_state()
 	)
 
@@ -94,19 +98,15 @@ func _set_action(action_node):
 
 # Validate if CHE can accept new assignments
 func new_action_allowed() -> bool:
-	return is_available and status != "OF" and status != "BD" and status != "MA"
+	return powered_on and is_available and not is_in_maintenance
 
 # Update status update timer
 func _update_status_update_timer():
-	# Set timer interval based on status
-	if status == "WK":
+	if not powered_on:
+		_stop_status_update_timer()
+	elif working:
 		status_update_timer.wait_time = 1.0
 		status_update_timer.start()
-	elif status == "IL":
-		status_update_timer.wait_time = 10.0
-		status_update_timer.start()
-	elif status == "OF":
-		_stop_status_update_timer()
 	else:
 		status_update_timer.wait_time = 10.0
 		status_update_timer.start()
@@ -125,19 +125,22 @@ func _stop_status_update_timer():
 		
 #	 Turn on the CHE
 func _turn_on():
-	_set_status("IL")  # Set to Idle when turned on
+	_set_powered_on(true)
+	_set_working(false)
 	_emit_device_birth()
 	_update_status_update_timer()
 
 #	 Turn off the CHE
 func _turn_off():
-	_set_status("OF")  # Set to Offline when turned off
+	_set_working(false)
+	is_available = false
+	_set_powered_on(false)
 	_emit_device_death()
 	_update_status_update_timer()
 
 # Make the CHE available for assignments
 func _make_available():
-	if get_status() == "OF":
+	if not powered_on or is_in_maintenance:
 		print("Cannot make CHE available while Offline.")
 		return
 	else:
@@ -146,7 +149,7 @@ func _make_available():
 
 # Make the CHE unavailable for assignments
 func _make_unavailable():
-	if get_status() == "WK":
+	if working:
 		print("Cannot make CHE unavailable while Working.")
 		return
 	else:
@@ -156,14 +159,24 @@ func _make_unavailable():
 func get_availability() -> bool:
 	return is_available
 
-func _set_status(new_status: String):
-	if status != new_status:
-		status = new_status
+func _set_powered_on(value: bool):
+	if powered_on != value:
+		powered_on = value
 		_update_status_update_timer()
 		_update_visual_state()
 
+
+func _set_working(value: bool):
+	if working != value:
+		working = value
+		_update_status_update_timer()
+		_update_visual_state()
+
+
 func get_status() -> String:
-	return status
+	if not powered_on:
+		return "OF"
+	return "WK" if working else "IL"
 
 
 func _get_mqtt_client():
@@ -180,11 +193,11 @@ func _emit_device_data():
 	var data = {
 		"timestamp": Time.get_unix_time_from_system() * 1000,  # Convert to milliseconds
 		"metrics": [
-			{
-				"name": "Status",
-				"type": "String",
-				"value": status
-			},
+			{"name": "PoweredOn", "type": "Boolean", "value": powered_on},
+			{"name": "Working", "type": "Boolean", "value": working},
+			{"name": "IsAvailable", "type": "Boolean", "value": is_available},
+			{"name": "IsDispatched", "type": "Boolean", "value": is_dispatched},
+			{"name": "InMaintenance", "type": "Boolean", "value": is_in_maintenance},
 			{
 				"name": "FuelLevel",
 				"type": "Float",
@@ -246,11 +259,10 @@ func _handle_unit_death():
 	super._handle_unit_death()
 
 func _on_fuel_consumption_timer_timeout():
-	#Fuel is consumed if the che is Working or Idle and the fuel is above 0.
-	if fuel_level > 0:
-		if status == "WK":
+	if powered_on and fuel_level > 0:
+		if working:
 			fuel_level -= 0.01
-		elif status == "IL":
+		else:
 			fuel_level -= 0.001
 		if fuel_level <= 0:
 			_turn_off()
@@ -265,9 +277,11 @@ func initialize_from_data(che_data: Dictionary):
 	equipment_type_id = che_data.get("equipment_type", 0)
 	equipment_type_name = che_data.get("equipment_type_name", "")
 	
-	# Set status and state
-	status = che_data.get("status", "IL")  # Default to Idle instead of Offline
-	is_available = che_data.get("is_available", false) # Default to not available
+	powered_on = bool(che_data.get("powered_on", false))
+	working = bool(che_data.get("working", false))
+	is_available = bool(che_data.get("is_available", false))
+	is_dispatched = bool(che_data.get("is_dispatched", false))
+	is_in_maintenance = bool(che_data.get("is_in_maintenance", false))
 	fuel_level = che_data.get("fuel_level", 100)
 	last_maintenance = "NA" #che_data.get("last_maintenance", "")
 	
@@ -288,25 +302,20 @@ func initialize_from_data(che_data: Dictionary):
 		y_position = che_data.y_position
 		global_position = Vector3(x_position, 0, y_position)
 	
-	# Update visual state based on status
 	_update_visual_state()
-	if status != "OF":
+	if powered_on:
 		_emit_device_birth()
 
 func _update_visual_state():
-	# Update the CHE's appearance based on its status
 	var status_color = Color.WHITE  # default
-	match status:
-		"IL":  # Idle
-			status_color = Color.GREEN
-		"WK":  # Working
-			status_color = Color.BLUE
-		"OF":  # Offline
-			status_color = Color.GRAY
-		"BD":  # Breakdown
-			status_color = Color.RED
-		"MA":  # In Maintenance
-			status_color = Color.YELLOW
+	if is_in_maintenance:
+		status_color = Color.YELLOW
+	elif not powered_on:
+		status_color = Color.GRAY
+	elif working:
+		status_color = Color.BLUE
+	elif is_available:
+		status_color = Color.GREEN
 	
 	# Apply the color to the geometry
 	var _color_material = StandardMaterial3D.new()

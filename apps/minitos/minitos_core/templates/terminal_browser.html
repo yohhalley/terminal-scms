@@ -65,6 +65,7 @@
                     <div class="dimensions">{{ terminal.location.map_width_m|floatformat:0 }} × {{ terminal.location.map_height_m|floatformat:0 }} m<br>{{ terminal.location.timezone }}</div>
                     <div class="actions">
                         {% if terminal.can_manage_berth_plan %}<a class="button" href="{% url 'berth_plan' terminal.location.id %}">Berth Plan</a>{% endif %}
+                        {% if terminal.can_edit_terminal %}<a class="button" href="{% url 'che_editor' terminal.location.id %}">Equipment</a>{% endif %}
                         {% if terminal.can_edit_terminal %}<a class="button" href="{% url 'terminal_editor' terminal.location.id %}">Edit Layout</a>{% endif %}
                     </div>
                 </div>

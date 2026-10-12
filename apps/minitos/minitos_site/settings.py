@@ -28,6 +28,16 @@ DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',') if os.environ.get('ALLOWED_HOSTS') else []
 
+# Shared service credential used only by the OES execution callback API.
+MES_API_TOKEN = os.environ.get('MES_API_TOKEN', '')
+MQTT_HOST = os.environ.get('MQTT_HOST', 'localhost')
+MQTT_PORT = int(os.environ.get('MQTT_PORT', '1883'))
+MQTT_USERNAME = os.environ.get('MQTT_USERNAME', '')
+MQTT_PASSWORD = os.environ.get('MQTT_PASSWORD', '')
+MQTT_CLIENT_ID = os.environ.get('MQTT_CLIENT_ID', 'minitos')
+MQTT_TLS = os.environ.get('MQTT_TLS', 'False') == 'True'
+UNS_ROOT = os.environ.get('UNS_ROOT', 'scms/v1').strip('/')
+
 
 # Application definition
 
@@ -54,8 +64,8 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-# Add WhiteNoise for production (Heroku)
-if 'DATABASE_URL' in os.environ:
+# Add WhiteNoise for production (Heroku or Docker)
+if 'DATABASE_URL' in os.environ or os.environ.get('USE_WHITENOISE') == 'True':
     MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
 
 ROOT_URLCONF = 'minitos_site.urls'
@@ -142,9 +152,7 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'minitos_core', 'static'),
 ]
 
-# STATIC_ROOT only needed for production (WhiteNoise/collectstatic)
-if 'DATABASE_URL' in os.environ:
-    STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.0/ref/settings/#default-auto-field

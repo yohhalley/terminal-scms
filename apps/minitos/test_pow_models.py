@@ -1,147 +1,102 @@
 #!/usr/bin/env python3
-"""
-Test script to demonstrate PointOfWork and POWConnection models.
-"""
+"""Demonstrate PointOfWork references into the versioned routing graph."""
 import os
-import sys
+
 import django
 
-# Setup Django
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'minitos_site.settings')
 django.setup()
 
-from minitos_core.models import Location, PointOfWork, POWConnection, Che
-from minitos_core.services import local_to_geographic
-from datetime import datetime
+from minitos_core.models import (  # noqa: E402
+    LayoutAsset, Location, OperationalPosition, PointOfWork, RouteEdge, RouteNode,
+)
+from minitos_core.services import current_layout, local_to_geographic  # noqa: E402
+
 
 def test_point_of_work():
-    print("=== Testing PointOfWork and POWConnection Models ===\n")
-
-    # Get existing location
     location = Location.objects.first()
     if not location:
-        print("No location found. Please run populate_data.py first.")
+        print('No location found. Create a terminal first.')
         return
 
-    print(f"Location: {location.name}")
+    layout = current_layout(location)
+    asset, _ = LayoutAsset.objects.get_or_create(
+        layout_version=layout,
+        code='POW-NETWORK',
+        defaults={
+            'name': 'Point-of-work network',
+            'asset_kind': LayoutAsset.ROAD,
+            'geometry': {'type': 'LineString', 'coordinates': []},
+        },
+    )
 
-    def geo_fields(x_m, y_m):
+    definitions = [
+        ('EP01', 'Main entry gate', PointOfWork.ENTRY_POINT, 50.0, 150.0),
+        ('TA01', 'Main terminal area', PointOfWork.TERMINAL_AREA, 100.0, 200.0),
+        ('DP01', 'Main departure gate', PointOfWork.DEPARTURE_POINT, 150.0, 150.0),
+    ]
+    nodes = {}
+    for code, name, kind, x_m, y_m in definitions:
         latitude, longitude = local_to_geographic(location, x_m, y_m)
-        return {'latitude': latitude, 'longitude': longitude}
+        position, _ = OperationalPosition.objects.update_or_create(
+            layout_version=layout,
+            code=code,
+            defaults={
+                'name': name,
+                'position_kind': OperationalPosition.WORK_POINT,
+                'asset': asset,
+                'latitude': latitude,
+                'longitude': longitude,
+                'logical_address': {'point_of_work': code},
+            },
+        )
+        node, _ = RouteNode.objects.update_or_create(
+            layout_version=layout,
+            code=code,
+            defaults={
+                'name': name,
+                'node_kind': RouteNode.OPERATIONAL,
+                'asset': asset,
+                'operational_position': position,
+                'point': {'type': 'Point', 'coordinates': [longitude, latitude]},
+            },
+        )
+        PointOfWork.objects.update_or_create(
+            location=location,
+            code=code,
+            defaults={
+                'name': name,
+                'pow_type': kind,
+                'latitude': latitude,
+                'longitude': longitude,
+                'operational_position': position,
+                'route_node': node,
+                'max_throughput': 200,
+            },
+        )
+        nodes[code] = node
 
-    # Create some PointOfWork instances
-    print("\n--- Creating PointOfWork instances ---")
+    for code, start, end, distance in [
+        ('EP01-TA01', 'EP01', 'TA01', 500),
+        ('TA01-DP01', 'TA01', 'DP01', 300),
+    ]:
+        RouteEdge.objects.update_or_create(
+            layout_version=layout,
+            code=code,
+            defaults={
+                'name': code,
+                'from_node': nodes[start],
+                'to_node': nodes[end],
+                'edge_kind': RouteEdge.TRAVEL,
+                'movement_mode': RouteEdge.ROAD,
+                'distance_m': distance,
+                'capacity': 1,
+                'base_cost': 1,
+            },
+        )
 
-    # Terminal area
-    terminal_area, created = PointOfWork.objects.get_or_create(
-        location=location,
-        code='TA01',
-        defaults={
-            'name': 'Main Terminal Area',
-            'pow_type': PointOfWork.TERMINAL_AREA,
-            **geo_fields(100.0, 200.0),
-            'max_throughput': 1000,
-            'is_active': True
-        }
-    )
-    print(f"Created terminal area: {terminal_area}")
+    print(f'{location.name}: {len(nodes)} POW nodes, {layout.route_edges.count()} route edges')
 
-    # Entry point
-    entry_point, created = PointOfWork.objects.get_or_create(
-        location=location,
-        code='EP01',
-        defaults={
-            'name': 'Main Entry Gate',
-            'pow_type': PointOfWork.ENTRY_POINT,
-            **geo_fields(50.0, 150.0),
-            'max_throughput': 200,
-            'is_active': True
-        }
-    )
-    print(f"Created entry point: {entry_point}")
-
-    # Departure point
-    departure_point, created = PointOfWork.objects.get_or_create(
-        location=location,
-        code='DP01',
-        defaults={
-            'name': 'Main Departure Gate',
-            'pow_type': PointOfWork.DEPARTURE_POINT,
-            **geo_fields(150.0, 150.0),
-            'max_throughput': 200,
-            'is_active': True
-        }
-    )
-    print(f"Created departure point: {departure_point}")
-
-    # Create POWConnection instances
-    print("\n--- Creating POWConnection instances ---")
-
-    # Entry to Terminal
-    connection1, created = POWConnection.objects.get_or_create(
-        from_pow=entry_point,
-        to_pow=terminal_area,
-        defaults={
-            'distance': 500,
-            'max_throughput': 150,
-            'is_bidirectional': True,
-            'cost': 1.0,
-            'is_enabled': True
-        }
-    )
-    print(f"Created connection: {connection1}")
-
-    # Terminal to Departure
-    connection2, created = POWConnection.objects.get_or_create(
-        from_pow=terminal_area,
-        to_pow=departure_point,
-        defaults={
-            'distance': 300,
-            'max_throughput': 150,
-            'is_bidirectional': True,
-            'cost': 1.0,
-            'is_enabled': True
-        }
-    )
-    print(f"Created connection: {connection2}")
-
-    # Direct Entry to Departure (for transshipment)
-    connection3, created = POWConnection.objects.get_or_create(
-        from_pow=entry_point,
-        to_pow=departure_point,
-        defaults={
-            'distance': 800,
-            'max_throughput': 50,
-            'is_bidirectional': False,
-            'cost': 2.5,  # Higher cost for longer path
-            'is_enabled': True
-        }
-    )
-    print(f"Created connection: {connection3}")
-
-    # Show all PointOfWork instances
-    print("\n--- All PointOfWork instances ---")
-    pows = PointOfWork.objects.filter(location=location)
-    for pow in pows:
-        print(f"  {pow.code}: {pow.name} ({pow.get_pow_type_display()}) - GPS: ({pow.latitude}, {pow.longitude})")
-
-    # Show all POWConnection instances
-    print("\n--- All POWConnection instances ---")
-    connections = POWConnection.objects.all()
-    for conn in connections:
-        print(f"  {conn}")
-
-    # Demonstrate graph traversal (simple example)
-    print("\n--- Graph Traversal Example ---")
-    print(f"Outgoing connections from {entry_point.code}:")
-    for conn in entry_point.outgoing_connections.filter(is_enabled=True):
-        print(f"  → {conn.to_pow.code} ({conn.distance}m, cost: {conn.cost})")
-
-    print(f"\nIncoming connections to {terminal_area.code}:")
-    for conn in terminal_area.incoming_connections.filter(is_enabled=True):
-        print(f"  ← {conn.from_pow.code} ({conn.distance}m, cost: {conn.cost})")
-
-    print("\n=== Test Complete ===")
 
 if __name__ == '__main__':
     test_point_of_work()

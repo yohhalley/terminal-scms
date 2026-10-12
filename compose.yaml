@@ -3,7 +3,7 @@ name: ${COMPOSE_PROJECT_NAME:-terminal-scms}
 x-minitos: &minitos
   image: terminal-scms/minitos:local
   build:
-    context: ${MINITOS_CONTEXT:-../minitos}
+    context: ${MINITOS_CONTEXT:-./apps/minitos}
   restart: unless-stopped
   environment: &minitos-environment
     DEBUG: "True"
@@ -28,7 +28,7 @@ x-minitos: &minitos
 x-oes: &oes
   image: terminal-scms/terminal-oes:local
   build:
-    context: ${OES_CONTEXT:-../terminal-oes}
+    context: ${OES_CONTEXT:-./apps/terminal-oes}
   restart: unless-stopped
   environment: &oes-environment
     DJANGO_DEBUG: "True"

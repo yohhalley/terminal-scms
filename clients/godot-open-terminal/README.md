@@ -1,96 +1,73 @@
 # Godot Open Terminal
 
-A Godot-based terminal interface for managing and monitoring industrial operations.
+A Godot-based terminal sandbox for connecting to a Minitos server and an MQTT broker.
 
-## Features
+## Current Entry Point
 
-### MQTT Integration
-- Connects to MQTT broker for real-time data exchange
-- Implements SparkPlugB protocol for device communication
-- Supports device birth, data, and death messages
-- Handles MQTT connection errors and reconnection
-- Uses QoS levels for reliable message delivery
+The project starts at:
 
-### HTTP Request Management
-- Manages HTTP requests to external APIs
-- Handles authentication and session management
-- Supports both GET and POST requests
-- Implements error handling and retry mechanisms
-- Processes JSON responses
+`res://source/terminal-sandbox/TerminalSandbox.tscn`
 
-### MiniTOS REST API Integration
-- Connects to MiniTOS backend for data synchronization
-- Retrieves CHE (Container Handling Equipment) data
-- Manages unit status and position updates
-- Handles authentication and session management
-- Processes real-time updates from MiniTOS
+The sandbox flow is intentionally smaller than the previous RTS-style game:
 
-### Ignition Gateway Connection
-- Connects to Ignition Gateway for SCADA integration
-- Implements SparkPlugB protocol for device communication
-- Manages device state and data updates
-- Handles connection errors and reconnection
-- Supports real-time data visualization
+1. Choose the Minitos server URL and port. The client normalizes it to `/minitos_core`.
+2. Check that the server is reachable.
+3. Enter Minitos credentials and verify them against `/minitos_core/locations/`.
+4. Enter an MQTT broker host and port and confirm the connection through the Sparkplug B manager.
+5. Load terminals from `/minitos_core/locations/` after both connections succeed.
+6. Choose the terminal to work with.
+7. The workspace loads the selected terminal map dimensions and areas from `/minitos_core/locations/{location_id}/areas/`.
+8. Use the workspace in Design or Operations mode.
 
-## Architecture
+## Design Mode
 
-### MQTT Manager
-- Handles MQTT broker connection
-- Manages topics and subscriptions
-- Implements SparkPlugB message formatting
-- Handles connection state and errors
-- Provides utility functions for MQTT operations
+Design mode currently includes a simple grid canvas scaled to the selected Location `map_width_m` and `map_height_m`. Draw a rectangle, choose an object type, and save it to Minitos:
 
-### HTTP Request Manager
-- Manages HTTP client connections
-- Handles request queuing and processing
-- Implements authentication and session management
-- Processes response data
-- Manages error handling and retries
+- Terminal areas: `POST /minitos_core/locations/{location_id}/areas/`
+- Area coordinates are stored as local meter polygons: `[[x, y], ...]`
 
-### MiniTOS Integration
-- Connects to MiniTOS REST API
-- Manages CHE data synchronization
-- Handles unit status updates
-- Processes position and state changes
-- Implements error handling and recovery
+This creates the foundation for a terminal map editor while keeping the older RTS code out of the startup path.
 
-### Ignition Gateway Integration
-- Connects to Ignition Gateway
-- Implements SparkPlugB protocol
-- Manages device state and data
-- Handles real-time updates
-- Provides error handling and recovery
+## Minitos API Assumptions
 
-## Setup
+The current client targets the Django REST endpoints in `yohhalley/minitos` branch `test`:
 
-1. Configure MQTT broker settings in `MqttManager.gd`
-2. Set up HTTP request parameters in `HTTPRequestManager.gd`
-3. Configure MiniTOS API endpoints in `HTTPRequestManager.gd`
-4. Set up Ignition Gateway connection in `MqttManager.gd`
+- `GET /minitos_core/locations/`
+- `GET /minitos_core/locations/{location_id}/areas/`
+- `POST /minitos_core/locations/{location_id}/blocks/`
+- `POST /minitos_core/points-of-work/`
 
-## Usage
+Authentication uses HTTP Basic Auth, which is supported by Django REST Framework defaults.
 
-1. Start the application
-2. MQTT connection is established automatically
-3. HTTP requests are managed through the HTTP Request Manager
-4. MiniTOS data is synchronized automatically
-5. Ignition Gateway connection is established automatically
+## Rail-constrained CHE
 
-## Error Handling
+The versioned-layout CHE API supplies a read-only `rail_motion` descriptor from
+the CHE's assigned asset and operating scopes. Fixed cranes follow the logical
+rail centerline and retain its alignment in either travel direction. RTGs leave
+and enter through physical rail endpoints before moving freely between blocks.
+Use Refresh Terminal Layout after editing assignments or rails. The free stage
+is currently direct driving, not road-graph or traffic-aware routing.
 
-- MQTT connection errors are handled with automatic reconnection
-- HTTP request errors are managed with retry mechanisms
-- MiniTOS API errors are handled with appropriate error messages
-- Ignition Gateway connection errors are managed with reconnection attempts
+See `tests/integration/README.md` for the headless rail movement checks.
 
-## Dependencies
+## MQTT Assumptions
 
-- Godot 4.x
-- MQTT Client
-- HTTP Client
-- JSON Parser
+The broker check uses `res://source/terminal-sandbox/MQTTNodeClient.gd` and `res://source/sparkplugB/SparkPlugMQTTManager.gd`, backed directly by `res://addons/mqtt/mqtt.gd`.
 
-## License
+- `mqtt.gd` owns only MQTT 3.1.1 transport, sockets, subscriptions, and acknowledgements.
+- `SparkPlugMQTTManager.gd` owns the edge-node session, topics, protobuf payloads, sequence numbers, NBIRTH, and NDEATH.
+- `MQTTNodeClient.gd` owns CHE registration and the DBIRTH/DDATA/DDEATH lifecycle.
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+On connect, the manager publishes `NBIRTH`. It also sets an `NDEATH` last will before connecting and publishes `NDEATH` during explicit disconnects. Topics use the Sparkplug B form `spBv1.0/{group_id}/{message_type}/{edge_node_id}` and `spBv1.0/{group_id}/{message_type}/{edge_node_id}/{device_id}`.
+
+Default broker fields:
+
+- Host: `127.0.0.1`
+- Port: `1883`
+
+## Next Implementation Steps
+
+- Load existing blocks, CHE, and points of work for the selected terminal into the canvas.
+- Add dedicated REST payloads once roads, buildings, parking areas, and CHE have first-class Minitos endpoints.
+- Expand Operations mode with truck, vessel, and train arrival simulation.
+- Move the old RTS scenes into an archive folder or delete them once the sandbox replaces their useful pieces.

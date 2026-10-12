@@ -1,0 +1,98 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ location.name }} | CHE Editor</title>
+    <link rel="stylesheet" href="{% static 'che_editor.css' %}">
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+    <script src="{% static 'che_editor.js' %}" defer></script>
+</head>
+<body>
+<div id="cheEditor" class="che-app" data-location-id="{{ location.id }}">
+    <header>
+        <div class="brand"><strong>{{ location.name }}</strong><span>Equipment and component editor</span></div>
+        <nav class="header-actions" aria-label="Workspace navigation">
+            <a class="button" href="{% url 'terminal_editor' location.id %}">Terminal layout</a>
+            <a class="button" href="{% url 'terminal_browser' %}">Terminals</a>
+        </nav>
+    </header>
+
+    <main class="che-workspace">
+        <aside class="fleet-panel">
+            <div class="panel-head"><div><h1>Fleet</h1><span id="fleetCount">0 equipment</span></div><button class="button icon primary" id="newCheDetail" type="button" title="New equipment"><i data-lucide="plus"></i></button></div>
+            <div id="fleetList" class="fleet-list"><div class="empty">No equipment</div></div>
+        </aside>
+
+        <section class="detail-panel">
+            <div class="panel-head"><div><h2 id="cheEditorTitle">New equipment</h2><span>Identity, assignment, and current operating facts</span></div></div>
+            <form id="cheDetailForm" class="form-body" novalidate>
+                <div class="section-title">Assignment</div>
+                <div class="grid-2">
+                    <div class="field"><label for="detailCheName">Name</label><input id="detailCheName" maxlength="30" required></div>
+                    <div class="field"><label for="detailCheType">Equipment type</label><select id="detailCheType" required></select></div>
+                    <div class="field full"><label for="detailCheAsset">Assigned terminal area</label><select id="detailCheAsset"><option value="">Unassigned</option></select></div>
+                    <div class="field"><label for="detailCheLatitude">Latitude</label><input id="detailCheLatitude" type="number" step="any"></div>
+                    <div class="field"><label for="detailCheLongitude">Longitude</label><input id="detailCheLongitude" type="number" step="any"></div>
+                    <div class="field"><label for="detailCheRotation">Heading (deg true north)</label><input id="detailCheRotation" type="number" step="0.1" value="0"></div>
+                    <div class="field"><label for="detailLastMaintenance">Last maintenance</label><input id="detailLastMaintenance" type="datetime-local"></div>
+                </div>
+
+                <section id="railAssignmentSection" class="rail-assignment hidden">
+                    <div class="section-title">Rail assignment</div>
+                    <div class="grid-2">
+                        <div class="field full"><label for="detailRailAxis">Movement rail</label><select id="detailRailAxis"><option value="">Select rail</option></select></div>
+                        <div class="field"><label for="detailRailPosition">Position from rail start (m)</label><input id="detailRailPosition" type="number" min="0" step="0.1" value="0"></div>
+                        <div class="field rail-meter"><label for="detailRailPositionRange">Rail position</label><input id="detailRailPositionRange" type="range" min="0" max="0" step="0.1" value="0"></div>
+                        <div class="field"><label for="detailRailMin">Minimum gantry position (m)</label><input id="detailRailMin" type="number" min="0" step="0.1" value="0"></div>
+                        <div class="field"><label for="detailRailMax">Maximum gantry position (m)</label><input id="detailRailMax" type="number" min="0" step="0.1" value="0"></div>
+                        <output id="detailRailLength" class="rail-length full">Rail length: 0.0 m</output>
+                    </div>
+                </section>
+
+                <div class="section-title">Operating facts</div>
+                <div class="status-grid">
+                    <label class="switch"><input id="detailPowered" type="checkbox"><span>Powered on</span></label>
+                    <label class="switch"><input id="detailWorking" type="checkbox"><span>Working</span></label>
+                    <label class="switch"><input id="detailAvailable" type="checkbox"><span>Available</span></label>
+                    <label class="switch"><input id="detailDispatched" type="checkbox"><span>Dispatched</span></label>
+                    <label class="switch"><input id="detailMaintenance" type="checkbox"><span>Maintenance</span></label>
+                    <label class="switch"><input id="detailTwistlock" type="checkbox"><span>Twistlock closed</span></label>
+                </div>
+
+                <div class="section-title">Counters</div>
+                <div class="grid-2">
+                    <div class="field"><label for="detailFuel">Fuel / charge (%)</label><input id="detailFuel" type="number" min="0" max="100" step="0.1" value="100"></div>
+                    <div class="field"><label for="detailRunningHours">Running hours</label><input id="detailRunningHours" type="number" min="0" step="0.01" value="0"></div>
+                    <div class="field full"><label for="detailMaintenanceHours">Hours since maintenance</label><input id="detailMaintenanceHours" type="number" min="0" step="0.01" value="0"></div>
+                </div>
+
+                <div class="form-actions"><button class="button primary grow" type="submit">Save equipment</button><button class="button danger" id="deleteCheDetail" type="button">Delete</button></div>
+            </form>
+        </section>
+
+        <aside class="component-panel">
+            <div class="panel-head"><div><h2>Components</h2><span id="componentSubtitle">Select equipment</span></div><button class="button icon" id="newComponent" type="button" title="New component" disabled><i data-lucide="plus"></i></button></div>
+            <div id="componentList" class="component-list"><div class="empty">No equipment selected</div></div>
+            <form id="componentForm" class="form-body compact hidden" novalidate>
+                <div class="grid-2">
+                    <div class="field full"><label for="componentName">Name</label><input id="componentName" maxlength="80" required></div>
+                    <div class="field"><label for="componentType">Component type</label><select id="componentType" required></select></div>
+                    <div class="field"><label for="componentRole">Role</label><input id="componentRole" maxlength="40" placeholder="drive" required></div>
+                    <div class="field full"><label for="componentParent">Parent component</label><select id="componentParent"><option value="">None</option></select></div>
+                    <div class="field"><label for="componentManufacturer">Manufacturer</label><input id="componentManufacturer" maxlength="80"></div>
+                    <div class="field"><label for="componentModel">Model</label><input id="componentModel" maxlength="80"></div>
+                    <div class="field full"><label for="componentSerial">Serial number</label><input id="componentSerial" maxlength="100"></div>
+                    <label class="switch full"><input id="componentActive" type="checkbox" checked><span>Active</span></label>
+                    <div class="field full"><label for="componentConfiguration">Component-specific configuration (JSON)</label><textarea id="componentConfiguration" rows="9">{}</textarea></div>
+                </div>
+                <div class="form-actions"><button class="button primary grow" type="submit">Save component</button><button class="button danger" id="deleteComponent" type="button">Delete</button></div>
+            </form>
+        </aside>
+    </main>
+
+    <footer><span id="cheStatus">Ready</span></footer>
+</div>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://source/match/Match.gd" id="1_1555u"]
 [ext_resource type="Script" path="res://source/match/IsometricCamera3D.gd" id="1_qb2ry"]
-[ext_resource type="Script" path="res://source/sparkplugB/SparkPlugBMQTTManager.gd" id="2_88id3"]
+[ext_resource type="Script" path="res://source/sparkplugB/SparkPlugMQTTManager.gd" id="2_88id3"]
 [ext_resource type="Script" path="res://addons/mqtt/mqtt.gd" id="4_cs1si"]
 [ext_resource type="Script" path="res://source/match/FogOfWar.gd" id="5_eb52t"]
 [ext_resource type="PackedScene" uid="uid://co800e4shs7bh" path="res://source/generic-scenes-and-nodes/3d/RectangularSelection3D.tscn" id="5_yi0pu"]

@@ -1,35 +1,58 @@
-# Terminal SCMS sandbox
+# Terminal SCMS
 
-This repository orchestrates the container-terminal management sandbox. Application source remains in sibling repositories so MiniTOS, Terminal OES, and the simulator can evolve and release independently.
+Terminal SCMS is a monorepo for the container-terminal management sandbox. One
+checkout contains the planning system, order execution system, Godot simulator,
+integration contracts, and Docker deployment configuration.
 
-## Core stack
+## Components
 
-- MiniTOS: planning, inventory, terminal layout, routing, and operational master data.
-- Terminal OES: released-order execution, CHE assignment, commands, and execution history.
-- HiveMQ Community Edition: MQTT transport for the unified namespace.
-- PostgreSQL: one authoritative database per application.
+- **MiniTOS** owns planning, inventory, layout, routing, and operational master data.
+- **Terminal OES** owns released-order execution, CHE assignments, commands, and execution history.
+- **Godot simulator** represents terminal equipment and publishes live Sparkplug B telemetry.
+- **HiveMQ Community Edition** transports unified-namespace messages.
+- **PostgreSQL** provides one authoritative database per Django application.
+- **FlowFuse** is the planned process-automation layer.
+- **Timebase** is the planned operational historian.
 
-HiveMQ is the integration backbone, not a durable system of record. Each service owns its database and uses an inbox/outbox pattern for reliable at-least-once integration.
+HiveMQ is an integration backbone, not a durable system of record. Each service
+owns its database and uses idempotent inboxes plus transactional outboxes for
+at-least-once messaging.
 
 ## Repository layout
 
-Clone the repositories side by side:
-
 ```text
-workspace/
-  minitos/
-  terminal-oes/
-  godot-open-terminal/
-  terminal-scms/
+terminal-scms/
+  apps/
+    minitos/
+    terminal-oes/
+  clients/
+    godot-open-terminal/
+  docs/
+  compose.yaml
+  Makefile
 ```
 
-Then start the core stack:
+The application histories were imported from their original repositories. The
+services remain independently deployable even though they now release together.
+
+## Start the core stack
+
+Requirements are Docker Engine with Docker Compose and GNU Make. Make is a
+convenience layer only; every operation remains available through ordinary
+`docker compose` commands.
 
 ```bash
+git clone https://github.com/yohhalley/terminal-scms.git
 cd terminal-scms
+make setup
+```
+
+Without Make:
+
+```bash
 cp .env.example .env
 docker compose config --quiet
-docker compose up --build --detach
+docker compose up --build --detach --wait
 docker compose ps
 ```
 
@@ -39,15 +62,36 @@ Local endpoints:
 - Terminal OES health: http://localhost:8010/health/
 - HiveMQ MQTT: `localhost:1883`
 
-Change every placeholder secret before exposing the stack outside a local development machine.
+If port `1883` is already occupied, set `MQTT_PORT=1885` in `.env`. Containers
+continue to use `hivemq:1883` on the internal Docker network.
 
-## Deferred profiles
+Useful commands:
 
-FlowFuse and Timebase are deliberately separate deployments:
+```bash
+make help
+make logs
+make test
+make migrations
+make down
+```
 
-- FlowFuse self-hosted requires a reachable domain and wildcard DNS. Its platform broker is not a replacement for the SCMS HiveMQ UNS; Node-RED instances connect to HiveMQ as an application endpoint.
-- Timebase 2.0 is currently beta and its official agent runbook requires interactive certificate, administrator-password, client-secret, and optional AI-provider steps.
-- The current Godot scene begins with an interactive MiniTOS/MQTT connection UI. It remains a host-run simulator until a separate non-interactive runtime scene is implemented.
+`make down` retains named database and broker volumes. Do not add `--volumes`
+unless the stored development data is intentionally disposable.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/FLOWFUSE.md](docs/FLOWFUSE.md), and [docs/TIMEBASE.md](docs/TIMEBASE.md).
+## Optional platform services
 
+FlowFuse and Timebase remain staged integrations rather than pretending to be
+portable single containers:
+
+- FlowFuse self-hosting needs a reachable domain and wildcard DNS. Hosted
+  Node-RED applications will connect to the SCMS HiveMQ endpoint.
+- Timebase 2.0 is beta and its agent runbook requires interactive certificate,
+  administrator-password, client-secret, and optional AI-provider steps.
+- Godot remains a host-run desktop client until a non-interactive export/build
+  pipeline is added.
+
+See [Architecture](docs/ARCHITECTURE.md), [FlowFuse](docs/FLOWFUSE.md), and
+[Timebase](docs/TIMEBASE.md).
+
+Change every placeholder secret before exposing the stack outside a local
+development machine.

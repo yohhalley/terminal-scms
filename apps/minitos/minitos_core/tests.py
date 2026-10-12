@@ -5,8 +5,9 @@ from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
 from django.core.exceptions import ValidationError
 from minitos_core.models import (
-    ContainerUnit, ISOType, ContainerOwner, Location, Block, Pile, 
-    Position, Che, WorkQueue, Order, OrderLeg, ContainerVisit, EquipmentType
+    ContainerUnit, ISOType, ContainerOwner, Location, StorageGrid, Pile,
+    Position, Che, WorkQueue, Order, OrderLeg, ContainerVisit, EquipmentType,
+    LayoutAsset, LayoutVersion,
 )
 from minitos_core.services import sync_yard_grid
 import json
@@ -29,6 +30,37 @@ class BaseTestCase(APITestCase):
             longitude=-3,
             map_origin_latitude=40,
             map_origin_longitude=-3,
+        )
+
+    def create_storage_grid(self, location, name, **values):
+        legacy_kind = values.pop('block_type', 'AB')
+        layout, _ = LayoutVersion.objects.get_or_create(
+            location=location,
+            is_current=True,
+            defaults={'version': 1, 'name': 'Working layout', 'created_by': self.user},
+        )
+        sequence = layout.assets.count() + 1
+        asset = LayoutAsset.objects.create(
+            layout_version=layout,
+            code=f'GRID-{sequence}',
+            name=name,
+            asset_kind=LayoutAsset.YARD_BLOCK,
+            geometry={
+                'type': 'Polygon',
+                'coordinates': [[
+                    [location.longitude, location.latitude],
+                    [location.longitude + 0.001, location.latitude],
+                    [location.longitude + 0.001, location.latitude + 0.001],
+                    [location.longitude, location.latitude + 0.001],
+                    [location.longitude, location.latitude],
+                ]],
+            },
+        )
+        return StorageGrid.objects.create(
+            layout_asset=asset,
+            name=name,
+            grid_kind=StorageGrid.MANUAL if legacy_kind == 'MB' else StorageGrid.AUTOMATED,
+            **values,
         )
 
 class ContainerTests(BaseTestCase):
@@ -116,14 +148,14 @@ class LocationTests(BaseTestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['name'], 'Test Terminal')
 
-class BlockTests(BaseTestCase):
+class StorageGridTests(BaseTestCase):
     def setUp(self):
         super().setUp()
         # Delete any existing blocks to ensure clean state
-        Block.objects.all().delete()
-        self.block = Block.objects.create(
+        StorageGrid.objects.all().delete()
+        self.block = self.create_storage_grid(
             location=self.location,
-            name='Block A',
+            name='StorageGrid A',
             block_type='AB',
             max_bays=10,
             max_rows=10,
@@ -132,7 +164,7 @@ class BlockTests(BaseTestCase):
         sync_yard_grid(self.block)
 
     def test_block_list(self):
-        url = reverse('minitos_core:block-list', args=[self.location.id])
+        url = reverse('minitos_core:storage-grid-list', args=[self.location.id])
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         
@@ -148,21 +180,21 @@ class BlockTests(BaseTestCase):
         # Find our block in the response
         our_block = next((block for block in results if block['pk'] == self.block.id), None)
         self.assertIsNotNone(our_block, "Our test block was not found in the response")
-        self.assertEqual(our_block['name'], 'Block A')
-        self.assertEqual(our_block['block_type'], 'AB')
+        self.assertEqual(our_block['name'], 'StorageGrid A')
+        self.assertEqual(our_block['grid_kind'], StorageGrid.AUTOMATED)
 
     def test_block_detail(self):
-        url = reverse('minitos_core:block-detail', args=[self.location.id, self.block.id])
+        url = reverse('minitos_core:storage-grid-detail', args=[self.location.id, self.block.id])
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['name'], 'Block A')
+        self.assertEqual(response.data['name'], 'StorageGrid A')
 
 class PileTests(BaseTestCase):
     def setUp(self):
         super().setUp()
-        self.block = Block.objects.create(
+        self.block = self.create_storage_grid(
             location=self.location,
-            name='Block A',
+            name='StorageGrid A',
             block_type='AB',
             max_bays=10,
             max_rows=10,
@@ -176,7 +208,7 @@ class PileTests(BaseTestCase):
             is_shippingline=True
         )
         # Grid creation is explicit so normal model saves never destroy operational data.
-        self.pile = Pile.objects.filter(block=self.block).first()
+        self.pile = Pile.objects.filter(storage_grid=self.block).first()
 
     def test_pile_list(self):
         url = reverse('minitos_core:pile-list', args=[self.location.id, self.block.id])
@@ -195,7 +227,7 @@ class PileTests(BaseTestCase):
 
     def test_pile_recreation(self):
         # Delete a pile
-        pile_to_delete = Pile.objects.filter(block=self.block, bay=1, row=1).first()
+        pile_to_delete = Pile.objects.filter(storage_grid=self.block, bay=1, row=1).first()
         pile_id = pile_to_delete.id
         pile_to_delete.delete()
         
@@ -204,7 +236,7 @@ class PileTests(BaseTestCase):
         
         # Create a new pile in the same position
         new_pile = Pile.objects.create(
-            block=self.block,
+            storage_grid=self.block,
             bay=1,
             row=1,
             tiers=5,
@@ -307,17 +339,17 @@ class PileTests(BaseTestCase):
         )
 
         # Create blocks with the same name in different locations
-        block1 = Block.objects.create(
+        block1 = self.create_storage_grid(
             location=self.location,
-            name='Block B',  # Different name from setUp's Block A
+            name='StorageGrid B',  # Different name from setUp's StorageGrid A
             block_type='AB',
             max_bays=10,
             max_rows=10,
             max_tier=5
         )
-        block2 = Block.objects.create(
+        block2 = self.create_storage_grid(
             location=location2,
-            name='Block B',  # Same name as block1 but in different location
+            name='StorageGrid B',  # Same name as block1 but in different location
             block_type='AB',
             max_bays=10,
             max_rows=10,
@@ -327,33 +359,33 @@ class PileTests(BaseTestCase):
         sync_yard_grid(block2)
 
         # Verify that both blocks have piles with the same bay/row combinations
-        pile1 = Pile.objects.filter(block=block1, bay=1, row=1).first()
-        pile2 = Pile.objects.filter(block=block2, bay=1, row=1).first()
+        pile1 = Pile.objects.filter(storage_grid=block1, bay=1, row=1).first()
+        pile2 = Pile.objects.filter(storage_grid=block2, bay=1, row=1).first()
 
         self.assertIsNotNone(pile1)
         self.assertIsNotNone(pile2)
         self.assertEqual(pile1.bay, pile2.bay)
         self.assertEqual(pile1.row, pile2.row)
-        self.assertNotEqual(pile1.block.location, pile2.block.location)
+        self.assertNotEqual(pile1.storage_grid.location, pile2.storage_grid.location)
 
-        # Verify that we can't create a block with the same name in the same location
-        with self.assertRaises(Exception):
-            Block.objects.create(
-                location=self.location,
-                name='Block B',  # Same name and location as block1
-                block_type='AB',
-                max_bays=10,
-                max_rows=10,
-                max_tier=5
-            )
+        # Names are descriptive; the layout-scoped asset code is the stable identity.
+        block3 = self.create_storage_grid(
+            location=self.location,
+            name='StorageGrid B',
+            block_type='AB',
+            max_bays=10,
+            max_rows=10,
+            max_tier=5,
+        )
+        self.assertNotEqual(block1.layout_asset.code, block3.layout_asset.code)
 
 class PositionTests(BaseTestCase):
     def setUp(self):
         super().setUp()
         # Create a block with more bays than we need for testing
-        self.block = Block.objects.create(
+        self.block = self.create_storage_grid(
             location=self.location,
-            name='Block B',
+            name='StorageGrid B',
             block_type='AB',
             max_bays=20,  # Increased to ensure we have enough bays
             max_rows=10,
@@ -361,7 +393,7 @@ class PositionTests(BaseTestCase):
         )
         sync_yard_grid(self.block)
         # Get the first pile and position created by the block
-        self.pile = Pile.objects.filter(block=self.block).first()
+        self.pile = Pile.objects.filter(storage_grid=self.block).first()
         self.position = Position.objects.filter(pile=self.pile).first()
         
         # Create a container visit for testing
@@ -440,7 +472,7 @@ class PositionTests(BaseTestCase):
 
     def test_position_allows_in_restriction(self):
         # Get an existing pile and update its allows_in setting
-        restricted_pile = Pile.objects.filter(block=self.block, bay=15).first()
+        restricted_pile = Pile.objects.filter(storage_grid=self.block, bay=15).first()
         restricted_pile.allows_in = False
         restricted_pile.save()
         
@@ -459,7 +491,7 @@ class PositionTests(BaseTestCase):
 
     def test_position_allows_out_restriction(self):
         # Get an existing pile and update its allows_out setting
-        restricted_pile = Pile.objects.filter(block=self.block, bay=16).first()
+        restricted_pile = Pile.objects.filter(storage_grid=self.block, bay=16).first()
         restricted_pile.allows_out = False
         restricted_pile.save()
         
@@ -501,7 +533,7 @@ class PositionTests(BaseTestCase):
 
     def test_position_container_removal_with_containers_above(self):
         # Get an existing pile with multiple positions
-        pile = Pile.objects.filter(block=self.block, bay=17).first()
+        pile = Pile.objects.filter(storage_grid=self.block, bay=17).first()
         
         # Get positions in tiers 1 and 2
         position1 = Position.objects.filter(pile=pile, tier=1).first()
@@ -551,9 +583,9 @@ class PositionTests(BaseTestCase):
 
     def test_position_physical_rules(self):
         # Create a new block and explicitly build its grid.
-        block = Block.objects.create(
+        block = self.create_storage_grid(
             location=self.location,
-            name='Block C',
+            name='StorageGrid C',
             block_type='AB',
             max_bays=10,
             max_rows=10,
@@ -562,7 +594,7 @@ class PositionTests(BaseTestCase):
         sync_yard_grid(block)
         
         # Get a pile from an even-numbered bay (for 40' containers)
-        pile = Pile.objects.filter(block=block, bay=2).first()
+        pile = Pile.objects.filter(storage_grid=block, bay=2).first()
         position1 = Position.objects.filter(pile=pile, tier=1).first()
         position2 = Position.objects.filter(pile=pile, tier=2).first()
         position3 = Position.objects.filter(pile=pile, tier=3).first()

@@ -1,0 +1,34 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://source/terminal-sandbox/che/QC.gd" id="1_qc"]
+[ext_resource type="PackedScene" path="res://assets/models/kenney-spacekit/hangar_largeA.glb" id="2_qc_model"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_qc"]
+size = Vector3(28, 35, 16)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_qc"]
+size = Vector3(28, 35, 16)
+
+[node name="QC" type="Area3D"]
+collision_layer = 2
+collision_mask = 0
+script = ExtResource("1_qc")
+
+[node name="Geometry" type="Node3D" parent="."]
+
+[node name="Body" type="MeshInstance3D" parent="Geometry"]
+visible = false
+mesh = SubResource("BoxMesh_qc")
+
+[node name="Model" type="Node3D" parent="Geometry"]
+
+[node name="hangar_largeA" parent="Geometry/Model" instance=ExtResource("2_qc_model")]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_qc")
+
+[node name="Label3D" type="Label3D" parent="."]
+font_size = 36
+outline_size = 8
+billboard = 1
+no_depth_test = true

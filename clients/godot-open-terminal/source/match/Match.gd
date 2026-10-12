@@ -47,20 +47,14 @@ func _ready():
 	assert(map != null, "match cannot start without map, see examples in tests/manual/")
 	assert(_mqtt_manager != null, "match cannot start without MQTT broker ready to connect")
 
-	# Initialize MQTT connection with authentication
-	print("Connecting to broker_connected signal")
-	_mqtt_manager._connect_mqtt_signals()
+	_mqtt_manager.broker_connected.connect(_continue_match_setup)
+	_mqtt_manager.configure(
+		"tcp://127.0.0.1:1883",
+		GROUP_ID,
+		NODE_ID,
+		"godot-open-rts-match"
+	)
 	_mqtt_manager.connect_to_broker()
-	# Connect to MQTT broker with local credentials
-	#_mqtt_manager._connect_to_broker(
-	#	"127.0.0.1",      # broker address
-	#	1883,             # broker port
-	#	GROUP_ID,         # group id
-	#	NODE_ID,          # node id
-	#	"godot_client",   # username
-	#	"password"        # password
-	#)
-	MatchSignals.mqtt_spv1_broker_connected_init.connect(_continue_match_setup)
 	
 	#Connect signals for HTTP responses
 	MatchSignals.che_list_received.connect(_on_che_list_received)

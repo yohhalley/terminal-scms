@@ -1,0 +1,66 @@
+name: SCMS tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  minitos:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: minitos_test
+          POSTGRES_USER: minitos
+          POSTGRES_PASSWORD: minitos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U minitos -d minitos_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SECRET_KEY: ci-only-secret-key
+      DB_NAME: minitos_test
+      DB_USER: minitos
+      DB_PASSWORD: minitos
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+    defaults:
+      run:
+        working-directory: apps/minitos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/minitos/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py test
+      - run: node --test minitos_core/static/terminal_editor_map_tools.test.js minitos_core/static/terminal_editor_render.test.js
+
+  terminal-oes:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/terminal-oes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/terminal-oes/requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py test

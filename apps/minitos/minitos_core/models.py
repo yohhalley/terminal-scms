@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError
 from datetime import timedelta
 from decimal import Decimal, ROUND_CEILING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import math
+import uuid
 
 
 def validate_iana_timezone(value):
@@ -188,6 +190,7 @@ class ContainerVisit(models.Model):
     ARRIVED = 'Arrived'
     AT_YARD = 'AtYard'
     AT_QC = 'AtQC'
+    ON_EQUIPMENT = 'OnEquipment'
     ON_VESSEL = 'OnVessel'
     DEPARTED = 'Departed'
     COMPLETED = 'Completed'
@@ -197,6 +200,7 @@ class ContainerVisit(models.Model):
         (ARRIVED, 'Arrived'),
         (AT_YARD, 'At Yard'),
         (AT_QC, 'At QC'),
+        (ON_EQUIPMENT, 'On Equipment'),
         (ON_VESSEL, 'On Vessel'),
         (DEPARTED, 'Departed'),
         (COMPLETED, 'Completed'),
@@ -206,6 +210,11 @@ class ContainerVisit(models.Model):
         max_length=15,
         choices=STATUS_CHOICES,
         default=PREADVISED,
+    )
+    current_che = models.ForeignKey(
+        'Che', related_name='carried_container_visits',
+        on_delete=models.RESTRICT, blank=True, null=True,
+        help_text='CHE temporarily carrying this container during an active move.',
     )
     last_updated = models.DateTimeField(auto_now=True)
 
@@ -265,29 +274,345 @@ class Location(models.Model):
 
 
 ###################################
-class Block(models.Model):
-    TZ = 'TZ'
-    EP = 'EP'
-    AB = 'AB'
-    MB = 'MB'
-
-    BLOCK_TYPES = [
-        (TZ, 'Transfer Zone'),
-        (EP, 'Entry Point'),
-        (AB, 'Automated Block'),
-        (MB, 'Manual Block'),
+class LayoutVersion(models.Model):
+    DRAFT = 'draft'
+    PUBLISHED = 'published'
+    ARCHIVED = 'archived'
+    STATUS_CHOICES = [
+        (DRAFT, 'Draft'),
+        (PUBLISHED, 'Published'),
+        (ARCHIVED, 'Archived'),
     ]
 
     location = models.ForeignKey(
-        'Location', related_name='blocks',
-        on_delete=models.CASCADE,
+        'Location', related_name='layout_versions', on_delete=models.CASCADE,
     )
+    version = models.PositiveIntegerField(default=1)
+    name = models.CharField(max_length=100, default='Working layout')
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=DRAFT)
+    is_current = models.BooleanField(default=True)
+    based_on = models.ForeignKey(
+        'self', related_name='derived_versions', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    notes = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        'auth.User', related_name='created_layout_versions', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    published_at = models.DateTimeField(blank=True, null=True)
 
-    block_type = models.CharField(
-        max_length=2,
-        choices=BLOCK_TYPES,
-        default=AB,
+    class Meta:
+        ordering = ['location_id', '-version']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['location', 'version'], name='unique_layout_version_per_location',
+            ),
+            models.UniqueConstraint(
+                fields=['location'], condition=Q(is_current=True),
+                name='one_current_layout_per_location',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.location.name} layout v{self.version}'
+
+
+class LayoutAsset(models.Model):
+    TERMINAL = 'terminal'
+    LAND = 'land'
+    WATER = 'water'
+    QUAY = 'quay'
+    YARD = 'yard'
+    YARD_BLOCK = 'yard_block'
+    TRANSFER_ZONE = 'transfer_zone'
+    PARKING = 'parking'
+    BUILDING = 'building'
+    ROAD = 'road'
+    RAIL_AREA = 'rail_area'
+    GATE_AREA = 'gate_area'
+    WORKSHOP = 'workshop'
+    OTHER = 'other'
+    ASSET_KIND_CHOICES = [
+        (TERMINAL, 'Terminal boundary'),
+        (LAND, 'Land'),
+        (WATER, 'Water'),
+        (QUAY, 'Quay'),
+        (YARD, 'Yard'),
+        (YARD_BLOCK, 'Yard block'),
+        (TRANSFER_ZONE, 'Transfer zone'),
+        (PARKING, 'Parking'),
+        (BUILDING, 'Building'),
+        (ROAD, 'Road corridor'),
+        (RAIL_AREA, 'Rail area'),
+        (GATE_AREA, 'Gate area'),
+        (WORKSHOP, 'Workshop'),
+        (OTHER, 'Other'),
+    ]
+    CHE_PLACEMENT_KINDS = (QUAY, YARD_BLOCK, PARKING, RAIL_AREA)
+
+    layout_version = models.ForeignKey(
+        LayoutVersion, related_name='assets', on_delete=models.CASCADE,
     )
+    parent = models.ForeignKey(
+        'self', related_name='children', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    access_policy = models.ForeignKey(
+        'AccessPolicy', related_name='assets', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    code = models.CharField(max_length=40)
+    name = models.CharField(max_length=100)
+    asset_kind = models.CharField(max_length=24, choices=ASSET_KIND_CHOICES)
+    geometry = models.JSONField(
+        default=dict,
+        help_text='GeoJSON geometry using WGS-84 longitude/latitude coordinates.',
+    )
+    heading_deg = models.FloatField(default=0.0, help_text='Heading relative to true north')
+    elevation_m = models.FloatField(default=0.0)
+    is_visible = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['asset_kind', 'code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['layout_version', 'code'], name='unique_layout_asset_code',
+            )
+        ]
+
+    @property
+    def location(self):
+        return self.layout_version.location
+
+    def clean(self):
+        if self.parent_id and self.parent.layout_version_id != self.layout_version_id:
+            raise ValidationError({'parent': 'Parent assets must belong to the same layout version.'})
+        if self.access_policy_id and self.access_policy.layout_version_id != self.layout_version_id:
+            raise ValidationError({'access_policy': 'The policy must belong to the same layout version.'})
+
+    def __str__(self):
+        return f'{self.code} - {self.name}'
+
+
+class AccessPolicy(models.Model):
+    layout_version = models.ForeignKey(
+        LayoutVersion, related_name='access_policies', on_delete=models.CASCADE,
+    )
+    code = models.CharField(max_length=40)
+    name = models.CharField(max_length=100)
+    allowed_che_types = models.ManyToManyField(
+        'EquipmentType', related_name='layout_access_policies', blank=True,
+    )
+    allow_loaded = models.BooleanField(default=True)
+    allow_empty = models.BooleanField(default=True)
+    max_width_m = models.FloatField(blank=True, null=True)
+    max_height_m = models.FloatField(blank=True, null=True)
+    max_weight_t = models.FloatField(blank=True, null=True)
+    rules = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['layout_version', 'code'], name='unique_access_policy_code',
+            )
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class LinearAxis(models.Model):
+    ROAD_CENTERLINE = 'road_centerline'
+    RAIL_TRACK = 'rail_track'
+    CRANE_RAIL = 'crane_rail'
+    QUAY_FACE = 'quay_face'
+    TRANSFER_LANE = 'transfer_lane'
+    FREE_DRIVE_GUIDE = 'free_drive_guide'
+    AXIS_KIND_CHOICES = [
+        (ROAD_CENTERLINE, 'Road centerline'),
+        (RAIL_TRACK, 'Rail track'),
+        (CRANE_RAIL, 'Crane rail'),
+        (QUAY_FACE, 'Quay face'),
+        (TRANSFER_LANE, 'Transfer lane'),
+        (FREE_DRIVE_GUIDE, 'Free-drive guide'),
+    ]
+    FORWARD = 'forward'
+    REVERSE = 'reverse'
+    BOTH = 'both'
+    DIRECTION_CHOICES = [
+        (FORWARD, 'Start to end'),
+        (REVERSE, 'End to start'),
+        (BOTH, 'Both directions'),
+    ]
+
+    asset = models.ForeignKey(LayoutAsset, related_name='linear_axes', on_delete=models.CASCADE)
+    code = models.CharField(max_length=40)
+    name = models.CharField(max_length=100)
+    axis_kind = models.CharField(max_length=24, choices=AXIS_KIND_CHOICES)
+    points = models.JSONField(
+        default=list,
+        help_text='Ordered WGS-84 centerline points as [[longitude, latitude], ...].',
+    )
+    direction = models.CharField(max_length=7, choices=DIRECTION_CHOICES, default=BOTH)
+    lane_count = models.PositiveSmallIntegerField(default=1)
+    capacity = models.PositiveIntegerField(default=1)
+    width_m = models.FloatField(blank=True, null=True)
+    speed_limit_kph = models.FloatField(blank=True, null=True)
+    access_policy = models.ForeignKey(
+        AccessPolicy, related_name='axes', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    is_enabled = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['asset', 'code'], name='unique_linear_axis_code_per_asset',
+            )
+        ]
+
+    @property
+    def layout_version(self):
+        return self.asset.layout_version
+
+    def clean(self):
+        if self.access_policy_id and self.access_policy.layout_version_id != self.asset.layout_version_id:
+            raise ValidationError({'access_policy': 'The policy must belong to the axis layout version.'})
+
+    def __str__(self):
+        return f'{self.code} - {self.name}'
+
+
+class LinearMarker(models.Model):
+    BOLLARD = 'bollard'
+    STOP = 'stop'
+    REFERENCE = 'reference'
+    LIMIT = 'limit'
+    MARKER_KIND_CHOICES = [
+        (BOLLARD, 'Bollard'),
+        (STOP, 'Stop'),
+        (REFERENCE, 'Reference'),
+        (LIMIT, 'Travel limit'),
+    ]
+
+    axis = models.ForeignKey(LinearAxis, related_name='markers', on_delete=models.CASCADE)
+    marker_kind = models.CharField(max_length=16, choices=MARKER_KIND_CHOICES)
+    sequence = models.PositiveIntegerField()
+    code = models.CharField(max_length=40)
+    name = models.CharField(max_length=100)
+    chainage_m = models.FloatField(help_text='Distance from the axis start in meters')
+    lateral_offset_m = models.FloatField(default=0.0)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['axis_id', 'sequence']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['axis', 'sequence'], name='unique_marker_sequence_per_axis',
+            ),
+            models.UniqueConstraint(
+                fields=['axis', 'code'], name='unique_marker_code_per_axis',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.axis.code} / {self.name}'
+
+
+class BerthSegment(models.Model):
+    WATER_LEFT = 'left'
+    WATER_RIGHT = 'right'
+    WATER_SIDE_CHOICES = [(WATER_LEFT, 'Left'), (WATER_RIGHT, 'Right')]
+    BOLLARDS_FORWARD = 'forward'
+    BOLLARDS_REVERSE = 'reverse'
+    BOLLARD_DIRECTION_CHOICES = [
+        (BOLLARDS_FORWARD, 'Start to end'),
+        (BOLLARDS_REVERSE, 'End to start'),
+    ]
+
+    quay_asset = models.ForeignKey(
+        LayoutAsset, related_name='berth_segments', on_delete=models.CASCADE,
+    )
+    quay_face_axis = models.ForeignKey(
+        LinearAxis, related_name='berth_segments', on_delete=models.CASCADE,
+    )
+    code = models.CharField(max_length=40)
+    name = models.CharField(max_length=100)
+    start_chainage_m = models.FloatField(default=0.0)
+    end_chainage_m = models.FloatField()
+    water_side = models.CharField(max_length=5, choices=WATER_SIDE_CHOICES, default=WATER_LEFT)
+    bollard_direction = models.CharField(
+        max_length=7, choices=BOLLARD_DIRECTION_CHOICES, default=BOLLARDS_FORWARD,
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['quay_asset_id', 'start_chainage_m']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['quay_asset', 'code'], name='unique_berth_segment_code_per_quay',
+            )
+        ]
+
+    @property
+    def location(self):
+        return self.quay_asset.layout_version.location
+
+    @property
+    def bollards(self):
+        low = min(self.start_chainage_m, self.end_chainage_m)
+        high = max(self.start_chainage_m, self.end_chainage_m)
+        return self.quay_face_axis.markers.filter(
+            marker_kind=LinearMarker.BOLLARD,
+            chainage_m__gte=low,
+            chainage_m__lte=high,
+        ).order_by('sequence')
+
+    @property
+    def length_m(self):
+        return abs(self.end_chainage_m - self.start_chainage_m)
+
+    def clean(self):
+        if self.quay_asset.asset_kind != LayoutAsset.QUAY:
+            raise ValidationError({'quay_asset': 'A berth segment must belong to a quay asset.'})
+        if self.quay_face_axis.asset_id != self.quay_asset_id:
+            raise ValidationError({'quay_face_axis': 'The quay face axis must belong to the selected quay.'})
+        if self.quay_face_axis.axis_kind != LinearAxis.QUAY_FACE:
+            raise ValidationError({'quay_face_axis': 'Select an axis with quay-face kind.'})
+        if self.start_chainage_m == self.end_chainage_m:
+            raise ValidationError({'end_chainage_m': 'A berth segment must have a positive length.'})
+
+    def __str__(self):
+        return f'{self.quay_asset.code} / {self.name}'
+
+
+###################################
+class StorageGrid(models.Model):
+    AUTOMATED = 'automated'
+    MANUAL = 'manual'
+    CHASSIS = 'chassis'
+    HEAP = 'heap'
+    GRID_KIND_CHOICES = [
+        (AUTOMATED, 'Automated stacking block'),
+        (MANUAL, 'Manual stacking block'),
+        (CHASSIS, 'Chassis yard'),
+        (HEAP, 'Heap zone'),
+    ]
+
+    layout_asset = models.OneToOneField(
+        LayoutAsset, related_name='storage_grid', on_delete=models.CASCADE,
+    )
+    grid_kind = models.CharField(max_length=16, choices=GRID_KIND_CHOICES, default=AUTOMATED)
 
     name = models.CharField(max_length=30, unique=False)
     max_bays = IntegerRangeField(min_value=1, max_value=100)
@@ -341,15 +666,23 @@ class Block(models.Model):
     padding_right_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Right padding (m) around block')
 
     # Spacing between bays and rows (meters)
-    bay_spacing_m = models.FloatField(default=2.5, help_text='Spacing between bays in meters')
-    row_spacing_m = models.FloatField(default=2.5, help_text='Spacing between rows in meters')
+    bay_spacing_m = models.FloatField(default=0.4, help_text='Spacing between bays in meters')
+    row_spacing_m = models.FloatField(default=0.4, help_text='Spacing between rows in meters')
 
     is_heapzone = models.BooleanField(default=0)
 
     objects = models.Manager() # The default manager.
 
     class Meta:
-        unique_together = ('location', 'name',)
+        constraints = [
+            models.UniqueConstraint(
+                fields=['layout_asset', 'name'], name='unique_grid_name_per_asset',
+            )
+        ]
+
+    @property
+    def location(self):
+        return self.layout_asset.layout_version.location
 
     def save(self, *args, **kwargs):
         if self.latitude is None:
@@ -365,8 +698,8 @@ class Block(models.Model):
 
 ###################################
 class Pile(models.Model):
-    block = models.ForeignKey(
-        'Block', related_name='piles',
+    storage_grid = models.ForeignKey(
+        'StorageGrid', related_name='piles',
         on_delete=models.CASCADE,
     )
     bay = models.IntegerField(default=0)
@@ -389,12 +722,10 @@ class Pile(models.Model):
     margin_right_m = models.FloatField(default=0.0, blank=True, null=True, help_text='Right margin for this pile (m)')
 
     class Meta:
-        unique_together = ('block', 'bay', 'row')
-        # No need for additional constraints as the block's location is already part of the uniqueness
-        # through the block foreign key
+        unique_together = ('storage_grid', 'bay', 'row')
 
     def __str__(self):
-        return "%s-%s-%s-%s-%s" % (self.block.location.name, self.block.name, self.block, self.bay, self.row)
+        return "%s-%s-%s-%s" % (self.storage_grid.location.name, self.storage_grid.name, self.bay, self.row)
 
     def get_bay_name(self):
         """Generate bay name/identifier based on block naming convention."""
@@ -405,15 +736,15 @@ class Pile(models.Model):
         return self._grid_label('row')
 
     def _grid_label(self, axis):
-        if not self.block:
+        if not self.storage_grid:
             return str(getattr(self, axis))
         physical = getattr(self, axis)
-        count = getattr(self.block, f'max_{axis}s')
-        order = getattr(self.block, f'{axis}_order')
-        logical = count - physical + 1 if order == Block.REVERSE else physical
-        naming = getattr(self.block, f'{axis}_naming')
-        initial = str(getattr(self.block, f'initial_{axis}') or '1').strip()
-        if naming == Block.LETTERS:
+        count = getattr(self.storage_grid, f'max_{axis}s')
+        order = getattr(self.storage_grid, f'{axis}_order')
+        logical = count - physical + 1 if order == StorageGrid.REVERSE else physical
+        naming = getattr(self.storage_grid, f'{axis}_naming')
+        initial = str(getattr(self.storage_grid, f'initial_{axis}') or '1').strip()
+        if naming == StorageGrid.LETTERS:
             number = 0
             for char in initial.upper():
                 if not ('A' <= char <= 'Z'):
@@ -431,7 +762,7 @@ class Pile(models.Model):
             start = int(initial)
         except ValueError:
             start = 1
-        step = 2 if naming == Block.ODD_NUMBERS else 1
+        step = 2 if naming == StorageGrid.ODD_NUMBERS else 1
         return str(start + (logical - 1) * step)
 
     def get_pile_name(self):
@@ -495,7 +826,7 @@ class Position(models.Model):
         unique_together = ('pile', 'tier')
 
     def __str__(self):
-        return "%s-%s-%s-%s" % (self.pile.block, self.pile.bay, self.pile.row, self.tier)
+        return "%s-%s-%s-%s" % (self.pile.storage_grid, self.pile.bay, self.pile.row, self.tier)
 
     def validate_physical_rules(self):
         """Validate that the position follows physical rules."""
@@ -556,6 +887,464 @@ class Position(models.Model):
 
 
 ###################################
+class TransferInterface(models.Model):
+    DIRECT_HANDOFF = 'direct_handoff'
+    VEHICLE_LANE = 'vehicle_lane'
+    GROUND_BUFFER = 'ground_buffer'
+    PLATFORM = 'platform'
+    CHASSIS = 'chassis'
+    STACK_ATTACK = 'stack_attack'
+    INTERFACE_KIND_CHOICES = [
+        (DIRECT_HANDOFF, 'Direct handoff'),
+        (VEHICLE_LANE, 'Vehicle lane'),
+        (GROUND_BUFFER, 'Ground buffer'),
+        (PLATFORM, 'Platform'),
+        (CHASSIS, 'Chassis position'),
+        (STACK_ATTACK, 'Stack attack zone'),
+    ]
+    LEFT = 'left'
+    RIGHT = 'right'
+    START = 'start'
+    END = 'end'
+    INTERNAL = 'internal'
+    SIDE_CHOICES = [
+        (LEFT, 'Left'), (RIGHT, 'Right'), (START, 'Start'),
+        (END, 'End'), (INTERNAL, 'Internal'),
+    ]
+
+    asset = models.ForeignKey(
+        LayoutAsset, related_name='transfer_interfaces', on_delete=models.CASCADE,
+    )
+    storage_grid = models.ForeignKey(
+        StorageGrid, related_name='transfer_interfaces', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    axis = models.ForeignKey(
+        LinearAxis, related_name='transfer_interfaces', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    road_axis = models.ForeignKey(
+        LinearAxis, related_name='road_interfaces', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        help_text='Adjacent road centerline used to enter or leave this interface.',
+    )
+    access_policy = models.ForeignKey(
+        AccessPolicy, related_name='transfer_interfaces', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    code = models.CharField(max_length=40)
+    name = models.CharField(max_length=100)
+    interface_kind = models.CharField(max_length=20, choices=INTERFACE_KIND_CHOICES)
+    side = models.CharField(max_length=10, choices=SIDE_CHOICES, default=INTERNAL)
+    geometry = models.JSONField(default=dict, blank=True)
+    bay_start = models.PositiveIntegerField(blank=True, null=True)
+    bay_end = models.PositiveIntegerField(blank=True, null=True)
+    row_start = models.PositiveIntegerField(blank=True, null=True)
+    row_end = models.PositiveIntegerField(blank=True, null=True)
+    capacity = models.PositiveIntegerField(default=1)
+    lane_count = models.PositiveSmallIntegerField(default=1)
+    lane_spacing_m = models.FloatField(default=3.5)
+    position_reference = models.CharField(
+        max_length=10, choices=[('fixed', 'Fixed'), ('che', 'Equipment relative')], default='fixed',
+    )
+    reference_che = models.ForeignKey(
+        'Che', related_name='referenced_interfaces', on_delete=models.RESTRICT, blank=True, null=True,
+    )
+    longitudinal_offset_m = models.FloatField(default=0.0)
+    lateral_offset_m = models.FloatField(default=0.0)
+    position_spacing_m = models.FloatField(default=6.5)
+    cargo_may_rest = models.BooleanField(default=False)
+    requires_vehicle_present = models.BooleanField(default=False)
+    is_enabled = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['asset_id', 'code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['asset', 'code'], name='unique_transfer_interface_code_per_asset',
+            )
+        ]
+
+    @property
+    def layout_version(self):
+        return self.asset.layout_version
+
+    def clean(self):
+        errors = {}
+        if self.storage_grid_id and self.storage_grid.layout_asset.layout_version_id != self.asset.layout_version_id:
+            errors['storage_grid'] = 'The storage grid must belong to the same layout version.'
+        if self.axis_id and self.axis.asset.layout_version_id != self.asset.layout_version_id:
+            errors['axis'] = 'The axis must belong to the same layout version.'
+        if self.road_axis_id:
+            if self.road_axis.asset.layout_version_id != self.asset.layout_version_id:
+                errors['road_axis'] = 'The road must belong to the same layout version.'
+            elif self.road_axis.axis_kind != LinearAxis.ROAD_CENTERLINE:
+                errors['road_axis'] = 'Select a road-centerline axis.'
+        if self.access_policy_id and self.access_policy.layout_version_id != self.asset.layout_version_id:
+            errors['access_policy'] = 'The policy must belong to the same layout version.'
+        if self.lane_count < 1 or self.lane_spacing_m <= 0 or self.position_spacing_m <= 0:
+            errors['lane_count'] = 'Lane count and lane/position spacing must be positive.'
+        for field in ('lane_spacing_m', 'position_spacing_m', 'longitudinal_offset_m', 'lateral_offset_m'):
+            if not math.isfinite(getattr(self, field)):
+                errors[field] = 'Use a finite meter value.'
+        if self.position_reference == 'che' and not self.reference_che_id:
+            errors['reference_che'] = 'Equipment-relative positions require a reference CHE.'
+        if self.position_reference == 'fixed' and self.reference_che_id:
+            errors['reference_che'] = 'Fixed positions cannot reference a CHE.'
+        if self.reference_che_id and self.reference_che.location_id != self.asset.layout_version.location_id:
+            errors['reference_che'] = 'Reference equipment must belong to this terminal.'
+        for start_name, end_name in [('bay_start', 'bay_end'), ('row_start', 'row_end')]:
+            start, end = getattr(self, start_name), getattr(self, end_name)
+            if start is not None and end is not None and start > end:
+                errors[end_name] = 'The end of a range must be greater than or equal to its start.'
+        if errors:
+            raise ValidationError(errors)
+
+    def __str__(self):
+        return f'{self.asset.code} / {self.name}'
+
+
+class InterfacePosition(models.Model):
+    transfer_interface = models.ForeignKey(
+        TransferInterface, related_name='positions', on_delete=models.CASCADE,
+    )
+    sequence = models.PositiveIntegerField()
+    lane_index = models.PositiveSmallIntegerField(default=1)
+    position_index = models.PositiveIntegerField(default=1)
+    code = models.CharField(max_length=40)
+    name = models.CharField(max_length=100)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    heading_deg = models.FloatField(default=0.0)
+    capacity = models.PositiveIntegerField(default=1)
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['transfer_interface_id', 'sequence']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['transfer_interface', 'sequence'], name='unique_interface_position_sequence',
+            ),
+            models.UniqueConstraint(
+                fields=['transfer_interface', 'code'], name='unique_interface_position_code',
+            ),
+            models.UniqueConstraint(
+                fields=['transfer_interface', 'lane_index', 'position_index'], name='unique_interface_lane_position',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.transfer_interface.code} / {self.name}'
+
+
+class OperationalPosition(models.Model):
+    YARD_SLOT = 'yard_slot'
+    TRANSFER_POSITION = 'transfer_position'
+    VESSEL_SLOT = 'vessel_slot'
+    WAGON_SLOT = 'wagon_slot'
+    VEHICLE_SLOT = 'vehicle_slot'
+    CHASSIS_SLOT = 'chassis_slot'
+    WORK_POINT = 'work_point'
+    PARKING_POSITION = 'parking_position'
+    POSITION_KIND_CHOICES = [
+        (YARD_SLOT, 'Yard slot'),
+        (TRANSFER_POSITION, 'Transfer position'),
+        (VESSEL_SLOT, 'Vessel slot'),
+        (WAGON_SLOT, 'Wagon slot'),
+        (VEHICLE_SLOT, 'Vehicle slot'),
+        (CHASSIS_SLOT, 'Chassis slot'),
+        (WORK_POINT, 'Work point'),
+        (PARKING_POSITION, 'Parking position'),
+    ]
+
+    layout_version = models.ForeignKey(
+        LayoutVersion, related_name='operational_positions', on_delete=models.CASCADE,
+    )
+    code = models.CharField(max_length=80)
+    name = models.CharField(max_length=120)
+    position_kind = models.CharField(max_length=24, choices=POSITION_KIND_CHOICES)
+    asset = models.ForeignKey(
+        LayoutAsset, related_name='operational_positions', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    stack_position = models.OneToOneField(
+        Position, related_name='operational_position', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    interface_position = models.OneToOneField(
+        InterfacePosition, related_name='operational_position', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    axis = models.ForeignKey(
+        LinearAxis, related_name='operational_positions', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    chainage_m = models.FloatField(blank=True, null=True)
+    latitude = models.FloatField(blank=True, null=True)
+    longitude = models.FloatField(blank=True, null=True)
+    elevation_m = models.FloatField(default=0.0)
+    logical_address = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['layout_version', 'code'], name='unique_operational_position_code',
+            )
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.asset_id and self.asset.layout_version_id != self.layout_version_id:
+            errors['asset'] = 'The asset must belong to the same layout version.'
+        if self.axis_id and self.axis.asset.layout_version_id != self.layout_version_id:
+            errors['axis'] = 'The axis must belong to the same layout version.'
+        if self.stack_position_id and self.stack_position.pile.storage_grid.layout_asset.layout_version_id != self.layout_version_id:
+            errors['stack_position'] = 'The yard slot must belong to the same layout version.'
+        if self.interface_position_id and self.interface_position.transfer_interface.asset.layout_version_id != self.layout_version_id:
+            errors['interface_position'] = 'The interface position must belong to the same layout version.'
+        if (self.latitude is None) != (self.longitude is None):
+            errors['latitude'] = 'Latitude and longitude must be supplied together.'
+        if errors:
+            raise ValidationError(errors)
+
+    def __str__(self):
+        return self.code
+
+
+class CheOperatingScope(models.Model):
+    che = models.ForeignKey(
+        'Che', related_name='operating_scopes', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    equipment_type = models.ForeignKey(
+        'EquipmentType', related_name='operating_scopes', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    asset = models.ForeignKey(
+        LayoutAsset, related_name='che_operating_scopes', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    axis = models.ForeignKey(
+        LinearAxis, related_name='che_operating_scopes', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    service_lane_axis = models.ForeignKey(
+        LinearAxis, related_name='service_lane_scopes', on_delete=models.SET_NULL,
+        blank=True, null=True,
+        help_text='Road lane used by the scoped equipment while serving this area.',
+    )
+    min_chainage_m = models.FloatField(blank=True, null=True)
+    max_chainage_m = models.FloatField(blank=True, null=True)
+    bay_start = models.PositiveIntegerField(blank=True, null=True)
+    bay_end = models.PositiveIntegerField(blank=True, null=True)
+    row_start = models.PositiveIntegerField(blank=True, null=True)
+    row_end = models.PositiveIntegerField(blank=True, null=True)
+    can_reposition = models.BooleanField(default=False)
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=(Q(che__isnull=False, equipment_type__isnull=True) | Q(che__isnull=True, equipment_type__isnull=False)),
+                name='scope_exactly_one_che_subject',
+            ),
+            models.CheckConstraint(
+                check=(Q(asset__isnull=False) | Q(axis__isnull=False)),
+                name='scope_requires_asset_or_axis',
+            ),
+        ]
+
+    def clean(self):
+        errors = {}
+        topology = self.asset or (self.axis.asset if self.axis_id else None)
+        if self.asset_id and self.axis_id and self.asset.layout_version_id != self.axis.asset.layout_version_id:
+            errors['axis'] = 'Scope asset and axis must belong to the same layout version.'
+        if self.service_lane_axis_id:
+            if self.service_lane_axis.axis_kind != LinearAxis.ROAD_CENTERLINE:
+                errors['service_lane_axis'] = 'The service lane must be a road-centerline axis.'
+            elif topology and self.service_lane_axis.asset.layout_version_id != topology.layout_version_id:
+                errors['service_lane_axis'] = 'The service lane must belong to the same layout version.'
+            elif topology and self.service_lane_axis.asset_id != topology.id:
+                errors['service_lane_axis'] = 'The service lane must belong to the scoped layout asset.'
+        if self.min_chainage_m is not None and self.max_chainage_m is not None and self.min_chainage_m > self.max_chainage_m:
+            errors['max_chainage_m'] = 'Maximum chainage must be at least minimum chainage.'
+        if errors:
+            raise ValidationError(errors)
+
+
+class RouteNode(models.Model):
+    JUNCTION = 'junction'
+    AXIS_POINT = 'axis_point'
+    INTERFACE = 'interface'
+    OPERATIONAL = 'operational'
+    ENTRY_EXIT = 'entry_exit'
+    NODE_KIND_CHOICES = [
+        (JUNCTION, 'Junction'),
+        (AXIS_POINT, 'Axis point'),
+        (INTERFACE, 'Transfer interface'),
+        (OPERATIONAL, 'Operational position'),
+        (ENTRY_EXIT, 'Entry or exit'),
+    ]
+
+    layout_version = models.ForeignKey(
+        LayoutVersion, related_name='route_nodes', on_delete=models.CASCADE,
+    )
+    code = models.CharField(max_length=80)
+    name = models.CharField(max_length=120)
+    node_kind = models.CharField(max_length=16, choices=NODE_KIND_CHOICES, default=JUNCTION)
+    point = models.JSONField(help_text='GeoJSON Point geometry using WGS-84 coordinates.')
+    asset = models.ForeignKey(
+        LayoutAsset, related_name='route_nodes', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    operational_position = models.OneToOneField(
+        OperationalPosition, related_name='route_node', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    transfer_interface = models.OneToOneField(
+        TransferInterface, related_name='route_node', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    is_generated = models.BooleanField(default=False)
+    is_enabled = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['layout_version', 'code'], name='unique_route_node_code',
+            )
+        ]
+
+    def clean(self):
+        if self.asset_id and self.asset.layout_version_id != self.layout_version_id:
+            raise ValidationError({'asset': 'The asset must belong to the same layout version.'})
+        if self.operational_position_id and self.operational_position.layout_version_id != self.layout_version_id:
+            raise ValidationError({'operational_position': 'The position must belong to the same layout version.'})
+        if self.transfer_interface_id and self.transfer_interface.layout_version.pk != self.layout_version_id:
+            raise ValidationError({'transfer_interface': 'The interface must belong to the same layout version.'})
+
+    def __str__(self):
+        return self.code
+
+
+class RouteEdge(models.Model):
+    TRAVEL = 'travel'
+    HANDLE = 'handle'
+    HANDOFF = 'handoff'
+    COUPLE = 'couple'
+    UNCOUPLE = 'uncouple'
+    WAIT = 'wait'
+    EDGE_KIND_CHOICES = [
+        (TRAVEL, 'Travel'), (HANDLE, 'Handle'), (HANDOFF, 'Handoff'),
+        (COUPLE, 'Couple'), (UNCOUPLE, 'Uncouple'), (WAIT, 'Wait'),
+    ]
+    ROAD = 'road'
+    FREE_DRIVE = 'free_drive'
+    CRANE = 'crane'
+    RAIL = 'rail'
+    WATER = 'water'
+    STATIC = 'static'
+    MOVEMENT_MODE_CHOICES = [
+        (ROAD, 'Road'), (FREE_DRIVE, 'Free drive'), (CRANE, 'Crane'),
+        (RAIL, 'Rail'), (WATER, 'Water'), (STATIC, 'Static transfer'),
+    ]
+
+    layout_version = models.ForeignKey(
+        LayoutVersion, related_name='route_edges', on_delete=models.CASCADE,
+    )
+    code = models.CharField(max_length=100)
+    name = models.CharField(max_length=140, blank=True, default='')
+    from_node = models.ForeignKey(RouteNode, related_name='outgoing_edges', on_delete=models.CASCADE)
+    to_node = models.ForeignKey(RouteNode, related_name='incoming_edges', on_delete=models.CASCADE)
+    edge_kind = models.CharField(max_length=12, choices=EDGE_KIND_CHOICES, default=TRAVEL)
+    movement_mode = models.CharField(max_length=16, choices=MOVEMENT_MODE_CHOICES)
+    source_axis = models.ForeignKey(
+        LinearAxis, related_name='route_edges', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    access_policy = models.ForeignKey(
+        AccessPolicy, related_name='route_edges', on_delete=models.SET_NULL,
+        blank=True, null=True,
+    )
+    distance_m = models.FloatField(default=0.0)
+    nominal_duration_seconds = models.FloatField(blank=True, null=True)
+    capacity = models.PositiveIntegerField(default=1)
+    base_cost = models.FloatField(default=1.0)
+    is_generated = models.BooleanField(default=False)
+    is_enabled = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['layout_version', 'code'], name='unique_route_edge_code',
+            ),
+            models.CheckConstraint(check=~Q(from_node=models.F('to_node')), name='route_edge_distinct_nodes'),
+        ]
+
+    def clean(self):
+        errors = {}
+        if self.from_node_id and self.from_node.layout_version_id != self.layout_version_id:
+            errors['from_node'] = 'The node must belong to the edge layout version.'
+        if self.to_node_id and self.to_node.layout_version_id != self.layout_version_id:
+            errors['to_node'] = 'The node must belong to the edge layout version.'
+        if self.source_axis_id and self.source_axis.asset.layout_version_id != self.layout_version_id:
+            errors['source_axis'] = 'The axis must belong to the edge layout version.'
+        if self.access_policy_id and self.access_policy.layout_version_id != self.layout_version_id:
+            errors['access_policy'] = 'The policy must belong to the edge layout version.'
+        if errors:
+            raise ValidationError(errors)
+
+    def __str__(self):
+        return self.code
+
+
+class RouteEdgeRequirement(models.Model):
+    route_edge = models.ForeignKey(
+        RouteEdge, related_name='requirements', on_delete=models.CASCADE,
+    )
+    component_type = models.ForeignKey(
+        'ComponentType', related_name='route_edge_requirements', on_delete=models.RESTRICT,
+    )
+    role = models.CharField(max_length=40, blank=True, default='')
+    minimum_quantity = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['route_edge', 'component_type', 'role'],
+                name='unique_route_edge_component_requirement',
+            )
+        ]
+
+
+class LayoutPreset(models.Model):
+    code = models.CharField(max_length=50)
+    version = models.PositiveIntegerField(default=1)
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, default='')
+    root_asset_kind = models.CharField(max_length=24, choices=LayoutAsset.ASSET_KIND_CHOICES)
+    definition = models.JSONField(default=dict)
+    is_system = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['name', '-version']
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'version'], name='unique_layout_preset_version')
+        ]
+
+    def __str__(self):
+        return f'{self.name} v{self.version}'
+
+
+###################################
 class WorkQueue(models.Model):
     name = models.CharField(max_length=30, unique=True)
     is_active = models.BooleanField(default=0)
@@ -591,10 +1380,33 @@ class Order(models.Model):
         (SHIFT, 'Shift'),
     ]
 
+    DRAFT = 'draft'
+    PLANNED = 'planned'
+    RELEASED = 'released'
+    IN_PROGRESS = 'in_progress'
+    COMPLETE = 'complete'
+    FAILED = 'failed'
+    CANCELLED = 'cancelled'
+    STATUS_CHOICES = [
+        (DRAFT, 'Draft'),
+        (PLANNED, 'Planned'),
+        (RELEASED, 'Released'),
+        (IN_PROGRESS, 'In progress'),
+        (COMPLETE, 'Complete'),
+        (FAILED, 'Failed'),
+        (CANCELLED, 'Cancelled'),
+    ]
+
     order_type = models.CharField(
         max_length=2,
         choices=ORDER_TYPES,
         default=HOUSEKEEPING,
+    )
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=DRAFT)
+    priority = models.PositiveSmallIntegerField(
+        default=100,
+        validators=[MinValueValidator(1), MaxValueValidator(999)],
+        help_text='Dispatch priority; lower values are dispatched first.',
     )
     container_number = models.ForeignKey(
         'ContainerVisit', related_name='container_visit', blank=True, null=True,
@@ -608,13 +1420,15 @@ class Order(models.Model):
     ## actual time of completion
     etc = models.DateTimeField('expected time of completion', blank=True, null=True)
     atc = models.DateTimeField('actual time of completion', blank=True, null=True)
+    released_at = models.DateTimeField(blank=True, null=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
     from_position = models.ForeignKey(
-        'Position',
+        'OperationalPosition',
         on_delete=models.RESTRICT,
         related_name='from_position', blank=True, null=True
     )
     to_position = models.ForeignKey(
-        'Position',
+        'OperationalPosition',
         on_delete=models.RESTRICT,
         related_name='to_position', blank=True, null=True
     )
@@ -625,27 +1439,139 @@ class Order(models.Model):
         return f"{work_queue_name}-{self.pk}-{container_ref}"
 
 
+class IntegrationInbox(models.Model):
+    PENDING = 'pending'
+    PROCESSED = 'processed'
+    FAILED = 'failed'
+    STATUS_CHOICES = [
+        (PENDING, 'Pending'), (PROCESSED, 'Processed'), (FAILED, 'Failed'),
+    ]
+
+    event_id = models.UUIDField(primary_key=True)
+    source = models.CharField(max_length=40)
+    topic = models.CharField(max_length=300)
+    schema = models.CharField(max_length=100)
+    payload = models.JSONField()
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=PENDING)
+    error = models.TextField(blank=True, default='')
+    received_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['received_at']
+
+
+class IntegrationOutbox(models.Model):
+    event_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    topic = models.CharField(max_length=300)
+    schema = models.CharField(max_length=100)
+    payload = models.JSONField()
+    qos = models.PositiveSmallIntegerField(default=1)
+    retain = models.BooleanField(default=False)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    published_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+
+###################################
+class OrderRoutePlan(models.Model):
+    DRAFT = 'draft'
+    ACTIVE = 'active'
+    SUPERSEDED = 'superseded'
+    COMPLETED = 'completed'
+    STATUS_CHOICES = [
+        (DRAFT, 'Draft'), (ACTIVE, 'Active'),
+        (SUPERSEDED, 'Superseded'), (COMPLETED, 'Completed'),
+    ]
+
+    order = models.ForeignKey(Order, related_name='route_plans', on_delete=models.CASCADE)
+    layout_version = models.ForeignKey(
+        LayoutVersion, related_name='order_route_plans', on_delete=models.RESTRICT,
+    )
+    version = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=DRAFT)
+    calculated_at = models.DateTimeField(auto_now_add=True)
+    cost = models.FloatField(default=0.0)
+    reason = models.TextField(blank=True, default='')
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['order', 'version'], name='unique_route_plan_order_version')
+        ]
+
+    def __str__(self):
+        return f'Order {self.order_id} route v{self.version}'
+
+
 ###################################
 class OrderLeg(models.Model):
+    MOVE = 'move'
+    HANDLE = 'handle'
+    HANDOFF = 'handoff'
+    WAIT = 'wait'
+    LEG_KIND_CHOICES = [
+        (MOVE, 'Move'), (HANDLE, 'Handle'), (HANDOFF, 'Handoff'), (WAIT, 'Wait'),
+    ]
+    PLANNED = 'planned'
+    DISPATCHED = 'dispatched'
+    WORKING = 'working'
+    COMPLETE = 'complete'
+    FAILED = 'failed'
+    BLOCKED = 'blocked'
+    CANCELLED = 'cancelled'
+    STATUS_CHOICES = [
+        (PLANNED, 'Planned'), (DISPATCHED, 'Dispatched'), (WORKING, 'Working'),
+        (COMPLETE, 'Complete'), (FAILED, 'Failed'), (BLOCKED, 'Blocked'),
+        (CANCELLED, 'Cancelled'),
+    ]
+
     order = models.ForeignKey(
         'Order', related_name='order_legs',
         on_delete=models.CASCADE, blank=True, null=True,
     )
+    route_plan = models.ForeignKey(
+        OrderRoutePlan, related_name='legs', on_delete=models.CASCADE,
+        blank=True, null=True,
+    )
+    sequence = models.PositiveIntegerField(default=1)
+    leg_kind = models.CharField(max_length=10, choices=LEG_KIND_CHOICES, default=MOVE)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=PLANNED)
     che = models.ForeignKey(
         'Che',
         on_delete=models.RESTRICT, blank=True, null=True,
     )
-    distance = IntegerRangeField(min_value=1, max_value=10000, blank=True, null=True)
+    equipment_type = models.ForeignKey(
+        'EquipmentType', related_name='order_legs', on_delete=models.RESTRICT,
+        blank=True, null=True,
+    )
+    distance = models.FloatField(blank=True, null=True)
     start_position = models.ForeignKey(
-        'Pile',
+        'OperationalPosition',
         on_delete=models.RESTRICT,
-        related_name='start_pile', blank=True, null=True
+        related_name='starting_order_legs', blank=True, null=True
     )
     end_position = models.ForeignKey(
-        'Pile',
+        'OperationalPosition',
         on_delete=models.RESTRICT,
-        related_name='end_pile', blank=True, null=True
+        related_name='ending_order_legs', blank=True, null=True
     )
+    planned_start = models.DateTimeField(blank=True, null=True)
+    planned_end = models.DateTimeField(blank=True, null=True)
+    actual_start = models.DateTimeField(blank=True, null=True)
+    actual_end = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['order_id', 'sequence']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['route_plan', 'sequence'], condition=Q(route_plan__isnull=False),
+                name='unique_order_leg_sequence_per_plan',
+            )
+        ]
 
     def __str__(self):
         if self.order_id:
@@ -653,6 +1579,24 @@ class OrderLeg(models.Model):
             container_ref = self.order.container_number if self.order.container_number_id else "No Container"
             return f"{order_ref}-{self.id}-{container_ref}"
         return f"OrderLeg #{self.id}"
+
+
+class OrderLegRouteEdge(models.Model):
+    order_leg = models.ForeignKey(
+        OrderLeg, related_name='route_edges', on_delete=models.CASCADE,
+    )
+    route_edge = models.ForeignKey(
+        RouteEdge, related_name='order_leg_usages', on_delete=models.RESTRICT,
+    )
+    sequence = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ['order_leg_id', 'sequence']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['order_leg', 'sequence'], name='unique_route_edge_sequence_per_leg',
+            )
+        ]
 
 
 ###################################
@@ -668,9 +1612,9 @@ class Che(models.Model):
         'EquipmentType',
         on_delete=models.CASCADE,
     )
-    current_block = models.ForeignKey(
-        'Block',
-        on_delete=models.RESTRICT, blank=True, null=True
+    current_asset = models.ForeignKey(
+        'LayoutAsset', related_name='current_ches',
+        on_delete=models.SET_NULL, blank=True, null=True
     )
     current_user = models.ForeignKey(
         'auth.User',
@@ -1413,15 +2357,15 @@ class CarrierService(models.Model):
     )
 
     default_berth = models.ForeignKey(
-        'Berth', on_delete=models.SET_NULL, related_name='default_services',
+        'BerthSegment', on_delete=models.SET_NULL, related_name='default_services',
         blank=True, null=True,
     )
     default_start_bollard = models.ForeignKey(
-        'Bollard', on_delete=models.SET_NULL, related_name='services_starting_here',
+        'LinearMarker', on_delete=models.SET_NULL, related_name='services_starting_here',
         blank=True, null=True,
     )
     default_end_bollard = models.ForeignKey(
-        'Bollard', on_delete=models.SET_NULL, related_name='services_ending_here',
+        'LinearMarker', on_delete=models.SET_NULL, related_name='services_ending_here',
         blank=True, null=True,
     )
 
@@ -1559,15 +2503,15 @@ class CarrierVisit(models.Model):
     carrier = models.CharField(max_length=50, blank=True, null=True)
     berth = models.CharField(max_length=10, blank=True, null=True)
     planned_berth = models.ForeignKey(
-        'Berth', on_delete=models.SET_NULL, related_name='carrier_visits',
+        'BerthSegment', on_delete=models.SET_NULL, related_name='carrier_visits',
         blank=True, null=True,
     )
     berth_start_bollard = models.ForeignKey(
-        'Bollard', on_delete=models.SET_NULL, related_name='visits_starting_here',
+        'LinearMarker', on_delete=models.SET_NULL, related_name='visits_starting_here',
         blank=True, null=True,
     )
     berth_end_bollard = models.ForeignKey(
-        'Bollard', on_delete=models.SET_NULL, related_name='visits_ending_here',
+        'LinearMarker', on_delete=models.SET_NULL, related_name='visits_ending_here',
         blank=True, null=True,
     )
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1863,6 +2807,14 @@ class PointOfWork(models.Model):
     code = models.CharField(max_length=20)
     latitude = models.FloatField(blank=True, null=True)
     longitude = models.FloatField(blank=True, null=True)
+    operational_position = models.ForeignKey(
+        'OperationalPosition', related_name='points_of_work',
+        on_delete=models.SET_NULL, blank=True, null=True,
+    )
+    route_node = models.ForeignKey(
+        'RouteNode', related_name='points_of_work',
+        on_delete=models.SET_NULL, blank=True, null=True,
+    )
     max_throughput = models.IntegerField(blank=True, null=True, help_text='Maximum throughput in containers per hour')
     is_active = models.BooleanField(default=True)
 
@@ -1871,253 +2823,6 @@ class PointOfWork(models.Model):
 
     def __str__(self):
         return f"{self.code} - {self.name}"
-
-
-###################################
-class POWConnection(models.Model):
-    from_pow = models.ForeignKey(
-        'PointOfWork',
-        on_delete=models.CASCADE,
-        related_name='outgoing_connections'
-    )
-    to_pow = models.ForeignKey(
-        'PointOfWork',
-        on_delete=models.CASCADE,
-        related_name='incoming_connections'
-    )
-    distance = models.IntegerField(help_text='Distance in meters')
-    max_throughput = models.IntegerField(help_text='Maximum throughput in containers per hour')
-    is_bidirectional = models.BooleanField(default=False)
-    cost = models.FloatField(default=1.0, help_text='Cost factor for pathfinding algorithms')
-    is_enabled = models.BooleanField(default=True)
-
-    class Meta:
-        unique_together = ('from_pow', 'to_pow')
-
-    def __str__(self):
-        direction = '↔' if self.is_bidirectional else '→'
-        return f"{self.from_pow.code} {direction} {self.to_pow.code} ({self.distance}m)"
-
-
-###################################
-class Area(models.Model):
-    TERMINAL_AREA = 'terminal area'
-    YARD = 'yard'
-    QUAY = 'quay'
-    WATER = 'water'
-    LAND = 'land'
-    ROAD = 'road'
-    BUILDING = 'building'
-    YARD_BLOCK = 'yard block'
-    PARKING = 'parking'
-    BERTH = 'berth'
-
-    AREA_TYPE_CHOICES = [
-        (TERMINAL_AREA, 'Terminal Area'),
-        (YARD, 'Yard'),
-        (QUAY, 'Quay'),
-        (WATER, 'Water'),
-        (LAND, 'Land'),
-        (ROAD, 'Road'),
-        (BUILDING, 'Building'),
-        (YARD_BLOCK, 'Yard Block'),
-        (PARKING, 'Parking'),
-        (BERTH, 'Berth'),
-    ]
-
-    location = models.ForeignKey(
-        'Location',
-        on_delete=models.CASCADE,
-        related_name='areas'
-    )
-    block = models.OneToOneField(
-        'Block',
-        on_delete=models.CASCADE,
-        related_name='area_geometry',
-        null=True,
-        blank=True,
-    )
-    name = models.CharField(max_length=100, default='', help_text='Name of the area')
-    area_type = models.CharField(
-        max_length=20,
-        choices=AREA_TYPE_CHOICES,
-        default=TERMINAL_AREA,
-    )
-    area = models.FloatField(help_text='Area size in square meters')
-    is_visible = models.BooleanField(default=True)
-    coordinates = models.JSONField(
-        default=list,
-        blank=True,
-        help_text='Polygon coordinates as GeoJSON-style [[longitude, latitude], ...]'
-    )
-
-    class Meta:
-        unique_together = ('location', 'name')
-
-    def __str__(self):
-        return f"{self.location.name} - {self.name}"
-
-
-###################################
-class Berth(models.Model):
-    WATER_LEFT = 'left'
-    WATER_RIGHT = 'right'
-    WATER_SIDE_CHOICES = [
-        (WATER_LEFT, 'Left'),
-        (WATER_RIGHT, 'Right'),
-    ]
-    BOLLARDS_FORWARD = 'forward'
-    BOLLARDS_REVERSE = 'reverse'
-    BOLLARD_DIRECTION_CHOICES = [
-        (BOLLARDS_FORWARD, 'Start to end'),
-        (BOLLARDS_REVERSE, 'End to start'),
-    ]
-
-    location = models.ForeignKey(
-        'Location', on_delete=models.CASCADE, related_name='berths'
-    )
-    area = models.OneToOneField(
-        'Area', on_delete=models.CASCADE, related_name='berth_config'
-    )
-    name = models.CharField(max_length=100)
-    latitude = models.FloatField(help_text='Latitude of the berth start-left anchor')
-    longitude = models.FloatField(help_text='Longitude of the berth start-left anchor')
-    heading_deg = models.FloatField(default=0.0, help_text='Direction along the berth relative to true north')
-    length_m = models.FloatField(default=300.0)
-    width_m = models.FloatField(default=30.0)
-    water_side = models.CharField(
-        max_length=5, choices=WATER_SIDE_CHOICES, default=WATER_LEFT,
-    )
-    bollard_direction = models.CharField(
-        max_length=7, choices=BOLLARD_DIRECTION_CHOICES, default=BOLLARDS_FORWARD,
-    )
-    bollard_count = IntegerRangeField(min_value=2, max_value=200, default=15)
-    default_bollard_spacing_m = models.FloatField(default=20.0)
-    start_margin_m = models.FloatField(default=0.0)
-    end_margin_m = models.FloatField(default=0.0)
-
-    class Meta:
-        unique_together = ('location', 'name')
-
-    def __str__(self):
-        return f"{self.location.name} - {self.name}"
-
-
-class Bollard(models.Model):
-    berth = models.ForeignKey(
-        'Berth', on_delete=models.CASCADE, related_name='bollards'
-    )
-    number = models.PositiveIntegerField()
-    name = models.CharField(max_length=30)
-    distance_along_berth_m = models.FloatField(default=0.0)
-    spacing_from_previous_m = models.FloatField(blank=True, null=True)
-    latitude = models.FloatField()
-    longitude = models.FloatField()
-
-    class Meta:
-        ordering = ['number']
-        unique_together = ('berth', 'number')
-
-    def __str__(self):
-        return f"{self.berth.name} / {self.name}"
-
-
-###################################
-class RoutingNode(models.Model):
-    location = models.ForeignKey(
-        'Location', on_delete=models.CASCADE, related_name='routing_nodes'
-    )
-    name = models.CharField(max_length=100, blank=True, default='')
-    latitude = models.FloatField(blank=True, null=True)
-    longitude = models.FloatField(blank=True, null=True)
-
-    def __str__(self):
-        return self.name or f"Node {self.pk}"
-
-
-###################################
-class Road(models.Model):
-    FORWARD = 'forward'
-    REVERSE = 'reverse'
-    BOTH = 'both'
-    DIRECTION_CHOICES = [
-        (FORWARD, 'First node to last node'),
-        (REVERSE, 'Last node to first node'),
-        (BOTH, 'Both ways'),
-    ]
-
-    location = models.ForeignKey(
-        'Location', on_delete=models.CASCADE, related_name='roads'
-    )
-    name = models.CharField(max_length=100)
-    points = models.JSONField(
-        default=list,
-        help_text='Ordered road centerline points as [[longitude, latitude], ...]',
-    )
-    lane_count = IntegerRangeField(min_value=1, max_value=20, default=1)
-    capacity = models.PositiveIntegerField(default=1, help_text='Maximum CHEs on the road')
-    direction = models.CharField(max_length=7, choices=DIRECTION_CHOICES, default=BOTH)
-    allowed_che_types = models.ManyToManyField(
-        'EquipmentType', related_name='roads', blank=True
-    )
-    start_node = models.ForeignKey(
-        'RoutingNode', on_delete=models.SET_NULL, related_name='starting_roads', null=True, blank=True
-    )
-    end_node = models.ForeignKey(
-        'RoutingNode', on_delete=models.SET_NULL, related_name='ending_roads', null=True, blank=True
-    )
-    is_enabled = models.BooleanField(default=True)
-
-    class Meta:
-        unique_together = ('location', 'name')
-
-    def __str__(self):
-        return self.name
-
-
-###################################
-class ParkingArea(models.Model):
-    area = models.OneToOneField(
-        'Area', on_delete=models.CASCADE, related_name='parking_config'
-    )
-    capacity = models.PositiveIntegerField(default=1, help_text='Maximum parked CHEs')
-    allowed_che_types = models.ManyToManyField(
-        'EquipmentType', related_name='parking_areas', blank=True
-    )
-
-    def __str__(self):
-        return self.area.name
-
-
-###################################
-class TerminalConnection(models.Model):
-    node = models.ForeignKey(
-        'RoutingNode', on_delete=models.CASCADE, related_name='terminal_connections'
-    )
-    block = models.ForeignKey(
-        'Block', on_delete=models.CASCADE, related_name='routing_connections', null=True, blank=True
-    )
-    parking_area = models.ForeignKey(
-        'ParkingArea', on_delete=models.CASCADE, related_name='routing_connections', null=True, blank=True
-    )
-    is_bidirectional = models.BooleanField(default=True)
-    cost = models.FloatField(default=1.0)
-    is_enabled = models.BooleanField(default=True)
-
-    class Meta:
-        constraints = [
-            models.CheckConstraint(
-                check=(
-                    models.Q(block__isnull=False, parking_area__isnull=True)
-                    | models.Q(block__isnull=True, parking_area__isnull=False)
-                ),
-                name='terminal_connection_exactly_one_asset',
-            )
-        ]
-
-    def __str__(self):
-        target = self.block or self.parking_area
-        return f"{self.node} -> {target}"
 
 
 ###################################

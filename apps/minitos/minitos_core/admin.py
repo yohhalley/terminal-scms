@@ -1,13 +1,18 @@
 from django.contrib import admin
 
 from .models import (
-    Area, Battery, Block, BusinessProcess, BusinessProcessExecution, CarrierService,
-    CarrierVisit, Che, CheComponent, ComponentType, ContainerOwner, ContainerUnit,
+    AccessPolicy, Battery, BerthSegment, BusinessProcess,
+    BusinessProcessExecution, CarrierService, CarrierVisit, Che, CheComponent,
+    CheOperatingScope, ComponentType, ContainerOwner, ContainerUnit,
     ContainerVisit, CurrentSignalValue, EnergyTank, Engine, EquipmentType,
-    EquipmentTypeComponent, HandlingCycle, ISOType, Location, MotionAxis,
-    OperationalStateInterval, Order, OrderLeg, ParkingArea, Pile, POD, Position,
-    ProcessHierarchy, ProcessVersion, Road, RoutingNode, SignalBinding,
-    SignalDefinition, Spreader, TerminalConnection, WorkQueue,
+    EquipmentTypeComponent, HandlingCycle, IntegrationInbox, IntegrationOutbox,
+    InterfacePosition, ISOType,
+    LayoutAsset, LayoutPreset, LayoutVersion, LinearAxis, LinearMarker, Location,
+    MotionAxis, OperationalPosition, OperationalStateInterval, Order, OrderLeg,
+    OrderLegRouteEdge, OrderRoutePlan, Pile, POD, PointOfWork, Position,
+    ProcessHierarchy, ProcessVersion, RouteEdge, RouteEdgeRequirement, RouteNode,
+    SignalBinding, SignalDefinition, Spreader, StorageGrid, TransferInterface,
+    WorkQueue,
 )
 
 admin.site.register(ISOType)
@@ -15,13 +20,30 @@ admin.site.register(ContainerOwner)
 admin.site.register(ContainerUnit)
 admin.site.register(ContainerVisit)
 admin.site.register(Location)
-admin.site.register(Area)
-admin.site.register(Block)
+admin.site.register(LayoutVersion)
+admin.site.register(LayoutAsset)
+admin.site.register(StorageGrid)
 admin.site.register(Pile)
 admin.site.register(Position)
+admin.site.register(AccessPolicy)
+admin.site.register(LinearAxis)
+admin.site.register(LinearMarker)
+admin.site.register(BerthSegment)
+admin.site.register(TransferInterface)
+admin.site.register(InterfacePosition)
+admin.site.register(OperationalPosition)
+admin.site.register(CheOperatingScope)
+admin.site.register(RouteNode)
+admin.site.register(RouteEdge)
+admin.site.register(RouteEdgeRequirement)
+admin.site.register(LayoutPreset)
 admin.site.register(WorkQueue)
 admin.site.register(Order)
 admin.site.register(OrderLeg)
+admin.site.register(OrderRoutePlan)
+admin.site.register(OrderLegRouteEdge)
+admin.site.register(IntegrationInbox)
+admin.site.register(IntegrationOutbox)
 admin.site.register(Che)
 admin.site.register(EquipmentType)
 admin.site.register(ComponentType)
@@ -40,10 +62,7 @@ admin.site.register(HandlingCycle)
 admin.site.register(CarrierService)
 admin.site.register(CarrierVisit)
 admin.site.register(POD)
-admin.site.register(Road)
-admin.site.register(RoutingNode)
-admin.site.register(ParkingArea)
-admin.site.register(TerminalConnection)
+admin.site.register(PointOfWork)
 admin.site.register(ProcessHierarchy)
 admin.site.register(BusinessProcess)
 admin.site.register(ProcessVersion)
