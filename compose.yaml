@@ -1,0 +1,166 @@
+name: ${COMPOSE_PROJECT_NAME:-terminal-scms}
+
+x-minitos: &minitos
+  image: terminal-scms/minitos:local
+  build:
+    context: ${MINITOS_CONTEXT:-../minitos}
+  restart: unless-stopped
+  environment: &minitos-environment
+    DEBUG: "True"
+    SECRET_KEY: ${MINITOS_SECRET_KEY:-local-minitos-secret}
+    ALLOWED_HOSTS: localhost,127.0.0.1,minitos
+    DB_NAME: ${MINITOS_DB_NAME:-minitos}
+    DB_USER: ${MINITOS_DB_USER:-minitos}
+    DB_PASSWORD: ${MINITOS_DB_PASSWORD:-minitos}
+    DB_HOST: minitos-db
+    DB_PORT: "5432"
+    USE_WHITENOISE: "True"
+    MES_API_TOKEN: ${MES_API_TOKEN:-local-mes-token}
+    MQTT_HOST: hivemq
+    MQTT_PORT: "1883"
+    MQTT_CLIENT_ID: minitos
+    UNS_ROOT: scms/v1
+    RUN_MIGRATIONS: "True"
+  depends_on:
+    minitos-db:
+      condition: service_healthy
+
+x-oes: &oes
+  image: terminal-scms/terminal-oes:local
+  build:
+    context: ${OES_CONTEXT:-../terminal-oes}
+  restart: unless-stopped
+  environment: &oes-environment
+    DJANGO_DEBUG: "True"
+    DJANGO_SECRET_KEY: ${OES_SECRET_KEY:-local-oes-secret}
+    DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,terminal-oes
+    DATABASE_URL: postgresql://${OES_DB_USER:-terminal_oes}:${OES_DB_PASSWORD:-terminal_oes}@oes-db:5432/${OES_DB_NAME:-terminal_oes}
+    OES_API_TOKEN: ${OES_API_TOKEN:-local-oes-token}
+    MQTT_HOST: hivemq
+    MQTT_PORT: "1883"
+    MQTT_CLIENT_ID: terminal-oes
+    UNS_ROOT: scms/v1
+    EQUIPMENT_STALE_SECONDS: "60"
+    RUN_MIGRATIONS: "true"
+  depends_on:
+    oes-db:
+      condition: service_healthy
+
+services:
+  hivemq:
+    image: hivemq/hivemq-ce:2026.5
+    restart: unless-stopped
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    environment:
+      HIVEMQ_LOG_LEVEL: INFO
+    volumes:
+      - hivemq-data:/opt/hivemq/data
+      - hivemq-log:/opt/hivemq/log
+    networks: [scms]
+
+  minitos-db:
+    image: postgres:17.11-alpine3.24
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MINITOS_DB_NAME:-minitos}
+      POSTGRES_USER: ${MINITOS_DB_USER:-minitos}
+      POSTGRES_PASSWORD: ${MINITOS_DB_PASSWORD:-minitos}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MINITOS_DB_USER:-minitos} -d ${MINITOS_DB_NAME:-minitos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - minitos-db-data:/var/lib/postgresql/data
+    networks: [scms]
+
+  minitos:
+    <<: *minitos
+    ports:
+      - "${MINITOS_HTTP_PORT:-8000}:8000"
+    networks: [scms]
+
+  minitos-uns-consumer:
+    <<: *minitos
+    environment:
+      <<: *minitos-environment
+      RUN_MIGRATIONS: "False"
+    command: ["python", "manage.py", "run_uns_consumer"]
+    depends_on:
+      minitos-db:
+        condition: service_healthy
+      hivemq:
+        condition: service_started
+    networks: [scms]
+
+  minitos-outbox:
+    <<: *minitos
+    environment:
+      <<: *minitos-environment
+      RUN_MIGRATIONS: "False"
+    command: ["python", "manage.py", "publish_uns_outbox"]
+    depends_on:
+      minitos-db:
+        condition: service_healthy
+      hivemq:
+        condition: service_started
+    networks: [scms]
+
+  oes-db:
+    image: postgres:17.11-alpine3.24
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${OES_DB_NAME:-terminal_oes}
+      POSTGRES_USER: ${OES_DB_USER:-terminal_oes}
+      POSTGRES_PASSWORD: ${OES_DB_PASSWORD:-terminal_oes}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OES_DB_USER:-terminal_oes} -d ${OES_DB_NAME:-terminal_oes}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - oes-db-data:/var/lib/postgresql/data
+    networks: [scms]
+
+  terminal-oes:
+    <<: *oes
+    ports:
+      - "${OES_HTTP_PORT:-8010}:8000"
+    networks: [scms]
+
+  oes-uns-consumer:
+    <<: *oes
+    environment:
+      <<: *oes-environment
+      RUN_MIGRATIONS: "false"
+    command: ["python", "manage.py", "run_mqtt_consumer"]
+    depends_on:
+      oes-db:
+        condition: service_healthy
+      hivemq:
+        condition: service_started
+    networks: [scms]
+
+  oes-outbox:
+    <<: *oes
+    environment:
+      <<: *oes-environment
+      RUN_MIGRATIONS: "false"
+    command: ["python", "manage.py", "publish_outbox"]
+    depends_on:
+      oes-db:
+        condition: service_healthy
+      hivemq:
+        condition: service_started
+    networks: [scms]
+
+networks:
+  scms:
+    name: terminal-scms
+
+volumes:
+  hivemq-data:
+  hivemq-log:
+  minitos-db-data:
+  oes-db-data:
