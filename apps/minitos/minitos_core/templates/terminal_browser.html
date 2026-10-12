@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal Browser - MiniTOS</title>
+    <style>
+        * { box-sizing: border-box; }
+        :root { --ink: #17333a; --muted: #66777c; --line: #d9e1e3; --paper: #f4f7f7; --accent: #e85d2a; --teal: #0f766e; }
+        body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--paper); font-family: Inter, "Segoe UI", sans-serif; }
+        .topbar { height: 60px; display: flex; align-items: center; gap: 12px; padding: 0 24px; background: #fff; border-bottom: 1px solid var(--line); }
+        .topbar strong { margin-right: auto; font-size: 18px; }
+        .button { display: inline-flex; align-items: center; min-height: 36px; padding: 8px 13px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: #fff; font-size: 13px; font-weight: 650; text-decoration: none; }
+        .button:hover { color: var(--accent); border-color: var(--accent); }
+        .button.primary { color: #fff; border-color: var(--accent); background: var(--accent); }
+        .button.primary:hover { background: #c84b1e; }
+        main { width: min(1120px, calc(100% - 40px)); margin: 30px auto; }
+        .heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 16px; }
+        h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+        .heading p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+        .terminal-list { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+        .terminal-header, .terminal-row { display: grid; grid-template-columns: minmax(210px, 1.4fr) minmax(170px, 1fr) minmax(190px, 1fr) auto; align-items: center; gap: 18px; padding: 14px 16px; }
+        .terminal-header { color: var(--muted); background: #edf2f2; font-size: 11px; font-weight: 750; text-transform: uppercase; }
+        .terminal-row + .terminal-row { border-top: 1px solid var(--line); }
+        .terminal-name strong { display: block; font-size: 15px; }
+        .terminal-name span, .origin, .dimensions { color: var(--muted); font-size: 12px; }
+        .type { display: inline-block; margin-top: 4px; padding: 2px 7px; border: 1px solid #a8c7c4; border-radius: 3px; color: var(--teal); background: #eff9f7; font-size: 10px; font-weight: 750; text-transform: uppercase; }
+        .actions { display: flex; justify-content: flex-end; gap: 8px; white-space: nowrap; }
+        .empty { padding: 60px 20px; color: var(--muted); text-align: center; }
+        @media (max-width: 780px) {
+            .terminal-header { display: none; }
+            .terminal-row { grid-template-columns: 1fr; gap: 8px; }
+            .actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 5px; }
+            .heading { align-items: start; flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <strong>MiniTOS</strong>
+        <a class="button" href="/">Home</a>
+        <a class="button primary" href="{% url 'terminal_editor_new' %}">New Terminal</a>
+    </header>
+    <main>
+        <div class="heading">
+            <div><h1>Terminal Browser</h1><p>Select a terminal and workspace.</p></div>
+        </div>
+        <section class="terminal-list" aria-label="Accessible terminals">
+            <div class="terminal-header"><span>Terminal</span><span>Map origin</span><span>Map dimensions</span><span>Workspaces</span></div>
+            {% for terminal in terminals %}
+                <div class="terminal-row">
+                    <div class="terminal-name">
+                        <strong>{{ terminal.location.name }}</strong>
+                        <span class="type">{{ terminal.location.get_location_type_display }}</span>
+                    </div>
+                    <div class="origin">
+                        {% if terminal.location.map_origin_latitude != None and terminal.location.map_origin_longitude != None %}
+                            {{ terminal.location.map_origin_latitude|floatformat:5 }}, {{ terminal.location.map_origin_longitude|floatformat:5 }}
+                        {% elif terminal.location.latitude != None and terminal.location.longitude != None %}
+                            {{ terminal.location.latitude|floatformat:5 }}, {{ terminal.location.longitude|floatformat:5 }}
+                        {% else %}
+                            Not configured
+                        {% endif %}
+                    </div>
+                    <div class="dimensions">{{ terminal.location.map_width_m|floatformat:0 }} × {{ terminal.location.map_height_m|floatformat:0 }} m<br>{{ terminal.location.timezone }}</div>
+                    <div class="actions">
+                        {% if terminal.can_manage_berth_plan %}<a class="button" href="{% url 'berth_plan' terminal.location.id %}">Berth Plan</a>{% endif %}
+                        {% if terminal.can_edit_terminal %}<a class="button" href="{% url 'terminal_editor' terminal.location.id %}">Edit Layout</a>{% endif %}
+                    </div>
+                </div>
+            {% empty %}
+                <div class="empty">No terminals are available to this account.</div>
+            {% endfor %}
+        </section>
+    </main>
+</body>
+</html>

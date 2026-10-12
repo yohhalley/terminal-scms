@@ -1,0 +1,1 @@
+web: gunicorn minitos_site.wsgi --log-file -

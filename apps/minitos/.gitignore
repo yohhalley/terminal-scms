@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+.venv/
+*.py[cod]
+*$py.class
+
+# Django stuff:
+*.log
+local_settings.py
+settings_local.py
+db.sqlite3
+/media
+
+# Python environment
+venv/
+*.env
+
+# Django schema migrations are source code and must be committed.
+
+# OS generated files
+.DS_Store
+
+# VSCode files
+.vscode/

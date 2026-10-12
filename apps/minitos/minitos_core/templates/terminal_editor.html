@@ -1,0 +1,2281 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if location %}{{ location.name }}{% else %}New Location{% endif %} - MiniTOS Terminal Editor</title>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .topbar {
+            background: white;
+            border-bottom: 1px solid #ddd;
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            z-index: 100;
+        }
+        
+        .topbar h1 {
+            color: #333;
+            font-size: 1.5em;
+            margin: 0;
+        }
+        
+        .topbar-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: white;
+            color: #333;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn:hover {
+            background: #f0f0f0;
+            border-color: #f56c2c;
+            color: #f56c2c;
+        }
+        
+        .btn.active {
+            border-color: #f56c2c;
+            background: #fff5f1;
+            color: #f56c2c;
+        }
+        
+        .editor-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        .sidebar {
+            width: 320px;
+            background: white;
+            border-right: 1px solid #ddd;
+            overflow-y: auto;
+            padding: 0;
+            box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid #ddd;
+            background: white;
+        }
+        
+        .tab-btn {
+            flex: 1;
+            padding: 12px 15px;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-weight: 600;
+            color: #999;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+        
+        .tab-btn.active {
+            color: #f56c2c;
+            border-bottom-color: #f56c2c;
+        }
+        
+        .tabs-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+        }
+        
+        .tab-content {
+            display: none;
+            padding: 20px;
+            height: 100%;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .map-container {
+            flex: 1;
+            position: relative;
+        }
+        
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .form-group {
+            margin-bottom: 18px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            color: #333;
+            font-weight: 600;
+            font-size: 0.85em;
+        }
+        
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 9px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-family: inherit;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #f56c2c;
+            box-shadow: 0 0 4px rgba(245, 108, 44, 0.2);
+        }
+        
+        .info-box {
+            background: #f9f9f9;
+            border-left: 4px solid #f56c2c;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            color: #666;
+            font-size: 0.85em;
+            line-height: 1.4;
+        }
+        
+        .save-btn {
+            width: 100%;
+            padding: 10px;
+            background: #f56c2c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9em;
+        }
+        
+        .save-btn:hover:not(:disabled) {
+            background: #b5570f;
+            box-shadow: 0 2px 8px rgba(245, 108, 44, 0.3);
+        }
+        
+        .save-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        .cancel-btn {
+            width: 100%;
+            padding: 10px;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9em;
+            margin-top: 8px;
+        }
+        
+        .cancel-btn:hover {
+            background: #f0f0f0;
+            border-color: #f56c2c;
+        }
+        
+        .section-title {
+            color: #333;
+            font-weight: 700;
+            font-size: 0.95em;
+            margin-top: 18px;
+            margin-bottom: 12px;
+            border-bottom: 2px solid #f56c2c;
+            padding-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .mode-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+        
+        .mode-btn {
+            padding: 9px;
+            border: 2px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            color: #666;
+            font-size: 0.9em;
+            transition: all 0.3s ease;
+        }
+        
+        .mode-btn:hover {
+            border-color: #f56c2c;
+        }
+        
+        .mode-btn.active {
+            border-color: #f56c2c;
+            background: #fff5f1;
+            color: #f56c2c;
+        }
+        
+        .drawing-info {
+            background: #fffbf0;
+            border: 1px solid #ffd699;
+            padding: 10px;
+            border-radius: 4px;
+            color: #b35806;
+            font-size: 0.8em;
+            margin-bottom: 15px;
+            line-height: 1.4;
+            display: none;
+        }
+        
+        .drawing-info.active {
+            display: block;
+        }
+        
+        .area-list {
+            max-height: 280px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fafafa;
+        }
+        
+        .area-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9em;
+        }
+        
+        .area-item:hover {
+            background: #f5f5f5;
+        }
+        
+        .area-item.selected {
+            background: #e8f4f1;
+            border-left: 3px solid #f56c2c;
+        }
+        
+        .area-item-info {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .area-item-name {
+            font-weight: 600;
+            color: #333;
+            font-size: 0.9em;
+            margin-bottom: 2px;
+        }
+        
+        .area-item-type {
+            font-size: 0.75em;
+            color: #999;
+        }
+        
+        .color-swatch {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 6px;
+        }
+        
+        .area-actions {
+            display: flex;
+            gap: 4px;
+            margin-left: 8px;
+        }
+        
+        .area-actions button {
+            padding: 4px 8px;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.7em;
+            transition: all 0.2s ease;
+        }
+        
+        .area-actions button:hover {
+            background: #f56c2c;
+            color: white;
+            border-color: #f56c2c;
+        }
+        
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: normal;
+            margin-bottom: 0;
+        }
+        
+        .checkbox-label input {
+            width: auto;
+            margin: 0;
+        }
+
+        .yard-grid-panel {
+            display: none;
+            border-top: 1px solid #ddd;
+            margin-top: 18px;
+            padding-top: 2px;
+        }
+
+        .yard-grid-panel.active { display: block; }
+
+        .type-config-panel {
+            display: none;
+            border-top: 1px solid #ddd;
+            margin-top: 18px;
+            padding-top: 2px;
+        }
+
+        .type-config-panel.active { display: block; }
+
+        .vertex-handle,
+        .edge-handle {
+            border-radius: 50%;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+            cursor: grab;
+        }
+
+        .vertex-handle {
+            width: 14px;
+            height: 14px;
+            background: #f97316;
+            border: 2px solid white;
+        }
+
+        .edge-handle {
+            width: 10px;
+            height: 10px;
+            background: white;
+            border: 2px solid #f97316;
+        }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0 10px;
+        }
+
+        .field-grid .form-group { margin-bottom: 12px; }
+
+        @media (max-width: 700px) {
+            .topbar {
+                padding: 10px 14px;
+                gap: 12px;
+            }
+
+            .topbar h1 { font-size: 1.15em; }
+            .topbar-buttons { gap: 6px; }
+            .topbar .btn { padding: 8px 10px; }
+
+            .editor-container { flex-direction: column; }
+
+            .map-container {
+                order: 1;
+                flex: 0 0 42vh;
+                width: 100%;
+                min-height: 260px;
+            }
+
+            .sidebar {
+                order: 2;
+                width: 100%;
+                flex: 1 1 auto;
+                min-height: 0;
+                border-right: 0;
+                border-top: 1px solid #ddd;
+                box-shadow: none;
+            }
+
+            .tabs { position: sticky; top: 0; z-index: 2; }
+            .tab-content { height: auto; }
+        }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <h1>
+            {% if location %}
+                📍 {{ location.name }} - Terminal Editor
+            {% else %}
+                ➕ Create New Location - Terminal Editor
+            {% endif %}
+        </h1>
+        <div class="topbar-buttons">
+            <a href="{% url 'terminal_browser' %}" class="btn">← Terminals</a>
+            <a href="/" class="btn">🏠 Home</a>
+        </div>
+    </div>
+    
+    <div class="editor-container">
+        <div class="sidebar">
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="location">Location</button>
+                <button class="tab-btn" data-tab="areas">Areas</button>
+                <button class="tab-btn" data-tab="che">CHE</button>
+            </div>
+            
+            <div class="tabs-content">
+                <!-- Location Tab -->
+                <div id="location-tab" class="tab-content active">
+                    <div class="info-box">
+                        {% if location %}
+                            Location Type: 
+                            {% if location.location_type == 'TL' %}
+                                <strong>Terminal</strong>
+                            {% elif location.location_type == 'ID' %}
+                                <strong>Inland Depot</strong>
+                            {% endif %}
+                        {% else %}
+                            <strong>Create a new terminal location</strong>
+                        {% endif %}
+                    </div>
+                    
+                    <form id="locationForm">
+                        {% csrf_token %}
+                        
+                        <div class="section-title">Location Details</div>
+                        
+                        <div class="form-group">
+                            <label for="name">Location Name *</label>
+                            <input type="text" id="name" name="name" value="{% if location %}{{ location.name }}{% endif %}" required>
+                        </div>
+                        
+                        {% if not location %}
+                        <div class="form-group">
+                            <label for="location-type">Location Type *</label>
+                            <select id="location-type" name="location_type" required>
+                                <option value="TL">Terminal</option>
+                                <option value="ID">Inland Depot</option>
+                            </select>
+                        </div>
+                        {% endif %}
+                        
+                        <div class="section-title">GPS Coordinates</div>
+                        
+                        <div class="form-group">
+                            <label for="latitude">Latitude</label>
+                            <input type="number" id="latitude" name="latitude" step="0.0000001" value="{% if location and location.latitude %}{{ location.latitude }}{% endif %}" placeholder="40.7128">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="longitude">Longitude</label>
+                            <input type="number" id="longitude" name="longitude" step="0.0000001" value="{% if location and location.longitude %}{{ location.longitude }}{% endif %}" placeholder="-74.0060">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="timezone">Terminal Timezone</label>
+                            <input type="text" id="timezone" name="timezone" value="{% if location %}{{ location.timezone }}{% else %}UTC{% endif %}" placeholder="Europe/Madrid">
+                        </div>
+                        
+                        <div class="section-title">Map Settings</div>
+
+                        <div class="form-group">
+                            <label for="map_origin_latitude">Map Origin Latitude</label>
+                            <input type="number" id="map_origin_latitude" name="map_origin_latitude" step="0.0000001" value="{% if location and location.map_origin_latitude %}{{ location.map_origin_latitude }}{% endif %}" placeholder="Defaults to latitude">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="map_origin_longitude">Map Origin Longitude</label>
+                            <input type="number" id="map_origin_longitude" name="map_origin_longitude" step="0.0000001" value="{% if location and location.map_origin_longitude %}{{ location.map_origin_longitude }}{% endif %}" placeholder="Defaults to longitude">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="map_width_m">Map Width (m)</label>
+                            <input type="number" id="map_width_m" name="map_width_m" step="1" min="1" value="{% if location and location.map_width_m %}{{ location.map_width_m }}{% else %}1000{% endif %}">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="map_height_m">Map Height (m)</label>
+                            <input type="number" id="map_height_m" name="map_height_m" step="1" min="1" value="{% if location and location.map_height_m %}{{ location.map_height_m }}{% else %}1000{% endif %}">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="map_units_per_meter">Godot Units Per Meter</label>
+                            <input type="number" id="map_units_per_meter" name="map_units_per_meter" step="0.01" min="0.01" value="{% if location and location.map_units_per_meter %}{{ location.map_units_per_meter }}{% else %}1{% endif %}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="default_zoom">Default Zoom Level</label>
+                            <input type="number" id="default_zoom" name="default_zoom" step="0.01" min="0" value="{% if location and location.default_zoom %}{{ location.default_zoom }}{% else %}15{% endif %}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="angle">Rotation Angle (degrees)</label>
+                            <input type="number" id="angle" name="angle" step="0.001" min="0" max="360" value="{% if location and location.angle %}{{ location.angle }}{% else %}0{% endif %}">
+                        </div>
+                        
+                        <button type="submit" class="save-btn">💾 Save Location</button>
+                    </form>
+                </div>
+
+                <!-- Areas Tab -->
+                <div id="areas-tab" class="tab-content">
+                    <div class="section-title">Draw Areas</div>
+                    
+                    <div class="drawing-info" id="drawingInfo">
+                        ✏️ Click on map to add points. Double-click or press Enter to finish drawing.
+                    </div>
+
+                    <div class="mode-buttons">
+                        <button class="mode-btn active" id="selectModeBtn">Select</button>
+                        <button class="mode-btn" id="drawModeBtn">Draw</button>
+                    </div>
+
+                    <div class="form-group" id="drawingShapeGroup">
+                        <label for="drawingShape">Drawing shape</label>
+                        <select id="drawingShape">
+                            <option value="rectangle" selected>Rectangle</option>
+                            <option value="free">Free polygon</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="areaName">Area Name</label>
+                        <input type="text" id="areaName" placeholder="e.g., North Quay">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="areaType">Area Type *</label>
+                        <select id="areaType" required>
+                            <option value="">-- Select Type --</option>
+                            <option value="terminal area">Terminal Area</option>
+                            <option value="yard">Yard</option>
+                            <option value="quay">Quay</option>
+                            <option value="water">Water</option>
+                            <option value="land">Land</option>
+                            <option value="road">Road</option>
+                            <option value="building">Building</option>
+                            <option value="yard block">Yard Block</option>
+                            <option value="berth">Berth</option>
+                            <option value="parking">Parking</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="areaSize" id="areaSizeLabel">Area Size (m²)</label>
+                        <input type="number" id="areaSize" step="0.01" min="0" placeholder="Auto-calculated" readonly>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="isVisible" checked>
+                            Visible on Map
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="coordinates">Coordinates</label>
+                        <textarea id="coordinates" rows="2" readonly style="resize: vertical;"></textarea>
+                    </div>
+
+                    <div class="yard-grid-panel" id="yardGridPanel">
+                        <div class="section-title">Yard Block Grid</div>
+                        <div class="field-grid">
+                            <div class="form-group"><label for="gridHeading">Orientation (deg)</label><input id="gridHeading" type="number" value="0" step="1"></div>
+                            <div class="form-group"><label for="gridSlotHeading">Slot orientation (deg)</label><input id="gridSlotHeading" type="number" value="0" step="1"></div>
+                            <div class="form-group"><label for="gridMaxTier">Maximum tier</label><input id="gridMaxTier" type="number" value="5" min="1" max="20"></div>
+                            <div class="form-group"><label for="gridBayCount">Bay count</label><input id="gridBayCount" type="number" value="10" min="1" max="100"></div>
+                            <div class="form-group"><label for="gridRowCount">Row count</label><input id="gridRowCount" type="number" value="6" min="1" max="100"></div>
+                            <div class="form-group"><label for="gridSlotLength">Slot length (m)</label><input id="gridSlotLength" type="number" value="6.058" min="0.1" step="0.001"></div>
+                            <div class="form-group"><label for="gridSlotWidth">Slot width (m)</label><input id="gridSlotWidth" type="number" value="2.438" min="0.1" step="0.001"></div>
+                            <div class="form-group"><label for="gridBaySpacing">Bay spacing (m)</label><input id="gridBaySpacing" type="number" value="0.3" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="gridRowSpacing">Row spacing (m)</label><input id="gridRowSpacing" type="number" value="0.3" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="gridInitialBay">Initial bay</label><input id="gridInitialBay" value="1"></div>
+                            <div class="form-group"><label for="gridInitialRow">Initial row</label><input id="gridInitialRow" value="1"></div>
+                            <div class="form-group"><label for="gridBayNaming">Bay naming</label><select id="gridBayNaming"><option value="1,2,3...">1, 2, 3</option><option value="1,3,5...">1, 3, 5</option><option value="A,B,C...">A, B, C</option></select></div>
+                            <div class="form-group"><label for="gridRowNaming">Row naming</label><select id="gridRowNaming"><option value="1,2,3...">1, 2, 3</option><option value="1,3,5...">1, 3, 5</option><option value="A,B,C...">A, B, C</option></select></div>
+                            <div class="form-group"><label for="gridBayOrder">Bay direction</label><select id="gridBayOrder"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></div>
+                            <div class="form-group"><label for="gridRowOrder">Row direction</label><select id="gridRowOrder"><option value="forward">Forward</option><option value="reverse">Reverse</option></select></div>
+                        </div>
+                        <div class="form-group"><label class="checkbox-label"><input type="checkbox" id="gridBayUseHeading" checked> Bays grow along heading (north at 0 degrees)</label></div>
+                        <div class="field-grid">
+                            <div class="form-group"><label for="gridPadTop">Top padding (m)</label><input id="gridPadTop" type="number" value="0" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="gridPadBottom">Bottom padding (m)</label><input id="gridPadBottom" type="number" value="0" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="gridPadLeft">Left padding (m)</label><input id="gridPadLeft" type="number" value="0" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="gridPadRight">Right padding (m)</label><input id="gridPadRight" type="number" value="0" min="0" step="0.1"></div>
+                        </div>
+                    </div>
+
+                    <div class="type-config-panel" id="berthPanel">
+                        <div class="section-title">Berth and Bollards</div>
+                        <div class="field-grid">
+                            <div class="form-group"><label for="berthHeading">Orientation (deg)</label><input id="berthHeading" type="number" value="0" step="1"></div>
+                            <div class="form-group"><label for="berthLength">Length (m)</label><input id="berthLength" type="number" value="300" min="1" step="1"></div>
+                            <div class="form-group"><label for="berthWidth">Width (m)</label><input id="berthWidth" type="number" value="20" min="1" step="1"></div>
+                            <div class="form-group"><label for="berthWaterSide">Water side</label><select id="berthWaterSide"><option value="left" selected>Left</option><option value="right">Right</option></select></div>
+                            <div class="form-group"><label for="berthBollardDirection">Bollard direction</label><select id="berthBollardDirection"><option value="forward" selected>Start to end</option><option value="reverse">End to start</option></select></div>
+                            <div class="form-group"><label for="berthBollardCount">Bollards</label><input id="berthBollardCount" type="number" value="15" min="2" max="200"></div>
+                            <div class="form-group"><label for="berthDefaultSpacing">Default spacing (m)</label><input id="berthDefaultSpacing" type="number" value="20" min="0.1" step="0.1"></div>
+                            <div class="form-group"><label for="berthStartMargin">Start margin (m)</label><input id="berthStartMargin" type="number" value="0" min="0" step="0.1"></div>
+                            <div class="form-group"><label for="berthEndMargin">End margin (m)</label><input id="berthEndMargin" type="number" value="0" min="0" step="0.1"></div>
+                        </div>
+                        <div class="form-group">
+                            <label for="berthSpacings">Spacing after each bollard (m)</label>
+                            <textarea id="berthSpacings" rows="3" placeholder="Optional comma-separated values"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="type-config-panel" id="roadPanel">
+                        <div class="section-title">Road</div>
+                        <div class="field-grid">
+                            <div class="form-group"><label for="roadLaneCount">Lanes</label><input id="roadLaneCount" type="number" value="1" min="1" max="20"></div>
+                            <div class="form-group"><label for="roadCapacity">Capacity (CHE)</label><input id="roadCapacity" type="number" value="1" min="1"></div>
+                        </div>
+                        <div class="form-group"><label for="roadDirection">Direction</label><select id="roadDirection"><option value="forward">First node to last node</option><option value="reverse">Last node to first node</option><option value="both" selected>Both ways</option></select></div>
+                        <div class="form-group"><label for="roadCheTypes">Allowed CHE types</label><select id="roadCheTypes" multiple size="5"></select></div>
+                    </div>
+
+                    <div class="type-config-panel" id="parkingPanel">
+                        <div class="section-title">Parking</div>
+                        <div class="form-group"><label for="parkingCapacity">Capacity (CHE)</label><input id="parkingCapacity" type="number" value="1" min="1"></div>
+                        <div class="form-group"><label for="parkingCheTypes">Allowed CHE types</label><select id="parkingCheTypes" multiple size="5"></select></div>
+                    </div>
+
+                    <button type="button" class="save-btn" id="saveAreaBtn" disabled>💾 Save Area</button>
+                    <button type="button" class="cancel-btn" id="cancelDrawBtn" style="display: none;">Cancel Drawing</button>
+
+                    <div class="section-title" style="margin-top: 25px;">Existing Areas</div>
+                    
+                    <div class="area-list" id="areaList">
+                        <div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">
+                            No areas yet
+                        </div>
+                    </div>
+
+                    <div class="section-title" style="margin-top: 25px;">Existing Roads</div>
+                    <div class="area-list" id="roadList"><div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">No roads yet</div></div>
+                </div>
+
+                <!-- CHE Tab -->
+                <div id="che-tab" class="tab-content">
+                    <div class="section-title">Cargo Handling Equipment</div>
+                    <div class="form-group">
+                        <label for="cheName">Name *</label>
+                        <input id="cheName" maxlength="30" placeholder="e.g., TT-01">
+                    </div>
+                    <div class="form-group">
+                        <label for="cheEquipmentType">Equipment type *</label>
+                        <select id="cheEquipmentType"></select>
+                    </div>
+                    <div class="info-box" id="cheTypeInfo">Select an equipment type</div>
+                    <div class="field-grid">
+                        <div class="form-group">
+                            <label for="cheFuelLevel">Fuel level (%)</label>
+                            <input id="cheFuelLevel" type="number" min="0" max="100" value="100">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label"><input id="chePoweredOn" type="checkbox"> Powered on</label>
+                        <label class="checkbox-label"><input id="cheWorking" type="checkbox"> Working</label>
+                        <label class="checkbox-label"><input id="cheIsAvailable" type="checkbox"> Available for work</label>
+                        <label class="checkbox-label"><input id="cheIsDispatched" type="checkbox"> Dispatched</label>
+                        <label class="checkbox-label"><input id="cheIsInMaintenance" type="checkbox"> In maintenance</label>
+                    </div>
+                    <div class="field-grid">
+                        <div class="form-group"><label for="cheLatitude">Latitude</label><input id="cheLatitude" type="number" step="0.0000001"></div>
+                        <div class="form-group"><label for="cheLongitude">Longitude</label><input id="cheLongitude" type="number" step="0.0000001"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="cheRotation">Heading from true north (degrees)</label>
+                        <input id="cheRotation" type="number" step="0.1" value="0">
+                    </div>
+                    <button type="button" class="mode-btn" id="placeCheBtn">Place on map</button>
+                    <button type="button" class="save-btn" id="saveCheBtn">Save CHE</button>
+                    <button type="button" class="cancel-btn" id="clearCheBtn">New CHE</button>
+                    <div class="section-title" style="margin-top: 25px;">Existing CHE</div>
+                    <div class="area-list" id="cheList"><div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">No CHE yet</div></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="map-container">
+            <div id="map"></div>
+        </div>
+    </div>
+    
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script>
+        const locationId = window.location.pathname.split('/').filter(p => p && !isNaN(p))[0] || null;
+        
+        // State
+        const state = {
+            map: null,
+            mode: 'select',
+            drawing: false,
+            polygon: [],
+            yardAnchor: null,
+            berthAnchor: null,
+            selectedAreaId: null,
+            selectedRoadId: null,
+            selectedCheId: null,
+            areas: [],
+            roads: [],
+            ches: [],
+            equipmentTypes: [],
+            editMarkers: [],
+            blockDrag: null,
+            rectangleStart: null,
+            placingChe: false,
+            locationData: {
+                latitude: 40.7128,
+                longitude: -74.0060,
+                map_origin_latitude: 40.7128,
+                map_origin_longitude: -74.0060,
+                map_width_m: 1000,
+                map_height_m: 1000,
+                map_units_per_meter: 1,
+                default_zoom: 15,
+                angle: 0,
+                name: '',
+                location_type: 'TL',
+                timezone: 'UTC'
+            }
+        };
+        
+        const AREA_COLORS = {
+            'terminal area': '#e8edcb',
+            'yard': '#65a30d',
+            'quay': '#2563eb',
+            'water': '#6ad3ed',
+            'land': '#eec185',
+            'road': '#475569',
+            'building': '#7c3aed',
+            'yard block': '#4d7c0f',
+            'berth': '#0f766e',
+            'parking': '#be123c'
+        };
+
+        const GRID_INPUT_IDS = [
+            'gridHeading', 'gridSlotHeading', 'gridMaxTier', 'gridBayCount', 'gridRowCount',
+            'gridSlotLength', 'gridSlotWidth', 'gridBaySpacing', 'gridRowSpacing',
+            'gridInitialBay', 'gridInitialRow', 'gridBayNaming', 'gridRowNaming',
+            'gridBayOrder', 'gridRowOrder', 'gridBayUseHeading',
+            'gridPadTop', 'gridPadBottom', 'gridPadLeft', 'gridPadRight'
+        ];
+        const BERTH_INPUT_IDS = [
+            'berthHeading', 'berthLength', 'berthWidth', 'berthBollardCount',
+            'berthWaterSide', 'berthBollardDirection', 'berthDefaultSpacing',
+            'berthStartMargin', 'berthEndMargin', 'berthSpacings'
+        ];
+
+        document.getElementById('areaType').addEventListener('change', syncYardPanel);
+        document.getElementById('drawingShape').addEventListener('change', updateDrawingInfo);
+        document.getElementById('cheEquipmentType').addEventListener('change', updateCheTypeInfo);
+        document.getElementById('placeCheBtn').addEventListener('click', beginChePlacement);
+        document.getElementById('clearCheBtn').addEventListener('click', clearCheForm);
+        document.getElementById('saveCheBtn').addEventListener('click', saveChe);
+        GRID_INPUT_IDS.forEach(id => document.getElementById(id).addEventListener('input', updateYardGeometry));
+        BERTH_INPUT_IDS.forEach(id => document.getElementById(id).addEventListener('input', updateBerthGeometry));
+
+        function isYardBlock() {
+            return document.getElementById('areaType').value === 'yard block';
+        }
+
+        function isBerth() {
+            return document.getElementById('areaType').value === 'berth';
+        }
+
+        function syncYardPanel() {
+            const type = document.getElementById('areaType').value;
+            document.getElementById('yardGridPanel').classList.toggle('active', isYardBlock());
+            document.getElementById('berthPanel').classList.toggle('active', isBerth());
+            document.getElementById('roadPanel').classList.toggle('active', type === 'road');
+            document.getElementById('parkingPanel').classList.toggle('active', type === 'parking');
+            document.getElementById('areaSizeLabel').textContent = type === 'road' ? 'Road length (m)' : 'Area Size (m²)';
+            document.getElementById('saveAreaBtn').textContent = type === 'road' ? 'Save Road' : 'Save Area';
+            document.getElementById('drawingShapeGroup').style.display = type === 'road' || isYardBlock() || isBerth() ? 'none' : 'block';
+            updateDrawingInfo();
+            updateYardGeometry();
+            updateBerthGeometry();
+        }
+
+        function currentDrawingShape() {
+            return document.getElementById('drawingShape').value;
+        }
+
+        function updateDrawingInfo() {
+            const type = document.getElementById('areaType').value;
+            document.getElementById('drawingInfo').textContent = isYardBlock()
+                ? 'Click once to place the block anchor. At 0 degrees the block grows north and east.'
+                : isBerth()
+                    ? 'Click once to place the first bollard end. At 0 degrees the berth grows north.'
+                : type === 'road'
+                    ? 'Click to add road nodes. Double-click or press Enter to finish the centerline.'
+                    : currentDrawingShape() === 'rectangle'
+                        ? 'Click two opposite corners to create a rectangle aligned with the terminal axes.'
+                        : 'Click to add polygon points. Double-click or press Enter to finish.';
+        }
+        
+        // Tab switching
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.tab;
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById(`${tab}-tab`).classList.add('active');
+            });
+        });
+        
+        // Drawing mode
+        document.getElementById('selectModeBtn').addEventListener('click', () => {
+            exitDrawing(true);
+        });
+        document.getElementById('drawModeBtn').addEventListener('click', () => {
+            if (!locationId) {
+                alert('Save the location first');
+                return;
+            }
+            enterDrawing();
+        });
+        document.getElementById('cancelDrawBtn').addEventListener('click', () => {
+            exitDrawing(true);
+        });
+        
+        function enterDrawing() {
+            const selectedType = document.getElementById('areaType').value;
+            state.drawing = true;
+            state.polygon = [];
+            state.yardAnchor = null;
+            state.berthAnchor = null;
+            state.rectangleStart = null;
+            
+            document.getElementById('selectModeBtn').classList.remove('active');
+            document.getElementById('drawModeBtn').classList.add('active');
+            document.getElementById('drawingInfo').classList.add('active');
+            document.getElementById('cancelDrawBtn').style.display = 'block';
+            document.getElementById('saveAreaBtn').disabled = true;
+            
+            state.map.getCanvas().style.cursor = 'crosshair';
+            clearForm();
+            document.getElementById('areaType').value = selectedType;
+            syncYardPanel();
+            refresh();
+        }
+        
+        function exitDrawing(shouldClear) {
+            state.drawing = false;
+            state.rectangleStart = null;
+            
+            document.getElementById('selectModeBtn').classList.add('active');
+            document.getElementById('drawModeBtn').classList.remove('active');
+            document.getElementById('drawingInfo').classList.remove('active');
+            document.getElementById('cancelDrawBtn').style.display = 'none';
+            
+            state.map.getCanvas().style.cursor = '';
+            
+            if (shouldClear) clearForm();
+            refresh();
+        }
+        
+        function clearForm() {
+            document.getElementById('areaName').value = '';
+            document.getElementById('areaType').value = '';
+            document.getElementById('areaSize').value = '';
+            document.getElementById('coordinates').value = '';
+            document.getElementById('isVisible').checked = true;
+            document.getElementById('saveAreaBtn').disabled = true;
+            state.polygon = [];
+            state.yardAnchor = null;
+            state.berthAnchor = null;
+            state.selectedAreaId = null;
+            state.selectedRoadId = null;
+            clearEditMarkers();
+            syncYardPanel();
+        }
+        
+        // Map initialization
+        state.map = null;
+        
+        async function initMap() {
+            if (locationId) {
+                try {
+                    const res = await fetch(`/minitos_core/api/location/${locationId}/`);
+                    if (res.ok) {
+                        state.locationData = await res.json();
+                        updateFormFields();
+                    }
+                } catch (e) {
+                    console.error('Error loading location:', e);
+                }
+            }
+            
+            state.map = new maplibregl.Map({
+                container: 'map',
+                center: [state.locationData.longitude, state.locationData.latitude],
+                zoom: state.locationData.default_zoom,
+                bearing: state.locationData.angle,
+                pitch: 0,
+                style: {
+                    version: 8,
+                    sources: {
+                        osm: {
+                            type: 'raster',
+                            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+                            tileSize: 256,
+                            attribution: '&copy; OpenStreetMap'
+                        }
+                    },
+                    layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+                }
+            });
+            
+            state.map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
+            state.map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-right');
+            
+            const marker = new maplibregl.Marker({ color: '#f56c2c', draggable: true })
+                .setLngLat([state.locationData.longitude, state.locationData.latitude])
+                .addTo(state.map);
+            
+            marker.on('dragend', () => {
+                const lngLat = marker.getLngLat();
+                document.getElementById('longitude').value = lngLat.lng.toFixed(6);
+                document.getElementById('latitude').value = lngLat.lat.toFixed(6);
+            });
+            
+            state.map.on('move', () => {
+                const c = state.map.getCenter();
+                document.getElementById('longitude').value = c.lng.toFixed(6);
+                document.getElementById('latitude').value = c.lat.toFixed(6);
+                document.getElementById('default_zoom').value = state.map.getZoom().toFixed(1);
+                document.getElementById('angle').value = state.map.getBearing().toFixed(1);
+            });
+            
+            // Drawing events - attach BEFORE layers are created
+            state.map.on('click', e => {
+                if (state.ignoreMapClick) {
+                    state.ignoreMapClick = false;
+                    return;
+                }
+                if (state.placingChe) {
+                    document.getElementById('cheLongitude').value = e.lngLat.lng.toFixed(7);
+                    document.getElementById('cheLatitude').value = e.lngLat.lat.toFixed(7);
+                    state.placingChe = false;
+                    document.getElementById('placeCheBtn').classList.remove('active');
+                    state.map.getCanvas().style.cursor = '';
+                    refresh();
+                    return;
+                }
+                if (state.drawing) {
+                    if (isYardBlock() || isBerth()) {
+                        const anchor = [e.lngLat.lng, e.lngLat.lat];
+                        if (isYardBlock()) {
+                            state.yardAnchor = anchor;
+                            updateYardGeometry();
+                        } else {
+                            state.berthAnchor = anchor;
+                            updateBerthGeometry();
+                        }
+                        state.drawing = false;
+                        document.getElementById('saveAreaBtn').disabled = false;
+                        document.getElementById('selectModeBtn').classList.add('active');
+                        document.getElementById('drawModeBtn').classList.remove('active');
+                        document.getElementById('drawingInfo').classList.remove('active');
+                        document.getElementById('cancelDrawBtn').style.display = 'none';
+                        state.map.getCanvas().style.cursor = '';
+                        return;
+                    }
+                    if (document.getElementById('areaType').value !== 'road' && currentDrawingShape() === 'rectangle') {
+                        const current = lngLatToLocal([e.lngLat.lng, e.lngLat.lat]);
+                        if (!state.rectangleStart) {
+                            state.rectangleStart = current;
+                            state.polygon = [[e.lngLat.lng, e.lngLat.lat]];
+                            refresh();
+                        } else {
+                            setEditorCoordinates(rectangleFromCorners(state.rectangleStart, current));
+                            finishPolygon();
+                        }
+                        return;
+                    }
+                    state.polygon.push([e.lngLat.lng, e.lngLat.lat]);
+                    refresh();
+                    return;
+                }
+                if ((state.selectedAreaId || state.selectedRoadId) && state.map.getLayer('draw-outline')) {
+                    const hits = state.map.queryRenderedFeatures(e.point, { layers: ['draw-outline'] });
+                    if (hits.length) {
+                        insertPointOnNearestEdge([e.lngLat.lng, e.lngLat.lat]);
+                        return;
+                    }
+                }
+                const selectableLayers = ['ches-point', 'areas-poly', 'roads-line'].filter(layer => state.map.getLayer(layer));
+                if (selectableLayers.length) {
+                    const selected = state.map.queryRenderedFeatures(e.point, { layers: selectableLayers })[0];
+                    if (selected && selected.layer.id === 'ches-point') selectChe(Number(selected.properties.id));
+                    if (selected && selected.layer.id === 'areas-poly') selectArea(Number(selected.properties.id));
+                    if (selected && selected.layer.id === 'roads-line') selectRoad(Number(selected.properties.id));
+                }
+            });
+            
+            state.map.on('dblclick', e => {
+                const minimum = document.getElementById('areaType').value === 'road' ? 2 : 3;
+                if (state.drawing && state.polygon.length >= minimum) {
+                    finishGeometry();
+                    e.preventDefault();
+                }
+            });
+            
+            window.addEventListener('keydown', e => {
+                if (state.drawing) {
+                    const minimum = document.getElementById('areaType').value === 'road' ? 2 : 3;
+                    if (e.key === 'Enter' && state.polygon.length >= minimum) finishGeometry();
+                    if (e.key === 'Escape') exitDrawing(true);
+                }
+            });
+
+            state.map.on('mousedown', e => {
+                if (!state.selectedAreaId || (!isYardBlock() && !isBerth()) || !state.map.getLayer('draw-poly')) return;
+                const hits = state.map.queryRenderedFeatures(e.point, { layers: ['draw-poly'] });
+                if (!hits.length) return;
+                state.blockDrag = {
+                    start: lngLatToLocal([e.lngLat.lng, e.lngLat.lat]),
+                    coordinates: normalizeCoordinates(document.getElementById('coordinates').value).map(lngLatToLocal)
+                };
+                state.map.dragPan.disable();
+            });
+
+            state.map.on('mousemove', e => {
+                if (state.drawing && state.rectangleStart && currentDrawingShape() === 'rectangle' && !isYardBlock() && !isBerth()) {
+                    const current = lngLatToLocal([e.lngLat.lng, e.lngLat.lat]);
+                    setEditorCoordinates(rectangleFromCorners(state.rectangleStart, current));
+                    updateDrawSource();
+                    return;
+                }
+                if (!state.blockDrag) return;
+                const current = lngLatToLocal([e.lngLat.lng, e.lngLat.lat]);
+                const delta = [current[0] - state.blockDrag.start[0], current[1] - state.blockDrag.start[1]];
+                const moved = state.blockDrag.coordinates.map(point => [point[0] + delta[0], point[1] + delta[1]]);
+                setEditorCoordinates(moved);
+                if (isYardBlock()) state.yardAnchor = localToLngLat(moved[0]);
+                if (isBerth()) state.berthAnchor = localToLngLat(moved[0]);
+                updateDrawSource();
+                updateYardSlotSource();
+                updateBerthBollardSource();
+                updateBerthWaterSideSource();
+            });
+
+            state.map.on('mouseup', () => {
+                if (!state.blockDrag) return;
+                state.blockDrag = null;
+                state.ignoreMapClick = true;
+                state.map.dragPan.enable();
+                refresh();
+            });
+            
+            state.map.on('load', async () => {
+                await Promise.all([loadAreas(), loadRoads(), loadChes(), loadEquipmentTypes()]);
+                refresh();
+            });
+        }
+
+        function finishGeometry() {
+            if (document.getElementById('areaType').value === 'road') {
+                finishRoad();
+            } else {
+                finishPolygon();
+            }
+        }
+
+        function rectangleFromCorners(start, finish) {
+            return [
+                [start[0], start[1]],
+                [finish[0], start[1]],
+                [finish[0], finish[1]],
+                [start[0], finish[1]]
+            ];
+        }
+        
+        function finishPolygon() {
+            if (state.polygon.length < 3) return;
+            
+            const localPolygon = state.polygon.map(lngLatToLocal);
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
+            document.getElementById('areaSize').value = calcArea(state.polygon).toFixed(2);
+            document.getElementById('saveAreaBtn').disabled = false;
+            
+            // Exit drawing mode but keep form data intact
+            exitDrawing(false);
+        }
+
+        function finishRoad() {
+            if (state.polygon.length < 2) return;
+            const localPoints = state.polygon.map(lngLatToLocal);
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
+            document.getElementById('areaSize').value = roadLength(localPoints).toFixed(2);
+            document.getElementById('saveAreaBtn').disabled = false;
+            exitDrawing(false);
+        }
+
+        function roadLength(points) {
+            let length = 0;
+            for (let index = 1; index < points.length; index += 1) {
+                length += Math.hypot(points[index][0] - points[index - 1][0], points[index][1] - points[index - 1][1]);
+            }
+            return length;
+        }
+
+        function numberValue(id, fallback = 0, minimum = null) {
+            const value = Number(document.getElementById(id).value);
+            const safe = Number.isFinite(value) ? value : fallback;
+            return minimum === null ? safe : Math.max(minimum, safe);
+        }
+
+        function yardGridFromForm() {
+            return {
+                block_type: 'AB',
+                max_bays: Math.round(numberValue('gridBayCount', 1, 1)),
+                max_rows: Math.round(numberValue('gridRowCount', 1, 1)),
+                max_tier: Math.round(numberValue('gridMaxTier', 1, 1)),
+                heading_deg: ((numberValue('gridHeading') % 360) + 360) % 360,
+                slot_heading_deg: ((numberValue('gridSlotHeading') % 360) + 360) % 360,
+                pile_length_m: numberValue('gridSlotLength', 6.058, 0.1),
+                pile_width_m: numberValue('gridSlotWidth', 2.438, 0.1),
+                pile_height_m: 2.591,
+                bay_spacing_m: numberValue('gridBaySpacing', 0, 0),
+                row_spacing_m: numberValue('gridRowSpacing', 0, 0),
+                initial_bay: document.getElementById('gridInitialBay').value.trim() || '1',
+                initial_row: document.getElementById('gridInitialRow').value.trim() || '1',
+                bay_naming: document.getElementById('gridBayNaming').value,
+                row_naming: document.getElementById('gridRowNaming').value,
+                bay_order: document.getElementById('gridBayOrder').value,
+                row_order: document.getElementById('gridRowOrder').value,
+                bay_use_heading_axis: document.getElementById('gridBayUseHeading').checked,
+                padding_top_m: numberValue('gridPadTop', 0, 0),
+                padding_bottom_m: numberValue('gridPadBottom', 0, 0),
+                padding_left_m: numberValue('gridPadLeft', 0, 0),
+                padding_right_m: numberValue('gridPadRight', 0, 0)
+            };
+        }
+
+        function gridDimensions(grid) {
+            const bays = grid.max_bays * grid.pile_length_m + (grid.max_bays - 1) * grid.bay_spacing_m;
+            const rows = grid.max_rows * grid.pile_width_m + (grid.max_rows - 1) * grid.row_spacing_m;
+            return grid.bay_use_heading_axis ? {
+                length: grid.padding_bottom_m + bays + grid.padding_top_m,
+                width: grid.padding_left_m + rows + grid.padding_right_m
+            } : {
+                length: grid.padding_bottom_m + rows + grid.padding_top_m,
+                width: grid.padding_left_m + bays + grid.padding_right_m
+            };
+        }
+
+        function geographicGridPoint(anchor, grid, lengthOffset, widthOffset) {
+            const angle = grid.heading_deg * Math.PI / 180;
+            const east = Math.sin(angle) * lengthOffset + Math.cos(angle) * widthOffset;
+            const north = Math.cos(angle) * lengthOffset - Math.sin(angle) * widthOffset;
+            const meters = metersPerDegree(anchor[1]);
+            return [
+                anchor[0] + east / meters.lon,
+                anchor[1] + north / meters.lat
+            ];
+        }
+
+        function updateYardGeometry() {
+            if (!isYardBlock() || !state.yardAnchor) return;
+            const grid = yardGridFromForm();
+            const size = gridDimensions(grid);
+            state.polygon = [
+                geographicGridPoint(state.yardAnchor, grid, 0, 0),
+                geographicGridPoint(state.yardAnchor, grid, size.length, 0),
+                geographicGridPoint(state.yardAnchor, grid, size.length, size.width),
+                geographicGridPoint(state.yardAnchor, grid, 0, size.width)
+            ];
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
+            document.getElementById('areaSize').value = (size.length * size.width).toFixed(2);
+            document.getElementById('saveAreaBtn').disabled = false;
+            refresh();
+        }
+
+        function berthConfigFromForm() {
+            const count = Math.max(2, Number(document.getElementById('berthBollardCount').value) || 2);
+            const defaultSpacing = Math.max(0.1, Number(document.getElementById('berthDefaultSpacing').value) || 20);
+            const entered = document.getElementById('berthSpacings').value.split(',')
+                .map(value => Number(value.trim())).filter(value => Number.isFinite(value) && value > 0);
+            const spacings = Array.from({ length: count - 1 }, (_, index) => entered[index] || defaultSpacing);
+            return {
+                heading_deg: Number(document.getElementById('berthHeading').value) || 0,
+                length_m: Math.max(1, Number(document.getElementById('berthLength').value) || 300),
+                width_m: Math.max(1, Number(document.getElementById('berthWidth').value) || 20),
+                water_side: document.getElementById('berthWaterSide').value,
+                bollard_direction: document.getElementById('berthBollardDirection').value,
+                bollard_count: count,
+                default_bollard_spacing_m: defaultSpacing,
+                start_margin_m: Math.max(0, Number(document.getElementById('berthStartMargin').value) || 0),
+                end_margin_m: Math.max(0, Number(document.getElementById('berthEndMargin').value) || 0),
+                bollard_spacings: spacings
+            };
+        }
+
+        function updateBerthGeometry() {
+            if (!isBerth() || !state.berthAnchor) return;
+            const berth = berthConfigFromForm();
+            state.polygon = [
+                geographicGridPoint(state.berthAnchor, berth, 0, 0),
+                geographicGridPoint(state.berthAnchor, berth, berth.length_m, 0),
+                geographicGridPoint(state.berthAnchor, berth, berth.length_m, berth.width_m),
+                geographicGridPoint(state.berthAnchor, berth, 0, berth.width_m)
+            ];
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
+            document.getElementById('areaSize').value = (berth.length_m * berth.width_m).toFixed(2);
+            document.getElementById('saveAreaBtn').disabled = false;
+            refresh();
+        }
+        
+        function calcArea(ring) {
+            let area = 0;
+            for (let i = 0; i < ring.length; i++) {
+                const j = (i + 1) % ring.length;
+                area += ring[i][0] * ring[j][1];
+                area -= ring[j][0] * ring[i][1];
+            }
+            area = Math.abs(area) / 2;
+            const lat = ring[0][1];
+            const meters = metersPerDegree(lat);
+            return area * meters.lat * meters.lon;
+        }
+
+        function origin() {
+            const lat = parseFloat(document.getElementById('map_origin_latitude').value)
+                || parseFloat(document.getElementById('latitude').value)
+                || state.locationData.latitude;
+            const lon = parseFloat(document.getElementById('map_origin_longitude').value)
+                || parseFloat(document.getElementById('longitude').value)
+                || state.locationData.longitude;
+            return { lat, lon };
+        }
+
+        function metersPerDegree(originLat) {
+            const metersPerRadian = 6378137;
+            const metersPerDegreeLat = Math.PI * metersPerRadian / 180;
+            return {
+                lat: metersPerDegreeLat,
+                lon: metersPerDegreeLat * Math.cos(originLat * Math.PI / 180)
+            };
+        }
+
+        function lngLatToLocal(point) {
+            const o = origin();
+            const meters = metersPerDegree(o.lat);
+            const east = (point[0] - o.lon) * meters.lon;
+            const north = (point[1] - o.lat) * meters.lat;
+            const angle = numberValue('angle', state.locationData.angle || 0) * Math.PI / 180;
+            return [
+                east * Math.cos(angle) - north * Math.sin(angle),
+                east * Math.sin(angle) + north * Math.cos(angle)
+            ].map(v => Number(v.toFixed(3)));
+        }
+
+        function localToLngLat(point) {
+            const o = origin();
+            const meters = metersPerDegree(o.lat);
+            const angle = numberValue('angle', state.locationData.angle || 0) * Math.PI / 180;
+            const east = Number(point[0]) * Math.cos(angle) + Number(point[1]) * Math.sin(angle);
+            const north = -Number(point[0]) * Math.sin(angle) + Number(point[1]) * Math.cos(angle);
+            return [
+                o.lon + (east / meters.lon),
+                o.lat + (north / meters.lat)
+            ];
+        }
+
+        function roundGeographicPoints(points) {
+            return points.map(point => point.map(value => Number(Number(value).toFixed(8))));
+        }
+
+        function normalizeCoordinates(value) {
+            if (Array.isArray(value)) return value;
+            if (!value) return [];
+            try {
+                const parsed = JSON.parse(value);
+                if (Array.isArray(parsed)) return parsed;
+            } catch (e) {
+                // Support older "lat,lon lat,lon" coordinate strings.
+            }
+            return String(value).split(' ').map(pair => {
+                const [first, second] = pair.split(',');
+                return [parseFloat(first), parseFloat(second)];
+            }).filter(point => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+        }
+
+        function setEditorCoordinates(localPoints) {
+            const rounded = localPoints.map(point => point.map(value => Number(value.toFixed(3))));
+            state.polygon = rounded.map(localToLngLat);
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
+            const isRoad = document.getElementById('areaType').value === 'road';
+            document.getElementById('areaSize').value = (isRoad ? roadLength(rounded) : calcLocalArea(rounded)).toFixed(2);
+            document.getElementById('saveAreaBtn').disabled = false;
+        }
+
+        function calcLocalArea(points) {
+            let sum = 0;
+            for (let index = 0; index < points.length; index += 1) {
+                const next = (index + 1) % points.length;
+                sum += points[index][0] * points[next][1] - points[next][0] * points[index][1];
+            }
+            return Math.abs(sum / 2);
+        }
+
+        function updateDrawSource() {
+            const source = state.map.getSource('draw-source');
+            if (!source) return;
+            source.setData(drawFeatureCollection());
+        }
+
+        function insertPointOnNearestEdge(lngLat) {
+            if (isYardBlock() || state.polygon.length < 2) return;
+            const point = state.map.project(lngLat);
+            const closed = document.getElementById('areaType').value !== 'road';
+            const segmentCount = closed ? state.polygon.length : state.polygon.length - 1;
+            let nearestIndex = 0;
+            let nearestDistance = Infinity;
+            for (let index = 0; index < segmentCount; index += 1) {
+                const a = state.map.project(state.polygon[index]);
+                const b = state.map.project(state.polygon[(index + 1) % state.polygon.length]);
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const lengthSquared = dx * dx + dy * dy || 1;
+                const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared));
+                const distance = Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy));
+                if (distance < nearestDistance) {
+                    nearestDistance = distance;
+                    nearestIndex = index;
+                }
+            }
+            state.polygon.splice(nearestIndex + 1, 0, lngLat);
+            setEditorCoordinates(state.polygon.map(lngLatToLocal));
+            refresh();
+        }
+
+        function clearEditMarkers() {
+            state.editMarkers.forEach(marker => marker.remove());
+            state.editMarkers = [];
+        }
+
+        function refreshEditMarkers() {
+            clearEditMarkers();
+            if ((!state.selectedAreaId && !state.selectedRoadId) || isYardBlock()) return;
+            const isRoad = document.getElementById('areaType').value === 'road';
+            state.polygon.forEach((point, index) => {
+                const element = document.createElement('div');
+                element.className = 'vertex-handle';
+                element.addEventListener('click', event => event.stopPropagation());
+                const marker = new maplibregl.Marker({ element, draggable: true }).setLngLat(point).addTo(state.map);
+                marker.on('drag', () => {
+                    const current = marker.getLngLat();
+                    state.polygon[index] = [current.lng, current.lat];
+                    setEditorCoordinates(state.polygon.map(lngLatToLocal));
+                    updateDrawSource();
+                });
+                marker.on('dragend', refresh);
+                state.editMarkers.push(marker);
+            });
+            const segmentCount = isRoad ? state.polygon.length - 1 : state.polygon.length;
+            for (let index = 0; index < segmentCount; index += 1) {
+                const a = state.polygon[index];
+                const b = state.polygon[(index + 1) % state.polygon.length];
+                const midpoint = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+                const element = document.createElement('div');
+                element.className = 'edge-handle';
+                element.title = 'Add point';
+                element.addEventListener('click', event => {
+                    event.stopPropagation();
+                    state.ignoreMapClick = true;
+                    state.polygon.splice(index + 1, 0, midpoint);
+                    setEditorCoordinates(state.polygon.map(lngLatToLocal));
+                    refresh();
+                });
+                state.editMarkers.push(new maplibregl.Marker({ element }).setLngLat(midpoint).addTo(state.map));
+            }
+        }
+        
+        async function loadAreas() {
+            if (!locationId) return;
+            try {
+                const res = await fetch(`/minitos_core/locations/${locationId}/areas/`);
+                if (res.ok) {
+                    const data = await res.json();
+                    state.areas = data.results || data;
+                }
+            } catch (e) {
+                console.error('Error loading areas:', e);
+            }
+        }
+
+        async function loadRoads() {
+            if (!locationId) return;
+            const res = await fetch(`/minitos_core/locations/${locationId}/roads/`);
+            if (res.ok) {
+                const data = await res.json();
+                state.roads = data.results || data;
+            }
+        }
+
+        async function loadEquipmentTypes() {
+            const res = await fetch('/minitos_core/equipment-types/');
+            if (!res.ok) return;
+            const data = await res.json();
+            state.equipmentTypes = data.results || data;
+            const options = state.equipmentTypes.map(item => `<option value="${item.id}">${item.name} (${item.equipment_type})</option>`).join('');
+            document.getElementById('roadCheTypes').innerHTML = options;
+            document.getElementById('parkingCheTypes').innerHTML = options;
+            document.getElementById('cheEquipmentType').innerHTML = `<option value="">-- Select type --</option>${options}`;
+            updateCheTypeInfo();
+        }
+
+        async function loadChes() {
+            if (!locationId) return;
+            const res = await fetch(`/minitos_core/locations/${locationId}/ches/`);
+            if (res.ok) {
+                const data = await res.json();
+                state.ches = data.results || data;
+            }
+        }
+        
+        function refresh() {
+            refreshLayers();
+            refreshList();
+            refreshRoadList();
+            refreshCheList();
+        }
+
+        function drawFeatureCollection() {
+            const features = [];
+            const isRoad = document.getElementById('areaType').value === 'road';
+            if (state.polygon.length >= (isRoad ? 2 : 3)) {
+                features.push({
+                    type: 'Feature',
+                    geometry: isRoad
+                        ? { type: 'LineString', coordinates: state.polygon }
+                        : { type: 'Polygon', coordinates: [[...state.polygon, state.polygon[0]]] }
+                });
+            }
+            state.polygon.forEach((point, index) => features.push({
+                type: 'Feature', properties: { index }, geometry: { type: 'Point', coordinates: point }
+            }));
+            return { type: 'FeatureCollection', features };
+        }
+        
+        function refreshLayers() {
+            // Clear existing drawing and area layers
+            clearEditMarkers();
+            ['draw-poly', 'draw-outline', 'draw-points', 'areas-poly', 'areas-outline', 'roads-line', 'yard-slots-fill', 'yard-slots-line', 'berth-bollards', 'berth-bollard-labels', 'berth-water-line', 'berth-water-arrow', 'ches-point', 'ches-label'].forEach(id => {
+                if (state.map.getLayer(id)) state.map.removeLayer(id);
+            });
+            ['draw-source', 'areas-source', 'roads-source', 'yard-slots-source', 'berth-bollards-source', 'berth-water-source', 'ches-source'].forEach(id => {
+                if (state.map.getSource(id)) state.map.removeSource(id);
+            });
+            
+            // Drawing features
+            if (state.polygon.length > 0) {
+                state.map.addSource('draw-source', { type: 'geojson', data: drawFeatureCollection() });
+                
+                // Draw polygon fill
+                state.map.addLayer({
+                    id: 'draw-poly',
+                    type: 'fill',
+                    source: 'draw-source',
+                    filter: ['==', '$type', 'Polygon'],
+                    paint: { 'fill-color': '#ff9500', 'fill-opacity': 0.15 }
+                });
+                
+                // Draw polygon outline
+                state.map.addLayer({
+                    id: 'draw-outline',
+                    type: 'line',
+                    source: 'draw-source',
+                    filter: ['any', ['==', '$type', 'Polygon'], ['==', '$type', 'LineString']],
+                    paint: { 'line-color': '#ff9500', 'line-width': 2 }
+                });
+                
+                // Draw points
+                state.map.addLayer({
+                    id: 'draw-points',
+                    type: 'circle',
+                    source: 'draw-source',
+                    filter: ['==', '$type', 'Point'],
+                    paint: { 'circle-radius': 5, 'circle-color': '#ff9500', 'circle-opacity': 0.9 }
+                });
+            }
+            
+            // Existing areas
+            if (state.areas.length > 0) {
+                const features = state.areas.filter(a => a.id !== state.selectedAreaId).map(a => {
+                    const coords = normalizeCoordinates(a.coordinates);
+                    if (coords.length > 0) coords.push(coords[0]);
+                    return {
+                        type: 'Feature',
+                        geometry: { type: 'Polygon', coordinates: [coords] },
+                        properties: { id: a.id, type: a.area_type, color: AREA_COLORS[a.area_type] || '#666' }
+                    };
+                });
+                
+                state.map.addSource('areas-source', { type: 'geojson', data: { type: 'FeatureCollection', features } });
+                
+                state.map.addLayer({
+                    id: 'areas-poly',
+                    type: 'fill',
+                    source: 'areas-source',
+                    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.25 }
+                });
+                
+                state.map.addLayer({
+                    id: 'areas-outline',
+                    type: 'line',
+                    source: 'areas-source',
+                    paint: { 'line-color': ['get', 'color'], 'line-width': 2 }
+                });
+            }
+
+            if (state.roads.length > 0) {
+                const features = state.roads.filter(road => road.id !== state.selectedRoadId).map(road => ({
+                    type: 'Feature',
+                    properties: { id: road.id, width: Math.max(3, Number(road.lane_count) * 3) },
+                    geometry: { type: 'LineString', coordinates: normalizeCoordinates(road.points) }
+                }));
+                state.map.addSource('roads-source', { type: 'geojson', data: { type: 'FeatureCollection', features } });
+                state.map.addLayer({
+                    id: 'roads-line', type: 'line', source: 'roads-source',
+                    paint: { 'line-color': '#475569', 'line-width': ['get', 'width'], 'line-opacity': 0.85 }
+                });
+            }
+
+            const cheFeatures = state.ches.filter(che => che.latitude !== null && che.longitude !== null).map(che => ({
+                type: 'Feature',
+                properties: {
+                    id: che.pk,
+                    name: che.name,
+                    code: che.equipment_type_code,
+                    selected: che.pk === state.selectedCheId ? 1 : 0
+                },
+                geometry: { type: 'Point', coordinates: [Number(che.longitude), Number(che.latitude)] }
+            }));
+            const draftLatitude = Number(document.getElementById('cheLatitude').value);
+            const draftLongitude = Number(document.getElementById('cheLongitude').value);
+            if (!state.selectedCheId && Number.isFinite(draftLatitude) && Number.isFinite(draftLongitude)) {
+                cheFeatures.push({
+                    type: 'Feature', properties: { id: 0, name: 'New CHE', code: 'CHE', selected: 1 },
+                    geometry: { type: 'Point', coordinates: [draftLongitude, draftLatitude] }
+                });
+            }
+            if (cheFeatures.length) {
+                state.map.addSource('ches-source', { type: 'geojson', data: { type: 'FeatureCollection', features: cheFeatures } });
+                state.map.addLayer({
+                    id: 'ches-point', type: 'circle', source: 'ches-source',
+                    paint: {
+                        'circle-radius': ['case', ['==', ['get', 'selected'], 1], 10, 7],
+                        'circle-color': ['case', ['==', ['get', 'selected'], 1], '#f97316', '#0f766e'],
+                        'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2
+                    }
+                });
+                state.map.addLayer({
+                    id: 'ches-label', type: 'symbol', source: 'ches-source',
+                    layout: { 'text-field': ['get', 'name'], 'text-size': 12, 'text-offset': [0, 1.3] },
+                    paint: { 'text-color': '#17333a', 'text-halo-color': '#ffffff', 'text-halo-width': 1 }
+                });
+            }
+
+            const slotFeatures = yardSlotFeaturesForMap();
+            if (slotFeatures.length) {
+                state.map.addSource('yard-slots-source', { type: 'geojson', data: { type: 'FeatureCollection', features: slotFeatures } });
+                state.map.addLayer({
+                    id: 'yard-slots-fill', type: 'fill', source: 'yard-slots-source',
+                    paint: { 'fill-color': '#14b8a6', 'fill-opacity': 0.18 }
+                });
+                state.map.addLayer({
+                    id: 'yard-slots-line', type: 'line', source: 'yard-slots-source',
+                    paint: { 'line-color': '#0f766e', 'line-width': 1 }
+                });
+            }
+
+            const bollardFeatures = berthBollardFeaturesForMap();
+            if (bollardFeatures.length) {
+                state.map.addSource('berth-bollards-source', { type: 'geojson', data: { type: 'FeatureCollection', features: bollardFeatures } });
+                state.map.addLayer({
+                    id: 'berth-bollards', type: 'circle', source: 'berth-bollards-source',
+                    paint: { 'circle-radius': 5, 'circle-color': '#f8fafc', 'circle-stroke-color': '#0f766e', 'circle-stroke-width': 2 }
+                });
+                state.map.addLayer({
+                    id: 'berth-bollard-labels', type: 'symbol', source: 'berth-bollards-source',
+                    layout: { 'text-field': ['get', 'label'], 'text-size': 11, 'text-offset': [0, 1.2] },
+                    paint: { 'text-color': '#134e4a', 'text-halo-color': '#ffffff', 'text-halo-width': 1 }
+                });
+            }
+            const waterSideFeatures = berthWaterSideFeaturesForMap();
+            if (waterSideFeatures.length) {
+                state.map.addSource('berth-water-source', { type: 'geojson', data: { type: 'FeatureCollection', features: waterSideFeatures } });
+                state.map.addLayer({
+                    id: 'berth-water-line', type: 'line', source: 'berth-water-source',
+                    filter: ['==', '$type', 'LineString'],
+                    paint: { 'line-color': '#0284c7', 'line-width': 3, 'line-opacity': 0.9 }
+                });
+                state.map.addLayer({
+                    id: 'berth-water-arrow', type: 'symbol', source: 'berth-water-source',
+                    filter: ['==', '$type', 'Point'],
+                    layout: {
+                        'text-field': '▲\nSEA', 'text-size': 13,
+                        'text-rotate': ['get', 'bearing'], 'text-rotation-alignment': 'map',
+                        'text-allow-overlap': true
+                    },
+                    paint: { 'text-color': '#0369a1', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 }
+                });
+            }
+            refreshEditMarkers();
+        }
+
+        function berthBollardFeaturesForMap() {
+            const features = [];
+            state.areas.filter(area => area.area_type === 'berth' && area.berth_config && area.id !== state.selectedAreaId)
+                .forEach(area => (area.berth_config.bollards || []).forEach(bollard => features.push({
+                    type: 'Feature', properties: { label: bollard.name || String(bollard.number) },
+                    geometry: { type: 'Point', coordinates: [Number(bollard.longitude), Number(bollard.latitude)] }
+                })));
+            if (isBerth() && state.berthAnchor) {
+                const berth = berthConfigFromForm();
+                const reverse = berth.bollard_direction === 'reverse';
+                let distance = reverse ? berth.length_m - berth.end_margin_m : berth.start_margin_m;
+                const sideOffset = berth.water_side === 'right' ? berth.width_m : 0;
+                for (let index = 0; index < berth.bollard_count; index += 1) {
+                    if (index > 0) distance += (reverse ? -1 : 1) * berth.bollard_spacings[index - 1];
+                    features.push({
+                        type: 'Feature', properties: { label: String(index + 1) },
+                        geometry: { type: 'Point', coordinates: geographicGridPoint(state.berthAnchor, berth, distance, sideOffset) }
+                    });
+                }
+            }
+            return features;
+        }
+
+        function updateBerthBollardSource() {
+            const source = state.map.getSource('berth-bollards-source');
+            if (source) source.setData({ type: 'FeatureCollection', features: berthBollardFeaturesForMap() });
+        }
+
+        function berthWaterSideFeaturesForMap() {
+            const features = [];
+            state.areas.filter(area => area.area_type === 'berth' && area.berth_config && area.id !== state.selectedAreaId)
+                .forEach(area => features.push(...waterSideIndicatorFeatures(
+                    [Number(area.berth_config.longitude), Number(area.berth_config.latitude)],
+                    area.berth_config
+                )));
+            if (isBerth() && state.berthAnchor) {
+                features.push(...waterSideIndicatorFeatures(state.berthAnchor, berthConfigFromForm()));
+            }
+            return features;
+        }
+
+        function waterSideIndicatorFeatures(anchor, berth) {
+            const isRight = berth.water_side === 'right';
+            const edgeOffset = isRight ? Number(berth.width_m) : 0;
+            const outsideOffset = edgeOffset + (isRight ? 15 : -15);
+            const midpoint = Number(berth.length_m) / 2;
+            const edge = geographicGridPoint(anchor, berth, midpoint, edgeOffset);
+            const outside = geographicGridPoint(anchor, berth, midpoint, outsideOffset);
+            return [
+                { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [edge, outside] } },
+                {
+                    type: 'Feature',
+                    properties: { bearing: ((Number(berth.heading_deg) + (isRight ? 90 : -90)) % 360 + 360) % 360 },
+                    geometry: { type: 'Point', coordinates: outside }
+                }
+            ];
+        }
+
+        function updateBerthWaterSideSource() {
+            const source = state.map.getSource('berth-water-source');
+            if (source) source.setData({ type: 'FeatureCollection', features: berthWaterSideFeaturesForMap() });
+        }
+
+        function yardSlotFeaturesForMap() {
+            const slotFeatures = [];
+            state.areas.filter(a => a.area_type === 'yard block' && a.block_config && a.id !== state.selectedAreaId).forEach(a => {
+                const coords = normalizeCoordinates(a.coordinates);
+                if (coords.length) slotFeatures.push(...yardSlotFeatures(coords[0], a.block_config));
+            });
+            if (isYardBlock() && state.yardAnchor) {
+                slotFeatures.push(...yardSlotFeatures(state.yardAnchor, yardGridFromForm()));
+            }
+            return slotFeatures;
+        }
+
+        function updateYardSlotSource() {
+            const source = state.map.getSource('yard-slots-source');
+            if (!source) return;
+            source.setData({ type: 'FeatureCollection', features: yardSlotFeaturesForMap() });
+        }
+
+        function yardSlotFeatures(anchor, source) {
+            const grid = {
+                max_bays: Number(source.max_bays), max_rows: Number(source.max_rows),
+                pile_length_m: Number(source.pile_length_m), pile_width_m: Number(source.pile_width_m),
+                bay_spacing_m: Number(source.bay_spacing_m), row_spacing_m: Number(source.row_spacing_m),
+                padding_bottom_m: Number(source.padding_bottom_m || 0), padding_left_m: Number(source.padding_left_m || 0),
+                heading_deg: Number(source.heading_deg || 0), slot_heading_deg: Number(source.slot_heading_deg || 0),
+                bay_use_heading_axis: Boolean(source.bay_use_heading_axis)
+            };
+            const features = [];
+            const skew = grid.slot_heading_deg * Math.PI / 180;
+            const cos = Math.cos(skew);
+            const sin = Math.sin(skew);
+            for (let bay = 1; bay <= grid.max_bays; bay += 1) {
+                for (let row = 1; row <= grid.max_rows; row += 1) {
+                    const bayStart = grid.bay_use_heading_axis ? grid.padding_bottom_m : grid.padding_left_m;
+                    const rowStart = grid.bay_use_heading_axis ? grid.padding_left_m : grid.padding_bottom_m;
+                    const bayOffset = bayStart + grid.pile_length_m / 2
+                        + (bay - 1) * (grid.pile_length_m + grid.bay_spacing_m);
+                    const rowOffset = rowStart + grid.pile_width_m / 2
+                        + (row - 1) * (grid.pile_width_m + grid.row_spacing_m);
+                    const center = grid.bay_use_heading_axis ? [bayOffset, rowOffset] : [rowOffset, bayOffset];
+                    const halfLength = grid.pile_length_m / 2;
+                    const halfWidth = grid.pile_width_m / 2;
+                    const corners = [[-halfLength, -halfWidth], [halfLength, -halfWidth], [halfLength, halfWidth], [-halfLength, halfWidth]]
+                        .map(([length, width]) => [
+                            center[0] + length * cos - width * sin,
+                            center[1] + length * sin + width * cos
+                        ])
+                        .map(([length, width]) => geographicGridPoint(anchor, grid, length, width));
+                    corners.push(corners[0]);
+                    features.push({
+                        type: 'Feature',
+                        properties: { bay, row },
+                        geometry: { type: 'Polygon', coordinates: [corners] }
+                    });
+                }
+            }
+            return features;
+        }
+        
+        function refreshList() {
+            const list = document.getElementById('areaList');
+            
+            if (state.areas.length === 0) {
+                list.innerHTML = '<div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">No areas yet</div>';
+                return;
+            }
+            
+            list.innerHTML = state.areas.map(a => `
+                <div class="area-item ${state.selectedAreaId === a.id ? 'selected' : ''}" data-id="${a.id}">
+                    <div class="area-item-info">
+                        <div class="area-item-name">
+                            <span class="color-swatch" style="background: ${AREA_COLORS[a.area_type] || '#666'}"></span>
+                            ${a.name || '(unnamed)'}
+                        </div>
+                        <div class="area-item-type">${a.area_type} • ${parseFloat(a.area).toFixed(0)} m²</div>
+                    </div>
+                    <div class="area-actions">
+                        <button type="button" onclick="editArea(${a.id})">Edit</button>
+                        <button type="button" onclick="deleteArea(${a.id})">Del</button>
+                    </div>
+                </div>
+            `).join('');
+            
+            document.querySelectorAll('.area-item').forEach(item => {
+                item.addEventListener('click', e => {
+                    if (!e.target.tagName.match(/BUTTON/)) {
+                        selectArea(parseInt(item.dataset.id));
+                    }
+                });
+            });
+        }
+
+        function refreshRoadList() {
+            const list = document.getElementById('roadList');
+            if (!state.roads.length) {
+                list.innerHTML = '<div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">No roads yet</div>';
+                return;
+            }
+            list.innerHTML = state.roads.map(road => `
+                <div class="area-item ${state.selectedRoadId === road.id ? 'selected' : ''}" data-road-id="${road.id}">
+                    <div class="area-item-info"><div class="area-item-name"><span class="color-swatch" style="background:#475569"></span>${road.name}</div><div class="area-item-type">${road.lane_count} lane(s) • ${road.direction}</div></div>
+                    <div class="area-actions"><button type="button" onclick="editRoad(${road.id})">Edit</button><button type="button" onclick="deleteRoad(${road.id})">Del</button></div>
+                </div>`).join('');
+            document.querySelectorAll('[data-road-id]').forEach(item => item.addEventListener('click', event => {
+                if (!event.target.tagName.match(/BUTTON/)) selectRoad(Number(item.dataset.roadId));
+            }));
+        }
+
+        function refreshCheList() {
+            const list = document.getElementById('cheList');
+            if (!state.ches.length) {
+                list.innerHTML = '<div style="padding: 16px; text-align: center; color: #999; font-size: 0.9em;">No CHE yet</div>';
+                return;
+            }
+            list.innerHTML = state.ches.map(che => `
+                <div class="area-item ${state.selectedCheId === che.pk ? 'selected' : ''}" data-che-id="${che.pk}">
+                    <div class="area-item-info">
+                        <div class="area-item-name"><span class="color-swatch" style="background:#0f766e"></span>${che.name}</div>
+                        <div class="area-item-type">${che.equipment_type_code} &bull; ${che.tic40_power_state} &bull; ${che.tic40_activity_state} &bull; ${che.is_available ? 'Available' : 'Unavailable'}</div>
+                    </div>
+                    <div class="area-actions"><button type="button" onclick="selectChe(${che.pk})">Edit</button><button type="button" onclick="deleteChe(${che.pk})">Del</button></div>
+                </div>`).join('');
+            document.querySelectorAll('[data-che-id]').forEach(item => item.addEventListener('click', event => {
+                if (!event.target.tagName.match(/BUTTON/)) selectChe(Number(item.dataset.cheId));
+            }));
+        }
+
+        function updateCheTypeInfo() {
+            const selectedId = Number(document.getElementById('cheEquipmentType').value);
+            const equipmentType = state.equipmentTypes.find(item => item.id === selectedId);
+            document.getElementById('cheTypeInfo').textContent = equipmentType
+                ? `${equipmentType.equipment_type_display || equipmentType.name} | ${equipmentType.length_m} x ${equipmentType.width_m} x ${equipmentType.height_m} m | empty/full speed ${equipmentType.driving_speed_empty_kmh}/${equipmentType.driving_speed_full_load_kmh} km/h | ${equipmentType.energy_source_display || equipmentType.energy_source} | tank ${equipmentType.fuel_tank_capacity}`
+                : 'Select an equipment type';
+        }
+
+        function beginChePlacement() {
+            if (!locationId) return alert('Save the location first');
+            state.placingChe = true;
+            state.drawing = false;
+            document.getElementById('placeCheBtn').classList.add('active');
+            state.map.getCanvas().style.cursor = 'crosshair';
+        }
+
+        function clearCheForm() {
+            state.selectedCheId = null;
+            state.placingChe = false;
+            document.getElementById('cheName').value = '';
+            document.getElementById('cheEquipmentType').value = '';
+            document.getElementById('chePoweredOn').checked = false;
+            document.getElementById('cheWorking').checked = false;
+            document.getElementById('cheIsAvailable').checked = false;
+            document.getElementById('cheIsDispatched').checked = false;
+            document.getElementById('cheIsInMaintenance').checked = false;
+            document.getElementById('cheFuelLevel').value = 100;
+            document.getElementById('cheLatitude').value = '';
+            document.getElementById('cheLongitude').value = '';
+            document.getElementById('cheRotation').value = 0;
+            document.getElementById('placeCheBtn').classList.remove('active');
+            if (state.map) state.map.getCanvas().style.cursor = '';
+            updateCheTypeInfo();
+            refresh();
+        }
+
+        function selectChe(id) {
+            const che = state.ches.find(item => item.pk === id);
+            if (!che) return;
+            state.selectedCheId = id;
+            state.placingChe = false;
+            document.getElementById('cheName').value = che.name;
+            document.getElementById('cheEquipmentType').value = che.equipment_type;
+            document.getElementById('chePoweredOn').checked = Boolean(che.powered_on);
+            document.getElementById('cheWorking').checked = Boolean(che.working);
+            document.getElementById('cheIsAvailable').checked = Boolean(che.is_available);
+            document.getElementById('cheIsDispatched').checked = Boolean(che.is_dispatched);
+            document.getElementById('cheIsInMaintenance').checked = Boolean(che.is_in_maintenance);
+            document.getElementById('cheFuelLevel').value = che.fuel_level;
+            document.getElementById('cheLatitude').value = che.latitude ?? '';
+            document.getElementById('cheLongitude').value = che.longitude ?? '';
+            document.getElementById('cheRotation').value = che.rotation ?? 0;
+            updateCheTypeInfo();
+            document.querySelector('[data-tab="che"]').click();
+            refresh();
+        }
+
+        async function saveChe() {
+            const latitudeText = document.getElementById('cheLatitude').value.trim();
+            const longitudeText = document.getElementById('cheLongitude').value.trim();
+            const payload = {
+                name: document.getElementById('cheName').value.trim(),
+                equipment_type: Number(document.getElementById('cheEquipmentType').value),
+                powered_on: document.getElementById('chePoweredOn').checked,
+                working: document.getElementById('cheWorking').checked,
+                is_available: document.getElementById('cheIsAvailable').checked,
+                is_dispatched: document.getElementById('cheIsDispatched').checked,
+                is_in_maintenance: document.getElementById('cheIsInMaintenance').checked,
+                fuel_level: Number(document.getElementById('cheFuelLevel').value),
+                latitude: Number(latitudeText),
+                longitude: Number(longitudeText),
+                rotation: Number(document.getElementById('cheRotation').value) || 0
+            };
+            if (!payload.name || !payload.equipment_type) return alert('Enter a name and equipment type');
+            if (!latitudeText || !longitudeText || !Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) return alert('Place the CHE on the map');
+            const url = state.selectedCheId
+                ? `/minitos_core/locations/${locationId}/ches/${state.selectedCheId}/`
+                : `/minitos_core/locations/${locationId}/ches/`;
+            const res = await fetch(url, {
+                method: state.selectedCheId ? 'PUT' : 'POST',
+                headers: apiHeaders(), body: JSON.stringify(payload)
+            });
+            if (!res.ok) return alert('Error: ' + JSON.stringify(await res.json().catch(() => ({ detail: res.statusText }))));
+            clearCheForm();
+            await loadChes();
+            refresh();
+        }
+
+        async function deleteChe(id) {
+            if (!confirm('Delete this CHE?')) return;
+            const res = await fetch(`/minitos_core/locations/${locationId}/ches/${id}/`, { method: 'DELETE', headers: apiHeaders(false) });
+            if (!res.ok) return alert('Error deleting CHE');
+            if (state.selectedCheId === id) clearCheForm();
+            await loadChes();
+            refresh();
+        }
+
+        function apiHeaders(json = true) {
+            const headers = { 'X-CSRFToken': getCsrfToken() };
+            if (json) headers['Content-Type'] = 'application/json';
+            const token = localStorage.getItem('token');
+            if (token) headers.Authorization = `Bearer ${token}`;
+            return headers;
+        }
+
+        function selectedValues(id) {
+            return Array.from(document.getElementById(id).selectedOptions).map(option => Number(option.value));
+        }
+
+        function setSelectedValues(id, values) {
+            const selected = new Set((values || []).map(value => Number(value)));
+            Array.from(document.getElementById(id).options).forEach(option => { option.selected = selected.has(Number(option.value)); });
+        }
+        
+        function selectArea(id) {
+            const a = state.areas.find(x => x.id === id);
+            if (!a) return;
+            
+            state.selectedAreaId = id;
+            state.selectedRoadId = null;
+            document.getElementById('areaName').value = a.name || '';
+            document.getElementById('areaType').value = a.area_type;
+            document.getElementById('areaSize').value = a.area;
+            document.getElementById('coordinates').value = JSON.stringify(normalizeCoordinates(a.coordinates));
+            document.getElementById('isVisible').checked = a.is_visible;
+            document.getElementById('saveAreaBtn').disabled = false;
+            state.polygon = normalizeCoordinates(a.coordinates);
+            state.yardAnchor = a.area_type === 'yard block' && normalizeCoordinates(a.coordinates).length
+                ? normalizeCoordinates(a.coordinates)[0]
+                : null;
+            state.berthAnchor = a.area_type === 'berth' && normalizeCoordinates(a.coordinates).length
+                ? normalizeCoordinates(a.coordinates)[0]
+                : null;
+            if (a.block_config) populateYardGrid(a.block_config);
+            if (a.berth_config) populateBerth(a.berth_config);
+            document.getElementById('parkingCapacity').value = 1;
+            setSelectedValues('parkingCheTypes', []);
+            if (a.parking_config) {
+                document.getElementById('parkingCapacity').value = a.parking_config.capacity;
+                setSelectedValues('parkingCheTypes', a.parking_config.allowed_che_types);
+            }
+            syncYardPanel();
+            
+            refresh();
+        }
+
+        function populateYardGrid(grid) {
+            const values = {
+                gridHeading: grid.heading_deg, gridSlotHeading: grid.slot_heading_deg,
+                gridMaxTier: grid.max_tier, gridBayCount: grid.max_bays, gridRowCount: grid.max_rows,
+                gridSlotLength: grid.pile_length_m, gridSlotWidth: grid.pile_width_m,
+                gridBaySpacing: grid.bay_spacing_m, gridRowSpacing: grid.row_spacing_m,
+                gridInitialBay: grid.initial_bay, gridInitialRow: grid.initial_row,
+                gridBayNaming: grid.bay_naming, gridRowNaming: grid.row_naming,
+                gridBayOrder: grid.bay_order, gridRowOrder: grid.row_order,
+                gridPadTop: grid.padding_top_m, gridPadBottom: grid.padding_bottom_m,
+                gridPadLeft: grid.padding_left_m, gridPadRight: grid.padding_right_m
+            };
+            Object.entries(values).forEach(([id, value]) => {
+                if (value !== null && value !== undefined) document.getElementById(id).value = value;
+            });
+            document.getElementById('gridBayUseHeading').checked = Boolean(grid.bay_use_heading_axis);
+        }
+
+        function populateBerth(berth) {
+            const values = {
+                berthHeading: berth.heading_deg,
+                berthLength: berth.length_m,
+                berthWidth: berth.width_m,
+                berthWaterSide: berth.water_side,
+                berthBollardDirection: berth.bollard_direction,
+                berthBollardCount: berth.bollard_count,
+                berthDefaultSpacing: berth.default_bollard_spacing_m,
+                berthStartMargin: berth.start_margin_m,
+                berthEndMargin: berth.end_margin_m
+            };
+            Object.entries(values).forEach(([id, value]) => {
+                if (value !== null && value !== undefined) document.getElementById(id).value = value;
+            });
+            document.getElementById('berthSpacings').value = (berth.bollards || []).slice(1)
+                .map(bollard => Number(bollard.spacing_from_previous_m)).join(', ');
+        }
+        
+        function editArea(id) {
+            selectArea(id);
+            document.querySelector('[data-tab="areas"]').click();
+            document.getElementById('saveAreaBtn').disabled = false;
+        }
+
+        function selectRoad(id) {
+            const road = state.roads.find(item => item.id === id);
+            if (!road) return;
+            state.selectedRoadId = id;
+            state.selectedAreaId = null;
+            state.yardAnchor = null;
+            state.berthAnchor = null;
+            document.getElementById('areaName').value = road.name;
+            document.getElementById('areaType').value = 'road';
+            document.getElementById('roadLaneCount').value = road.lane_count;
+            document.getElementById('roadCapacity').value = road.capacity;
+            document.getElementById('roadDirection').value = road.direction;
+            setSelectedValues('roadCheTypes', road.allowed_che_types);
+            state.polygon = normalizeCoordinates(road.points);
+            document.getElementById('coordinates').value = JSON.stringify(roundGeographicPoints(state.polygon));
+            document.getElementById('areaSize').value = roadLength(state.polygon.map(lngLatToLocal)).toFixed(2);
+            syncYardPanel();
+            refresh();
+        }
+
+        function editRoad(id) {
+            selectRoad(id);
+            document.querySelector('[data-tab="areas"]').click();
+        }
+
+        async function deleteRoad(id) {
+            if (!confirm('Delete this road?')) return;
+            const headers = { 'X-CSRFToken': getCsrfToken() };
+            const token = localStorage.getItem('token');
+            if (token) headers.Authorization = `Bearer ${token}`;
+            const res = await fetch(`/minitos_core/locations/${locationId}/roads/${id}/`, { method: 'DELETE', headers });
+            if (!res.ok) return alert('Error deleting road');
+            if (state.selectedRoadId === id) clearForm();
+            await loadRoads();
+            refresh();
+        }
+        
+        async function deleteArea(id) {
+            if (!confirm('Delete this area?')) return;
+            
+            try {
+                const token = localStorage.getItem('token');
+                const headers = { 'X-CSRFToken': getCsrfToken() };
+                if (token) headers['Authorization'] = `Bearer ${token}`;
+                
+                const res = await fetch(`/minitos_core/locations/${locationId}/areas/${id}/`, {
+                    method: 'DELETE',
+                    headers: headers
+                });
+                
+                if (res.ok) {
+                    if (state.selectedAreaId === id) clearForm();
+                    await loadAreas();
+                    refresh();
+                } else {
+                    alert('Error deleting area');
+                    console.error('Delete error:', await res.text());
+                }
+            } catch (e) {
+                console.error('Error deleting area:', e);
+            }
+        }
+        
+        document.getElementById('saveAreaBtn').addEventListener('click', async () => {
+            const name = document.getElementById('areaName').value.trim();
+            const type = document.getElementById('areaType').value;
+            const area = parseFloat(document.getElementById('areaSize').value) || 0;
+            const coords = normalizeCoordinates(document.getElementById('coordinates').value);
+            const visible = document.getElementById('isVisible').checked;
+            
+            if (!type || coords.length === 0) {
+                alert('Select a type and draw its geometry');
+                return;
+            }
+
+            const isRoad = type === 'road';
+            const payload = isRoad ? {
+                location: Number(locationId),
+                name,
+                points: coords,
+                lane_count: Math.max(1, Number(document.getElementById('roadLaneCount').value) || 1),
+                capacity: Math.max(1, Number(document.getElementById('roadCapacity').value) || 1),
+                direction: document.getElementById('roadDirection').value,
+                allowed_che_types: selectedValues('roadCheTypes'),
+                is_enabled: true
+            } : { location: locationId, name, area_type: type, area, coordinates: coords, is_visible: visible };
+            if (type === 'yard block') {
+                const grid = yardGridFromForm();
+                const anchor = state.yardAnchor || (coords.length ? coords[0] : null);
+                if (!anchor) {
+                    alert('Click the map once to place the yard block');
+                    return;
+                }
+                payload.yard_grid = {
+                    ...grid,
+                    longitude: anchor[0],
+                    latitude: anchor[1]
+                };
+            }
+            if (type === 'berth') {
+                const berth = berthConfigFromForm();
+                const anchor = state.berthAnchor || (coords.length ? coords[0] : null);
+                if (!anchor) {
+                    alert('Click the map once to place the berth');
+                    return;
+                }
+                payload.berth_settings = {
+                    ...berth,
+                    name: name || 'Berth',
+                    longitude: anchor[0],
+                    latitude: anchor[1]
+                };
+            }
+            if (type === 'parking') {
+                payload.parking_settings = {
+                    capacity: Math.max(1, Number(document.getElementById('parkingCapacity').value) || 1),
+                    allowed_che_types: selectedValues('parkingCheTypes')
+                };
+            }
+            
+            try {
+                const selectedId = isRoad ? state.selectedRoadId : state.selectedAreaId;
+                const resource = isRoad ? 'roads' : 'areas';
+                const url = selectedId
+                    ? `/minitos_core/locations/${locationId}/${resource}/${selectedId}/`
+                    : `/minitos_core/locations/${locationId}/${resource}/`;
+                
+                const token = localStorage.getItem('token');
+                const headers = {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                };
+                if (token) headers['Authorization'] = `Bearer ${token}`;
+                
+                const res = await fetch(url, {
+                    method: selectedId ? 'PUT' : 'POST',
+                    headers: headers,
+                    body: JSON.stringify(payload)
+                });
+                
+                if (res.ok) {
+                    clearForm();
+                    await Promise.all([loadAreas(), loadRoads()]);
+                    refresh();
+                    alert('Saved!');
+                } else {
+                    const error = await res.json().catch(() => ({ detail: res.statusText }));
+                    alert('Error: ' + JSON.stringify(error));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+                console.error('Save area error:', e);
+            }
+        });
+        
+        document.getElementById('locationForm').addEventListener('submit', async e => {
+            e.preventDefault();
+            
+            const data = {
+                name: document.getElementById('name').value.trim(),
+                latitude: parseFloat(document.getElementById('latitude').value),
+                longitude: parseFloat(document.getElementById('longitude').value),
+                map_origin_latitude: parseFloat(document.getElementById('map_origin_latitude').value) || parseFloat(document.getElementById('latitude').value),
+                map_origin_longitude: parseFloat(document.getElementById('map_origin_longitude').value) || parseFloat(document.getElementById('longitude').value),
+                map_width_m: parseFloat(document.getElementById('map_width_m').value) || 1000,
+                map_height_m: parseFloat(document.getElementById('map_height_m').value) || 1000,
+                map_units_per_meter: parseFloat(document.getElementById('map_units_per_meter').value) || 1,
+                default_zoom: parseFloat(document.getElementById('default_zoom').value),
+                angle: parseFloat(document.getElementById('angle').value),
+                timezone: document.getElementById('timezone').value.trim() || 'UTC',
+                location_type: document.getElementById('location-type')?.value || 'TL'
+            };
+            
+            if (!data.name) {
+                alert('Enter location name');
+                return;
+            }
+            
+            try {
+                const url = locationId ? `/minitos_core/api/location/${locationId}/save/` : '/minitos_core/api/location/';
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                    body: JSON.stringify(data)
+                });
+                
+                if (res.ok) {
+                    const result = await res.json();
+                    state.locationData = { ...state.locationData, ...data, id: result.id };
+                    if (state.map) state.map.setBearing(data.angle || 0);
+                    alert('Saved!');
+                    if (!locationId) window.location.href = `/terminal-editor/${result.id}/`;
+                } else {
+                    alert('Error: ' + (await res.text()));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        });
+        
+        function updateFormFields() {
+            document.getElementById('name').value = state.locationData.name || '';
+            document.getElementById('latitude').value = state.locationData.latitude || '';
+            document.getElementById('longitude').value = state.locationData.longitude || '';
+            document.getElementById('timezone').value = state.locationData.timezone || 'UTC';
+            document.getElementById('map_origin_latitude').value = state.locationData.map_origin_latitude || state.locationData.latitude || '';
+            document.getElementById('map_origin_longitude').value = state.locationData.map_origin_longitude || state.locationData.longitude || '';
+            document.getElementById('map_width_m').value = state.locationData.map_width_m || 1000;
+            document.getElementById('map_height_m').value = state.locationData.map_height_m || 1000;
+            document.getElementById('map_units_per_meter').value = state.locationData.map_units_per_meter || 1;
+            document.getElementById('default_zoom').value = state.locationData.default_zoom || 15;
+            document.getElementById('angle').value = state.locationData.angle || 0;
+        }
+        
+        function getCsrfToken() {
+            return document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+        }
+        
+        document.addEventListener('DOMContentLoaded', initMap);
+    </script>
+</body>
+</html>
