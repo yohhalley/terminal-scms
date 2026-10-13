@@ -4,6 +4,7 @@ extends Node
 signal broker_checked(ok: bool, message: String)
 signal message_published(message_type: String, device_id: String)
 signal message_rejected(message_type: String, device_id: String, reason: String)
+signal business_message_received(topic: String, payload: Dictionary)
 
 const SPARKPLUG_MANAGER = preload("res://source/sparkplugB/SparkPlugMQTTManager.gd")
 const CONNECT_TIMEOUT_SECONDS := 8.0
@@ -24,6 +25,7 @@ func _ready():
 	_manager.broker_disconnected.connect(_on_disconnected)
 	_manager.broker_connection_failed.connect(_on_connection_failed)
 	_manager.publish_failed.connect(_on_publish_failed)
+	_manager.message_received.connect(_on_message_received)
 	_connect_timeout = Timer.new()
 	_connect_timeout.one_shot = true
 	_connect_timeout.wait_time = CONNECT_TIMEOUT_SECONDS
@@ -31,7 +33,16 @@ func _ready():
 	add_child(_connect_timeout)
 
 
-func connect_to_broker(host: String, port: int, username := "", password := "", protocol := ""):
+func connect_to_broker(
+	host: String,
+	port: int,
+	username := "",
+	password := "",
+	protocol := "",
+	group_id := "MINI-TERMINAL",
+	node_id := "GODOT-SANDBOX",
+	client_id := "godot-terminal-sandbox"
+):
 	if is_broker_connected():
 		broker_checked.emit(true, "MQTT broker already connected; Sparkplug node is online")
 		return
@@ -39,6 +50,9 @@ func connect_to_broker(host: String, port: int, username := "", password := "", 
 		"url": _format_broker_url(host, port, protocol),
 		"username": username,
 		"password": password,
+		"group_id": group_id,
+		"node_id": node_id,
+		"client_id": client_id,
 	}
 	_disconnect_requested = false
 	_connect_timeout.start()
@@ -55,9 +69,9 @@ func _start_pending_connection():
 	_pending_connection = {}
 	_manager.configure(
 		str(request.url),
-		"MINI-TERMINAL",
-		"GODOT-SANDBOX",
-		"godot-terminal-sandbox",
+		str(request.group_id),
+		str(request.node_id),
+		str(request.client_id),
 		str(request.username),
 		str(request.password)
 	)
@@ -87,6 +101,19 @@ func publish_powered_devices(ches: Array):
 	for che in ches:
 		if bool(che.get("powered_on", false)):
 			publish_che_data(che)
+
+
+func subscribe_business_commands(uns_root: String, terminal_code: String) -> bool:
+	if not is_broker_connected():
+		return false
+	return _manager.subscribe("%s/%s/oes/che/+/command" % [uns_root.trim_suffix("/"), terminal_code], 1)
+
+
+func publish_business_event(topic: String, payload: Dictionary, retain := false) -> bool:
+	if not is_broker_connected():
+		_reject("JSON", topic, "MQTT broker is not connected")
+		return false
+	return _manager.publish_json(topic, payload, 1, retain)
 
 
 func publish_che_birth(che: Dictionary) -> bool:
@@ -173,6 +200,18 @@ func _fail_connection(message: String):
 
 func _on_publish_failed(message_type: String, topic: String, message: String):
 	_reject(message_type, topic.get_slice("/", topic.get_slice_count("/") - 1), message)
+
+
+func _on_message_received(topic: String, payload: PackedByteArray):
+	var json = JSON.new()
+	if json.parse(payload.get_string_from_utf8()) != OK:
+		_reject("JSON", topic, "Message payload is not valid JSON")
+		return
+	var data = json.get_data()
+	if not data is Dictionary:
+		_reject("JSON", topic, "Message payload must be a JSON object")
+		return
+	business_message_received.emit(topic, data)
 
 
 func _device_id(che: Dictionary) -> String:

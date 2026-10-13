@@ -1,0 +1,7 @@
+.git
+.godot
+.import
+build
+dist
+*.log
+open-terminal.code-workspace

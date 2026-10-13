@@ -5,12 +5,17 @@ Terminal OES is the order execution and dispatch service for the SCMS sandbox. I
 ## Responsibilities
 
 - Mirror only released orders and their executable legs.
-- Maintain a short-lived operational shadow of CHE state.
+- Maintain an operational projection of CHE state, position, energy and freshness.
 - Dispatch the next eligible leg transactionally.
 - Keep an immutable MQTT inbox and transactional outbox.
 - Publish command and execution events with idempotency identifiers.
 
 It does not own terminal planning, inventory, route generation, or authoritative CHE master data. Those remain in MiniTOS.
+
+The OES database is not a copy of MiniTOS. Released orders are immutable
+execution snapshots; assignments, commands, reservations and dispatch decisions
+belong to OES. Settled inventory and equipment master data remain authoritative
+in MiniTOS and arrive through versioned contracts.
 
 ## Local development
 
@@ -37,6 +42,7 @@ Internal API requests use `X-OES-Token` when `OES_API_TOKEN` is configured.
 
 Key endpoints:
 
+- `GET /equipment/` authenticated operations console
 - `GET /health/`
 - `GET /api/orders/`
 - `POST /api/orders/{id}/dispatch-next/`
@@ -44,3 +50,7 @@ Key endpoints:
 - `POST /api/commands/{command_id}/event/`
 
 See [docs/UNS_CONTRACT.md](docs/UNS_CONTRACT.md) for MQTT topics and payloads.
+
+Manual console changes are recorded as debug overrides. A subsequent simulator
+observation supersedes the override; issuing acknowledged simulator state
+commands is intentionally separate future work.

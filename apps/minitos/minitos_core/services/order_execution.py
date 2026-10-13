@@ -12,6 +12,7 @@ from minitos_core.models import (
     OrderRoutePlan,
     Position,
 )
+from minitos_core.services.layout import resolved_interface_point
 
 
 EXECUTION_EVENTS = {
@@ -49,6 +50,16 @@ def _leg_movement_mode(leg):
     return 'multi' if modes else ''
 
 
+def _position_coordinates(position):
+    if position is None:
+        return None, None
+    if position.interface_position_id:
+        point = resolved_interface_point(position.interface_position)
+        if point:
+            return point[1], point[0]
+    return position.latitude, position.longitude
+
+
 def _queue_released_order(order):
     location = order.work_queue.location
     terminal_code = _terminal_code(location.pk)
@@ -63,6 +74,8 @@ def _queue_released_order(order):
         'start_position__stack_position',
         'end_position__stack_position',
     ).prefetch_related('route_edges__route_edge'):
+        source_latitude, source_longitude = _position_coordinates(leg.start_position)
+        destination_latitude, destination_longitude = _position_coordinates(leg.end_position)
         legs.append({
             'id': leg.pk,
             'sequence': leg.sequence,
@@ -78,6 +91,10 @@ def _queue_released_order(order):
             'destination_inventory_position_id': (
                 leg.end_position.stack_position_id if leg.end_position_id else None
             ),
+            'source_latitude': source_latitude,
+            'source_longitude': source_longitude,
+            'destination_latitude': destination_latitude,
+            'destination_longitude': destination_longitude,
             'planned_start': leg.planned_start.isoformat() if leg.planned_start else None,
             'planned_end': leg.planned_end.isoformat() if leg.planned_end else None,
         })
@@ -130,18 +147,14 @@ def _locked_che(che_id, location_id):
 
 @transaction.atomic
 def pickup_container(container_visit_id, che_id):
-    visit = ContainerVisit.objects.select_for_update().select_related('container_number').get(
-        pk=container_visit_id,
-    )
+    visit = ContainerVisit.objects.select_for_update().get(pk=container_visit_id)
     che = _locked_che(che_id, visit.location_id)
     if visit.status == ContainerVisit.ON_EQUIPMENT and visit.current_che_id == che.pk:
         return visit
     if visit.current_che_id:
         raise ValidationError('The container is already carried by another CHE.')
 
-    position = Position.objects.select_for_update().filter(
-        container_visit=visit,
-    ).select_related('pile').first()
+    position = Position.objects.select_for_update().filter(container_visit=visit).first()
     if not position:
         raise ValidationError('The container is not assigned to a yard position.')
 
@@ -159,14 +172,9 @@ def pickup_container(container_visit_id, che_id):
 
 @transaction.atomic
 def drop_container(container_visit_id, che_id, position_id):
-    visit = ContainerVisit.objects.select_for_update().select_related('container_number').get(
-        pk=container_visit_id,
-    )
+    visit = ContainerVisit.objects.select_for_update().get(pk=container_visit_id)
     che = _locked_che(che_id, visit.location_id)
-    target = Position.objects.select_for_update().select_related(
-        'pile__storage_grid__layout_asset__layout_version',
-        'operational_position',
-    ).get(pk=position_id)
+    target = Position.objects.select_for_update().get(pk=position_id)
 
     target_location_id = target.pile.storage_grid.layout_asset.layout_version.location_id
     if target_location_id != visit.location_id:
@@ -223,9 +231,7 @@ def apply_execution_event(
         raise ValidationError(f'Unsupported execution event: {event}.')
 
     occurred_at = _event_time(occurred_at)
-    order = Order.objects.select_for_update().select_related(
-        'work_queue', 'container_number',
-    ).get(pk=order_id)
+    order = Order.objects.select_for_update().get(pk=order_id)
     terminal_id = order.work_queue.location_id
     leg = None
     if leg_id is not None:

@@ -119,6 +119,10 @@ def ingest_released_order(topic, payload):
                         "destination_inventory_position_id": leg.get(
                             "destination_inventory_position_id"
                         ),
+                        "source_latitude": leg.get("source_latitude"),
+                        "source_longitude": leg.get("source_longitude"),
+                        "destination_latitude": leg.get("destination_latitude"),
+                        "destination_longitude": leg.get("destination_longitude"),
                         "planned_start": _timestamp(leg.get("planned_start")),
                         "planned_end": _timestamp(leg.get("planned_end")),
                         "source_payload": leg,
@@ -154,6 +158,20 @@ def ingest_equipment_state(topic, payload):
     except (KeyError, TypeError, ValueError) as exc:
         raise ValidationError("Equipment state requires data.che_id and data.name.") from exc
     source_timestamp = _timestamp(data.get("timestamp") or payload.get("occurred_at"))
+    existing = EquipmentState.objects.filter(
+        terminal_id=terminal_id,
+        tos_che_id=che_id,
+    ).first()
+    if (
+        existing
+        and existing.source_timestamp
+        and source_timestamp
+        and source_timestamp < existing.source_timestamp
+    ):
+        return existing
+    energy_level = data.get("energy_level")
+    if energy_level is None:
+        energy_level = data.get("battery_level", data.get("state_of_charge"))
     equipment, _ = EquipmentState.objects.update_or_create(
         terminal_id=terminal_id,
         tos_che_id=che_id,
@@ -171,6 +189,9 @@ def ingest_equipment_state(topic, payload):
             "longitude": data.get("longitude"),
             "rotation": float(data.get("rotation", 0.0)),
             "fuel_level": data.get("fuel_level"),
+            "energy_level": energy_level,
+            "speed_mps": data.get("speed_mps"),
+            "state_source": EquipmentState.SIMULATOR,
             "source_timestamp": source_timestamp,
             "last_seen_at": timezone.now(),
             "raw_state": data,

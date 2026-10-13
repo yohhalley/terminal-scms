@@ -138,6 +138,22 @@ class OrderExecutionTests(LayoutTestCase):
             outgoing.payload['data']['legs'][0]['destination_inventory_position_id'],
             self.target.pk,
         )
+        self.assertEqual(
+            outgoing.payload['data']['legs'][0]['source_latitude'],
+            self.source.operational_position.latitude,
+        )
+        self.assertEqual(
+            outgoing.payload['data']['legs'][0]['source_longitude'],
+            self.source.operational_position.longitude,
+        )
+        self.assertEqual(
+            outgoing.payload['data']['legs'][0]['destination_latitude'],
+            self.target.operational_position.latitude,
+        )
+        self.assertEqual(
+            outgoing.payload['data']['legs'][0]['destination_longitude'],
+            self.target.operational_position.longitude,
+        )
 
         dispatched = self.callback(
             'leg_dispatched', leg_id=self.leg.pk, che_id=self.che.pk,

@@ -1,6 +1,7 @@
 import uuid
 from datetime import timedelta
 
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -48,6 +49,10 @@ class ExecutionServiceTests(TestCase):
                     "end_position": 12,
                     "source_inventory_position_id": 111,
                     "destination_inventory_position_id": 112,
+                    "source_latitude": 17.9401,
+                    "source_longitude": -102.1501,
+                    "destination_latitude": 17.9408,
+                    "destination_longitude": -102.1494,
                 }],
             },
         }
@@ -71,6 +76,8 @@ class ExecutionServiceTests(TestCase):
                 "longitude": -102.15,
                 "rotation": 90.0,
                 "fuel_level": 80.0,
+                "energy_level": 76.5,
+                "speed_mps": 2.25,
                 "timestamp": timezone.now().isoformat(),
             },
         }
@@ -110,6 +117,8 @@ class ExecutionServiceTests(TestCase):
         command = assignment.commands.get()
         self.assertEqual(command.payload["data"]["destination_position_id"], 12)
         self.assertEqual(command.payload["data"]["destination_inventory_position_id"], 112)
+        self.assertEqual(command.payload["data"]["destination_latitude"], 17.9408)
+        self.assertEqual(command.payload["data"]["destination_longitude"], -102.1494)
         self.assertEqual(OutboxEvent.objects.filter(event_id=command.command_id).count(), 1)
 
     def test_command_events_complete_operation_and_release_equipment(self):
@@ -138,6 +147,87 @@ class ExecutionServiceTests(TestCase):
         with self.assertRaisesMessage(ValidationError, "No fresh, available CHE"):
             dispatch_next_operation(self.order.pk)
         self.assertFalse(DispatchAssignment.objects.exists())
+
+    def test_older_equipment_observation_does_not_replace_newer_state(self):
+        newer_timestamp = timezone.now()
+        self.equipment.source_timestamp = newer_timestamp
+        self.equipment.latitude = 18.0
+        self.equipment.save(update_fields=["source_timestamp", "latitude"])
+        payload = self.equipment_payload()
+        payload["data"]["timestamp"] = (newer_timestamp - timedelta(seconds=5)).isoformat()
+        payload["data"]["latitude"] = 10.0
+
+        equipment = ingest_equipment_state("topic", payload)
+
+        self.assertEqual(equipment.latitude, 18.0)
+        self.assertEqual(equipment.source_timestamp, newer_timestamp)
+
+
+class EquipmentConsoleTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="dispatcher",
+            password="secret",
+        )
+        self.equipment = EquipmentState.objects.create(
+            terminal_id=1,
+            terminal_code="TEST",
+            tos_che_id=17,
+            name="SC01",
+            equipment_type_code="SC",
+            powered_on=True,
+            is_available=True,
+            latitude=17.94,
+            longitude=-102.15,
+            rotation=90.0,
+            fuel_level=80.0,
+            energy_level=75.0,
+            source_timestamp=timezone.now(),
+            last_seen_at=timezone.now(),
+        )
+
+    def test_console_requires_login(self):
+        response = self.client.get(reverse("equipment-console-list"))
+        self.assertRedirects(
+            response,
+            f"{reverse('login')}?next={reverse('equipment-console-list')}",
+        )
+
+    def test_console_renders_equipment_map_and_telemetry(self):
+        self.client.force_login(self.user)
+        response = self.client.get(
+            reverse("equipment-console-list"),
+            {"equipment": self.equipment.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "SC01")
+        self.assertContains(response, "equipment-map-data")
+        self.assertContains(response, "75.0%")
+
+    def test_console_manual_override_records_operator_and_source(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("equipment-console-list"), {
+            "equipment_id": self.equipment.pk,
+            "powered_on": "on",
+            "is_available": "on",
+            "latitude": "17.9500000",
+            "longitude": "-102.1400000",
+            "rotation": "135.0",
+            "fuel_level": "72.0",
+            "energy_level": "68.0",
+            "speed_mps": "0.0",
+        })
+
+        self.assertRedirects(
+            response,
+            f"{reverse('equipment-console-list')}?equipment={self.equipment.pk}",
+        )
+        self.equipment.refresh_from_db()
+        self.assertEqual(self.equipment.state_source, EquipmentState.MANUAL)
+        self.assertEqual(self.equipment.manual_override_by, "dispatcher")
+        self.assertEqual(self.equipment.latitude, 17.95)
+        self.assertEqual(self.equipment.energy_level, 68.0)
 
 
 @override_settings(OES_API_TOKEN="secret", DEBUG=False)

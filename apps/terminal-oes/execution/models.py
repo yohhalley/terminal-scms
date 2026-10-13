@@ -112,6 +112,10 @@ class ExecutionOperation(models.Model):
     destination_position_id = models.PositiveBigIntegerField(blank=True, null=True)
     source_inventory_position_id = models.PositiveBigIntegerField(blank=True, null=True)
     destination_inventory_position_id = models.PositiveBigIntegerField(blank=True, null=True)
+    source_latitude = models.FloatField(blank=True, null=True)
+    source_longitude = models.FloatField(blank=True, null=True)
+    destination_latitude = models.FloatField(blank=True, null=True)
+    destination_longitude = models.FloatField(blank=True, null=True)
     planned_start = models.DateTimeField(blank=True, null=True)
     planned_end = models.DateTimeField(blank=True, null=True)
     actual_start = models.DateTimeField(blank=True, null=True)
@@ -135,6 +139,15 @@ class ExecutionOperation(models.Model):
 
 
 class EquipmentState(models.Model):
+    SIMULATOR = "simulator"
+    MANUAL = "manual"
+    IMPORT = "import"
+    SOURCE_CHOICES = [
+        (SIMULATOR, "Simulator"),
+        (MANUAL, "Manual override"),
+        (IMPORT, "Imported state"),
+    ]
+
     terminal_id = models.PositiveBigIntegerField(db_index=True)
     terminal_code = models.CharField(max_length=80)
     tos_che_id = models.PositiveBigIntegerField()
@@ -150,6 +163,15 @@ class EquipmentState(models.Model):
     longitude = models.FloatField(blank=True, null=True)
     rotation = models.FloatField(default=0.0)
     fuel_level = models.FloatField(blank=True, null=True)
+    energy_level = models.FloatField(blank=True, null=True)
+    speed_mps = models.FloatField(blank=True, null=True)
+    state_source = models.CharField(
+        max_length=12,
+        choices=SOURCE_CHOICES,
+        default=SIMULATOR,
+    )
+    manual_override_at = models.DateTimeField(blank=True, null=True)
+    manual_override_by = models.CharField(max_length=150, blank=True)
     source_timestamp = models.DateTimeField(blank=True, null=True)
     last_seen_at = models.DateTimeField()
     raw_state = models.JSONField(default=dict)

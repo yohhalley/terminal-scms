@@ -43,13 +43,21 @@ def clear_legacy_layout(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
+    # PostgreSQL must commit the legacy-row cleanup before constraints and
+    # tables are altered, otherwise deferred FK triggers block the DDL.
+    atomic = False
+
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ('minitos_core', '0034_migrate_che_component_data'),
     ]
 
     operations = [
-        migrations.RunPython(clear_legacy_layout, migrations.RunPython.noop),
+        migrations.RunPython(
+            clear_legacy_layout,
+            migrations.RunPython.noop,
+            atomic=True,
+        ),
         migrations.CreateModel(
             name='AccessPolicy',
             fields=[

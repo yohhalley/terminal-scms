@@ -1,0 +1,27 @@
+{% extends "execution/base.html" %}
+{% block title %}Sign in | Terminal OES{% endblock %}
+{% block head %}
+<style>
+  .login-shell { max-width: 420px; margin: 9vh auto; padding: 30px; background: #fff; border: 1px solid var(--line); }
+  .login-shell h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: 0; }
+  .login-shell p { margin: 0 0 22px; }
+  .login-shell .field { margin: 0 0 14px; }
+  .login-shell label { display: block; margin-bottom: 5px; }
+  .login-shell button { width: 100%; margin-top: 8px; }
+  .form-errors { color: var(--red); margin-bottom: 14px; }
+</style>
+{% endblock %}
+{% block content %}
+<section class="login-shell">
+  <h1>Operations console</h1>
+  <p class="muted">Terminal execution and equipment state</p>
+  {% if form.errors %}<div class="form-errors">Invalid username or password.</div>{% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <div class="field"><label for="id_username">Username</label>{{ form.username }}</div>
+    <div class="field"><label for="id_password">Password</label>{{ form.password }}</div>
+    <input type="hidden" name="next" value="{{ next }}">
+    <button class="primary" type="submit">Sign in</button>
+  </form>
+</section>
+{% endblock %}

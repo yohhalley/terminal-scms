@@ -1,0 +1,282 @@
+{% extends "execution/base.html" %}
+{% block title %}Equipment | Terminal OES{% endblock %}
+{% block head %}
+<style>
+  .console-toolbar {
+    min-height: 54px;
+    padding: 9px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--line);
+    background: #fff;
+  }
+  .console-toolbar h1 { margin: 0 auto 0 0; font-size: 18px; letter-spacing: 0; }
+  .console-toolbar form { display: flex; align-items: center; gap: 8px; }
+  .console-toolbar select { min-width: 180px; }
+  .console-grid {
+    display: grid;
+    grid-template-columns: 310px minmax(420px, 1fr) 350px;
+    min-height: calc(100vh - 108px);
+  }
+  .equipment-list, .inspector { background: var(--panel); }
+  .equipment-list { border-right: 1px solid var(--line); }
+  .inspector { border-left: 1px solid var(--line); }
+  .section-heading {
+    min-height: 43px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--line);
+  }
+  .section-heading h2 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0; }
+  .count { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .equipment-table { width: 100%; border-collapse: collapse; }
+  .equipment-table a { color: inherit; text-decoration: none; }
+  .equipment-table tr { border-bottom: 1px solid #e5e9e7; }
+  .equipment-table tr:hover { background: #f4f8f6; }
+  .equipment-table tr.selected { background: var(--green-soft); box-shadow: inset 3px 0 var(--green); }
+  .equipment-table td { padding: 10px 8px; vertical-align: middle; }
+  .equipment-table td:first-child { width: 24px; padding-left: 14px; }
+  .equipment-name { display: block; font-weight: 700; }
+  .equipment-meta { color: var(--muted); font-size: 12px; }
+  .equipment-energy { text-align: right; font-variant-numeric: tabular-nums; }
+  .map-pane { min-width: 0; padding: 14px; background: #edf1ef; }
+  .map-frame { position: relative; height: 100%; min-height: 520px; border: 1px solid #bac3c0; background: #f8faf9; overflow: hidden; }
+  #equipment-map { width: 100%; height: 100%; min-height: 520px; display: block; }
+  .map-legend {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    padding: 7px 9px;
+    display: flex;
+    gap: 12px;
+    color: #34403d;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid #c5cdca;
+    font-size: 12px;
+  }
+  .map-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .inspector-body { padding: 14px; }
+  .identity { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .identity h2 { margin: 0 0 3px; font-size: 20px; letter-spacing: 0; }
+  .identity-line { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin: 13px 0; }
+  .fact span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+  .fact strong { display: block; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .override-form { border-top: 1px solid var(--line); padding-top: 14px; }
+  .override-form h3 { margin: 0 0 11px; font-size: 13px; text-transform: uppercase; letter-spacing: 0; }
+  .flag-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .flag-grid label { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 550; }
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .field label { display: block; margin-bottom: 4px; }
+  .field-errors, .form-errors { color: var(--red); font-size: 12px; }
+  .override-form button { width: 100%; margin-top: 14px; }
+  details { margin-top: 15px; border-top: 1px solid var(--line); padding-top: 12px; }
+  summary { cursor: pointer; font-weight: 650; }
+  pre { max-height: 220px; overflow: auto; padding: 9px; white-space: pre-wrap; word-break: break-word; background: #f1f4f2; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .empty-state { padding: 40px 18px; color: var(--muted); text-align: center; }
+  @media (max-width: 1180px) {
+    .console-grid { grid-template-columns: 260px 1fr; }
+    .inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+    .inspector-body { display: grid; grid-template-columns: 1fr 2fr; gap: 22px; }
+  }
+  @media (max-width: 760px) {
+    .console-toolbar { align-items: flex-start; flex-wrap: wrap; }
+    .console-toolbar form { width: 100%; }
+    .console-grid { display: block; }
+    .equipment-list { border-right: 0; max-height: 330px; overflow: auto; }
+    .map-frame, #equipment-map { min-height: 390px; }
+    .inspector-body { display: block; }
+  }
+</style>
+{% endblock %}
+{% block content %}
+<section class="console-toolbar">
+  <h1>Equipment operations</h1>
+  <form method="get">
+    <select name="terminal_id" aria-label="Terminal">
+      <option value="">All terminals</option>
+      {% for terminal in terminal_options %}
+        <option value="{{ terminal.terminal_id }}" {% if terminal_id == terminal.terminal_id|stringformat:"s" %}selected{% endif %}>{{ terminal.terminal_code }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Filter</button>
+    <a class="button" href="{% url 'equipment-console-list' %}{% if selected %}?equipment={{ selected.pk }}{% endif %}">Refresh</a>
+  </form>
+</section>
+
+<div class="console-grid">
+  <aside class="equipment-list">
+    <div class="section-heading"><h2>CHE fleet</h2><span class="count">{{ equipment|length }}</span></div>
+    {% if equipment %}
+      <table class="equipment-table">
+        <tbody>
+        {% for item in equipment %}
+          <tr class="{% if selected.pk == item.pk %}selected{% endif %}">
+            <td>
+              {% if item.last_seen_at < stale_before %}<span class="status-dot stale" title="Stale"></span>
+              {% elif not item.powered_on %}<span class="status-dot off" title="Powered off"></span>
+              {% elif item.working %}<span class="status-dot busy" title="Working"></span>
+              {% else %}<span class="status-dot live" title="Online"></span>{% endif %}
+            </td>
+            <td><a href="?{% if terminal_id %}terminal_id={{ terminal_id }}&amp;{% endif %}equipment={{ item.pk }}"><span class="equipment-name">{{ item.name }}</span><span class="equipment-meta">{{ item.equipment_type_code|default:"CHE" }} · {{ item.terminal_code }}</span></a></td>
+            <td class="equipment-energy">{% if item.energy_level is not None %}{{ item.energy_level|floatformat:0 }}%{% elif item.fuel_level is not None %}{{ item.fuel_level|floatformat:0 }}%{% else %}—{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}<div class="empty-state">No equipment state received.</div>{% endif %}
+  </aside>
+
+  <section class="map-pane">
+    <div class="map-frame">
+      <canvas id="equipment-map"></canvas>
+      <div class="map-legend"><span><i class="status-dot live"></i>Online</span><span><i class="status-dot busy"></i>Working</span><span><i class="status-dot off"></i>Off</span><span><i class="status-dot stale"></i>Stale</span></div>
+    </div>
+  </section>
+
+  <aside class="inspector">
+    <div class="section-heading"><h2>Equipment state</h2>{% if selected %}<span class="count">#{{ selected.tos_che_id }}</span>{% endif %}</div>
+    {% if selected %}
+    <div class="inspector-body">
+      <div>
+        <div class="identity">
+          <h2>{{ selected.name }}</h2>
+          <div class="identity-line"><strong>{{ selected.equipment_type_code|default:"CHE" }}</strong><span>·</span><span>{{ selected.terminal_code }}</span></div>
+        </div>
+        <div class="facts">
+          <div class="fact"><span>Latitude</span><strong>{{ selected.latitude|default_if_none:"—"|floatformat:7 }}</strong></div>
+          <div class="fact"><span>Longitude</span><strong>{{ selected.longitude|default_if_none:"—"|floatformat:7 }}</strong></div>
+          <div class="fact"><span>Heading</span><strong>{{ selected.rotation|floatformat:1 }}°</strong></div>
+          <div class="fact"><span>Speed</span><strong>{% if selected.speed_mps is not None %}{{ selected.speed_mps|floatformat:2 }} m/s{% else %}—{% endif %}</strong></div>
+          <div class="fact"><span>Fuel</span><strong>{% if selected.fuel_level is not None %}{{ selected.fuel_level|floatformat:1 }}%{% else %}—{% endif %}</strong></div>
+          <div class="fact"><span>Energy</span><strong>{% if selected.energy_level is not None %}{{ selected.energy_level|floatformat:1 }}%{% else %}—{% endif %}</strong></div>
+          <div class="fact"><span>Source</span><strong>{{ selected.get_state_source_display }}</strong></div>
+          <div class="fact"><span>Last seen</span><strong>{{ selected.last_seen_at|date:"Y-m-d H:i:s" }} UTC</strong></div>
+        </div>
+        {% if selected.manual_override_at %}<p class="muted">Override {{ selected.manual_override_at|date:"Y-m-d H:i:s" }} UTC · {{ selected.manual_override_by }}</p>{% endif %}
+        <details><summary>Raw telemetry</summary><pre>{{ selected.raw_state }}</pre></details>
+      </div>
+
+      <form class="override-form" method="post">
+        {% csrf_token %}
+        <input type="hidden" name="equipment_id" value="{{ selected.pk }}">
+        <h3>Manual override</h3>
+        {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+        <div class="flag-grid">
+          <label>{{ form.powered_on }} Powered on</label>
+          <label>{{ form.working }} Working</label>
+          <label>{{ form.is_available }} Available</label>
+          <label>{{ form.is_dispatched }} Dispatched</label>
+          <label>{{ form.is_in_maintenance }} Maintenance</label>
+        </div>
+        <div class="field-grid">
+          <div class="field"><label for="{{ form.latitude.id_for_label }}">Latitude</label>{{ form.latitude }}<div class="field-errors">{{ form.latitude.errors }}</div></div>
+          <div class="field"><label for="{{ form.longitude.id_for_label }}">Longitude</label>{{ form.longitude }}<div class="field-errors">{{ form.longitude.errors }}</div></div>
+          <div class="field"><label for="{{ form.rotation.id_for_label }}">Heading °</label>{{ form.rotation }}<div class="field-errors">{{ form.rotation.errors }}</div></div>
+          <div class="field"><label for="{{ form.speed_mps.id_for_label }}">Speed m/s</label>{{ form.speed_mps }}<div class="field-errors">{{ form.speed_mps.errors }}</div></div>
+          <div class="field"><label for="{{ form.fuel_level.id_for_label }}">Fuel %</label>{{ form.fuel_level }}<div class="field-errors">{{ form.fuel_level.errors }}</div></div>
+          <div class="field"><label for="{{ form.energy_level.id_for_label }}">Energy %</label>{{ form.energy_level }}<div class="field-errors">{{ form.energy_level.errors }}</div></div>
+        </div>
+        <button class="primary" type="submit">Apply override</button>
+      </form>
+    </div>
+    {% else %}<div class="empty-state">No equipment selected.</div>{% endif %}
+  </aside>
+</div>
+{{ map_data|json_script:"equipment-map-data" }}
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const canvas = document.getElementById("equipment-map");
+  const data = JSON.parse(document.getElementById("equipment-map-data").textContent);
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const selectedId = {{ selected.pk|default:"null" }};
+  const padding = 52;
+  let points = [];
+
+  function resize() {
+    const ratio = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.round(rect.width * ratio));
+    canvas.height = Math.max(1, Math.round(rect.height * ratio));
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    draw(rect.width, rect.height);
+  }
+
+  function bounds() {
+    if (!data.length) return { minLat: -0.001, maxLat: 0.001, minLon: -0.001, maxLon: 0.001 };
+    let minLat = Math.min(...data.map(item => item.latitude));
+    let maxLat = Math.max(...data.map(item => item.latitude));
+    let minLon = Math.min(...data.map(item => item.longitude));
+    let maxLon = Math.max(...data.map(item => item.longitude));
+    const latSpan = Math.max(maxLat - minLat, 0.001);
+    const lonSpan = Math.max(maxLon - minLon, 0.001);
+    minLat -= latSpan * 0.12; maxLat += latSpan * 0.12;
+    minLon -= lonSpan * 0.12; maxLon += lonSpan * 0.12;
+    return { minLat, maxLat, minLon, maxLon };
+  }
+
+  function draw(width, height) {
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#f8faf9";
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = "#dce3e0";
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 10; i += 1) {
+      const x = padding + (width - padding * 2) * i / 10;
+      const y = padding + (height - padding * 2) * i / 10;
+      ctx.beginPath(); ctx.moveTo(x, padding); ctx.lineTo(x, height - padding); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(padding, y); ctx.lineTo(width - padding, y); ctx.stroke();
+    }
+    const box = bounds();
+    points = data.map(item => ({
+      ...item,
+      x: padding + (item.longitude - box.minLon) / (box.maxLon - box.minLon) * (width - padding * 2),
+      y: padding + (box.maxLat - item.latitude) / (box.maxLat - box.minLat) * (height - padding * 2),
+    }));
+    points.forEach(item => drawEquipment(item));
+    ctx.fillStyle = "#66706f";
+    ctx.font = "11px system-ui";
+    ctx.fillText(`${box.maxLat.toFixed(6)}° N`, 8, padding + 4);
+    ctx.fillText(`${box.minLat.toFixed(6)}° N`, 8, height - padding + 4);
+    ctx.fillText(`${box.minLon.toFixed(6)}°`, padding, height - 18);
+    const eastLabel = `${box.maxLon.toFixed(6)}°`;
+    ctx.fillText(eastLabel, width - padding - ctx.measureText(eastLabel).width, height - 18);
+  }
+
+  function drawEquipment(item) {
+    const color = item.stale ? "#868e8c" : !item.powered_on ? "#b23a3a" : item.working ? "#b76a13" : "#147d64";
+    ctx.save();
+    ctx.translate(item.x, item.y);
+    ctx.rotate(item.rotation * Math.PI / 180);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = item.id === selectedId ? "#111817" : "#ffffff";
+    ctx.lineWidth = item.id === selectedId ? 3 : 1.5;
+    ctx.fillRect(-14, -8, 28, 16);
+    ctx.strokeRect(-14, -8, 28, 16);
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(-5, -5); ctx.lineTo(5, -5); ctx.closePath(); ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = "#18201f";
+    ctx.font = item.id === selectedId ? "700 12px system-ui" : "12px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText(item.name, item.x, item.y + 25);
+  }
+
+  canvas.addEventListener("click", event => {
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const hit = points.find(item => Math.hypot(item.x - x, item.y - y) <= 18);
+    if (hit) window.location.href = `?{% if terminal_id %}terminal_id={{ terminal_id }}&{% endif %}equipment=${hit.id}`;
+  });
+  window.addEventListener("resize", resize);
+  resize();
+})();
+</script>
+{% endblock %}

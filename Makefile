@@ -2,7 +2,8 @@ COMPOSE ?= docker compose
 
 .DEFAULT_GOAL := help
 .PHONY: help init setup config build pull up stop down restart ps logs \
-	test test-minitos test-oes migrations shell-minitos shell-oes
+	test test-minitos test-oes migrations shell-minitos shell-oes \
+	create-minitos-admin create-oes-admin logs-simulator
 
 help:
 	@printf '%s\n' \
@@ -13,10 +14,13 @@ help:
 		'  make down           Stop and remove containers; named volumes remain' \
 		'  make ps             Show service health and status' \
 		'  make logs           Follow logs from all services' \
+		'  make logs-simulator Follow the headless Godot simulator log' \
 		'  make test           Run MiniTOS and Terminal OES tests' \
 		'  make migrations     Check both Django projects for migration drift' \
 		'  make shell-minitos  Open a MiniTOS Django shell' \
-		'  make shell-oes      Open a Terminal OES Django shell'
+		'  make shell-oes      Open a Terminal OES Django shell' \
+		'  make create-minitos-admin Create a MiniTOS administrator' \
+		'  make create-oes-admin     Create an OES console administrator'
 
 init:
 	@test -f .env || cp .env.example .env
@@ -51,6 +55,9 @@ ps:
 logs:
 	$(COMPOSE) logs --follow --tail=200
 
+logs-simulator:
+	$(COMPOSE) logs --follow --tail=200 godot-simulator
+
 test: test-minitos test-oes
 
 test-minitos: init
@@ -68,3 +75,9 @@ shell-minitos: init
 
 shell-oes: init
 	$(COMPOSE) run --rm terminal-oes python manage.py shell
+
+create-minitos-admin: init
+	$(COMPOSE) exec minitos python manage.py createsuperuser
+
+create-oes-admin: init
+	$(COMPOSE) exec terminal-oes python manage.py createsuperuser

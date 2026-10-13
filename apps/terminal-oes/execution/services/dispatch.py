@@ -94,6 +94,10 @@ def dispatch_next_operation(order_id, *, equipment_id=None):
             "destination_position_id": operation.destination_position_id,
             "source_inventory_position_id": operation.source_inventory_position_id,
             "destination_inventory_position_id": operation.destination_inventory_position_id,
+            "source_latitude": operation.source_latitude,
+            "source_longitude": operation.source_longitude,
+            "destination_latitude": operation.destination_latitude,
+            "destination_longitude": operation.destination_longitude,
             "movement_mode": operation.required_movement_mode,
         },
     }

@@ -7,6 +7,7 @@ signal broker_connection_failed(message: String)
 signal publish_queued(message_type: String, topic: String, packet_id: int)
 signal publish_failed(message_type: String, topic: String, message: String)
 signal publish_acknowledged(packet_id: int)
+signal message_received(topic: String, payload: PackedByteArray)
 
 enum ConnectionState { DISCONNECTED, CONNECTING, CONNECTED }
 
@@ -62,6 +63,8 @@ func _ensure_transport():
 	_connect_once(mqtt.broker_disconnected, _on_transport_disconnected)
 	_connect_once(mqtt.broker_connection_failed, _on_transport_connection_failed)
 	_connect_once(mqtt.publish_acknowledge, _on_publish_acknowledged)
+	if mqtt.has_signal("received_message"):
+		_connect_once(mqtt.received_message, _on_message_received)
 
 
 func _connect_once(source_signal: Signal, callback: Callable):
@@ -153,11 +156,28 @@ func publish_node_death() -> bool:
 	return _publish("NDEATH", _topic("NDEATH"), _ndeath_payload(), 1)
 
 
-func _publish(message_type: String, topic: String, payload: PackedByteArray, qos: int) -> bool:
+func publish_json(topic: String, payload: Dictionary, qos := 1, retain := false) -> bool:
+	return _publish("JSON", topic, JSON.stringify(payload).to_utf8_buffer(), qos, retain)
+
+
+func subscribe(topic: String, qos := 1) -> bool:
+	if _state != ConnectionState.CONNECTED:
+		return false
+	return int(mqtt.subscribe(topic, qos)) >= 0
+
+
+func unsubscribe(topic: String) -> bool:
+	if mqtt == null:
+		return false
+	mqtt.unsubscribe(topic)
+	return true
+
+
+func _publish(message_type: String, topic: String, payload: PackedByteArray, qos: int, retain := false) -> bool:
 	if _state != ConnectionState.CONNECTED:
 		publish_failed.emit(message_type, topic, "MQTT broker is not connected")
 		return false
-	var packet_id = int(mqtt.publish(topic, payload, false, qos))
+	var packet_id = int(mqtt.publish(topic, payload, retain, qos))
 	if packet_id < 0:
 		publish_failed.emit(message_type, topic, "MQTT transport rejected the packet")
 		return false
@@ -195,6 +215,15 @@ func _on_transport_connection_failed():
 
 func _on_publish_acknowledged(packet_id: int):
 	publish_acknowledged.emit(packet_id)
+
+
+func _on_message_received(topic, payload):
+	var bytes: PackedByteArray
+	if payload is PackedByteArray:
+		bytes = payload
+	else:
+		bytes = str(payload).to_utf8_buffer()
+	message_received.emit(str(topic), bytes)
 
 
 func _topic(message_type: String, device_id := "") -> String:

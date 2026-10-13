@@ -8,7 +8,7 @@ x-minitos: &minitos
   environment: &minitos-environment
     DEBUG: "True"
     SECRET_KEY: ${MINITOS_SECRET_KEY:-local-minitos-secret}
-    ALLOWED_HOSTS: localhost,127.0.0.1,minitos
+    ALLOWED_HOSTS: ${MINITOS_ALLOWED_HOSTS:-localhost,127.0.0.1,minitos,192.168.1.8}
     DB_NAME: ${MINITOS_DB_NAME:-minitos}
     DB_USER: ${MINITOS_DB_USER:-minitos}
     DB_PASSWORD: ${MINITOS_DB_PASSWORD:-minitos}
@@ -33,7 +33,7 @@ x-oes: &oes
   environment: &oes-environment
     DJANGO_DEBUG: "True"
     DJANGO_SECRET_KEY: ${OES_SECRET_KEY:-local-oes-secret}
-    DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,terminal-oes
+    DJANGO_ALLOWED_HOSTS: ${OES_ALLOWED_HOSTS:-localhost,127.0.0.1,terminal-oes,192.168.1.8}
     DATABASE_URL: postgresql://${OES_DB_USER:-terminal_oes}:${OES_DB_PASSWORD:-terminal_oes}@oes-db:5432/${OES_DB_NAME:-terminal_oes}
     OES_API_TOKEN: ${OES_API_TOKEN:-local-oes-token}
     MQTT_HOST: hivemq
@@ -54,6 +54,11 @@ services:
       - "${MQTT_PORT:-1883}:1883"
     environment:
       HIVEMQ_LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/1883'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     volumes:
       - hivemq-data:/opt/hivemq/data
       - hivemq-log:/opt/hivemq/log
@@ -79,6 +84,11 @@ services:
     <<: *minitos
     ports:
       - "${MINITOS_HTTP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/admin/login/', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
     networks: [scms]
 
   minitos-uns-consumer:
@@ -127,6 +137,11 @@ services:
     <<: *oes
     ports:
       - "${OES_HTTP_PORT:-8010}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
     networks: [scms]
 
   oes-uns-consumer:
@@ -155,6 +170,42 @@ services:
         condition: service_started
     networks: [scms]
 
+  godot-simulator:
+    image: terminal-scms/godot-simulator:local
+    platform: ${GODOT_PLATFORM:-linux/amd64}
+    build:
+      context: ${GODOT_CONTEXT:-./clients/godot-open-terminal}
+      dockerfile: Dockerfile.headless
+      args:
+        GODOT_VERSION: ${GODOT_VERSION:-4.2.1}
+    restart: unless-stopped
+    environment:
+      MINITOS_URL: http://minitos:8000
+      MINITOS_USERNAME: ${SIMULATOR_MINITOS_USERNAME:-}
+      MINITOS_PASSWORD: ${SIMULATOR_MINITOS_PASSWORD:-}
+      SIMULATOR_LOCATION_ID: ${SIMULATOR_LOCATION_ID:-1}
+      SIMULATOR_TERMINAL_CODE: ${SIMULATOR_TERMINAL_CODE:-terminal-1}
+      SIMULATOR_DEFAULT_SPEED_MPS: ${SIMULATOR_DEFAULT_SPEED_MPS:-4.0}
+      SIMULATOR_TIME_SCALE: ${SIMULATOR_TIME_SCALE:-1.0}
+      MQTT_HOST: hivemq
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      MQTT_CLIENT_ID: ${SIMULATOR_MQTT_CLIENT_ID:-godot-headless-1}
+      SPARKPLUG_GROUP_ID: ${SPARKPLUG_GROUP_ID:-MINI-TERMINAL}
+      SPARKPLUG_NODE_ID: ${SPARKPLUG_NODE_ID:-GODOT-SANDBOX}
+      UNS_ROOT: scms/v1
+    depends_on:
+      hivemq:
+        condition: service_healthy
+      minitos:
+        condition: service_healthy
+      terminal-oes:
+        condition: service_healthy
+    volumes:
+      - godot-simulator-data:/data
+    networks: [scms]
+
 networks:
   scms:
     name: terminal-scms
@@ -164,3 +215,4 @@ volumes:
   hivemq-log:
   minitos-db-data:
   oes-db-data:
+  godot-simulator-data:

@@ -8,7 +8,7 @@ integration contracts, and Docker deployment configuration.
 
 - **MiniTOS** owns planning, inventory, layout, routing, and operational master data.
 - **Terminal OES** owns released-order execution, CHE assignments, commands, and execution history.
-- **Godot simulator** represents terminal equipment and publishes live Sparkplug B telemetry.
+- **Godot simulator** runs headlessly, executes OES commands, and publishes live Sparkplug B telemetry and command results.
 - **HiveMQ Community Edition** transports unified-namespace messages.
 - **PostgreSQL** provides one authoritative database per Django application.
 - **FlowFuse** is the planned process-automation layer.
@@ -59,6 +59,7 @@ docker compose ps
 Local endpoints:
 
 - MiniTOS: http://localhost:8000/
+- Terminal OES console: http://localhost:8010/equipment/
 - Terminal OES health: http://localhost:8010/health/
 - HiveMQ MQTT: `localhost:1883`
 
@@ -75,7 +76,11 @@ make migrations
 make down
 ```
 
-`make down` retains named database and broker volumes. Do not add `--volumes`
+Create one MiniTOS account for the simulator credentials configured in `.env`,
+and create an OES account for the protected operations console. The simulator
+will keep retrying until its MiniTOS account exists.
+
+`make down` retains named database, broker, and simulator session volumes. Do not add `--volumes`
 unless the stored development data is intentionally disposable.
 
 ## Optional platform services
@@ -87,11 +92,11 @@ portable single containers:
   Node-RED applications will connect to the SCMS HiveMQ endpoint.
 - Timebase 2.0 is beta and its agent runbook requires interactive certificate,
   administrator-password, client-secret, and optional AI-provider steps.
-- Godot remains a host-run desktop client until a non-interactive export/build
-  pipeline is added.
+- The interactive Godot scene remains available for local visual testing, while
+  Compose runs a separate non-interactive Linux service scene.
 
-See [Architecture](docs/ARCHITECTURE.md), [FlowFuse](docs/FLOWFUSE.md), and
-[Timebase](docs/TIMEBASE.md).
+See [Architecture](docs/ARCHITECTURE.md), [Linux deployment](docs/LINUX_DEPLOYMENT.md),
+[FlowFuse](docs/FLOWFUSE.md), and [Timebase](docs/TIMEBASE.md).
 
 Change every placeholder secret before exposing the stack outside a local
 development machine.
