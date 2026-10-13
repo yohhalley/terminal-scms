@@ -18,7 +18,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         client = create_client('outbox')
-        connect(client)
+        connect(client, retry=True)
         client.loop_start()
         try:
             while True:

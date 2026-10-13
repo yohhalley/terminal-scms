@@ -3,7 +3,7 @@ COMPOSE ?= docker compose
 .DEFAULT_GOAL := help
 .PHONY: help init setup config build pull up stop down restart ps logs \
 	test test-minitos test-oes migrations shell-minitos shell-oes \
-	create-minitos-admin create-oes-admin logs-simulator
+	create-minitos-admin create-oes-admin logs-simulator logs-mqtt diagnose
 
 help:
 	@printf '%s\n' \
@@ -14,6 +14,8 @@ help:
 		'  make down           Stop and remove containers; named volumes remain' \
 		'  make ps             Show service health and status' \
 		'  make logs           Follow logs from all services' \
+		'  make logs-mqtt      Follow HiveMQ and MQTT worker logs' \
+		'  make diagnose       Show status and recent startup logs' \
 		'  make logs-simulator Follow the headless Godot simulator log' \
 		'  make test           Run MiniTOS and Terminal OES tests' \
 		'  make migrations     Check both Django projects for migration drift' \
@@ -54,6 +56,17 @@ ps:
 
 logs:
 	$(COMPOSE) logs --follow --tail=200
+
+logs-mqtt:
+	$(COMPOSE) logs --follow --tail=200 \
+		hivemq minitos-uns-consumer minitos-outbox oes-uns-consumer oes-outbox
+
+diagnose: config
+	@printf '%s\n' '=== Container status ==='
+	-$(COMPOSE) ps --all
+	@printf '%s\n' '=== HiveMQ and MQTT worker logs ==='
+	-$(COMPOSE) logs --timestamps --tail=200 \
+		hivemq minitos-uns-consumer minitos-outbox oes-uns-consumer oes-outbox
 
 logs-simulator:
 	$(COMPOSE) logs --follow --tail=200 godot-simulator

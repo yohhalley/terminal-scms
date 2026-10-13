@@ -32,7 +32,7 @@ class Command(BaseCommand):
 
         client.on_connect = on_connect
         client.on_message = on_message
-        connect(client)
+        connect(client, retry=True)
         self.stdout.write(self.style.SUCCESS("OES MQTT consumer connected."))
         try:
             client.loop_forever(retry_first_connection=True)
@@ -40,4 +40,3 @@ class Command(BaseCommand):
             self.stdout.write("Stopping OES MQTT consumer.")
         finally:
             client.disconnect()
-

@@ -101,6 +101,67 @@ git pull --ff-only
 docker compose up --build --detach --wait
 ```
 
+## Diagnose a restart loop
+
+Start with the first unhealthy dependency rather than the downstream services:
+
+```bash
+sudo make diagnose
+sudo docker compose logs --timestamps --tail=200 hivemq
+sudo docker inspect terminal-scms-hivemq-1 \
+  --format 'exit={{.State.ExitCode}} error={{.State.Error}} oom={{.State.OOMKilled}}'
+```
+
+If HiveMQ is restarting, connection errors from the MiniTOS and OES MQTT
+workers are consequences rather than separate failures. The workers wait for a
+healthy broker during Compose startup and retry if the broker is temporarily
+unavailable later.
+
+HiveMQ CE enables remote JMX by default. Terminal SCMS does not use JMX and
+sets `HIVEMQ_JMX_ENABLED=false`. This avoids a JVM startup failure seen on
+Docker hosts where Java cannot resolve the generated container hostname:
+
+```text
+AgentConfigurationError: java.net.MalformedURLException:
+Unable to resolve hostname or get valid IP address
+```
+
+After updating the repository, recreate the broker and then the dependent
+services so the new environment is applied:
+
+```bash
+git pull --ff-only
+sudo docker compose up --detach --force-recreate --wait hivemq
+sudo docker compose up --build --detach --wait
+sudo docker compose ps
+```
+
+The HiveMQ log should no longer include the `jmxremote` properties in
+`JAVA_OPTS`, and the container should become healthy on port `1883`.
+
+HiveMQ CE 2026.5 runs as user ID `10000`. If its log specifically reports a
+permission error under `/opt/hivemq/data` or `/opt/hivemq/log`, inspect the
+named-volume ownership before changing anything:
+
+```bash
+sudo docker compose run --rm --no-deps --entrypoint sh hivemq \
+  -c 'id; ls -ldn /opt/hivemq/data /opt/hivemq/log'
+```
+
+Only when that output confirms the directories are not writable by user
+`10000`, repair their ownership and restart the broker:
+
+```bash
+sudo docker compose stop hivemq
+sudo docker compose run --rm --no-deps --user root --entrypoint sh hivemq \
+  -c 'chown -R 10000:0 /opt/hivemq/data /opt/hivemq/log'
+sudo docker compose up --detach --wait hivemq
+sudo docker compose up --detach --wait
+```
+
+Do not remove the named volumes as a general troubleshooting step. They contain
+broker and database state and are not required to be deleted to collect logs.
+
 Named volumes retain both PostgreSQL databases, HiveMQ data and the Godot
 Sparkplug birth/death sequence. Back up the database volumes before migrations
 or host replacement.

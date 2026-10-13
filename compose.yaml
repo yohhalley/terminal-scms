@@ -54,6 +54,9 @@ services:
       - "${MQTT_PORT:-1883}:1883"
     environment:
       HIVEMQ_LOG_LEVEL: INFO
+      # Remote JMX is not used by SCMS and can fail when a Docker hostname is
+      # not resolvable by the JVM during startup.
+      HIVEMQ_JMX_ENABLED: "${HIVEMQ_JMX_ENABLED:-false}"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/1883'"]
       interval: 5s
@@ -101,7 +104,7 @@ services:
       minitos-db:
         condition: service_healthy
       hivemq:
-        condition: service_started
+        condition: service_healthy
     networks: [scms]
 
   minitos-outbox:
@@ -114,7 +117,7 @@ services:
       minitos-db:
         condition: service_healthy
       hivemq:
-        condition: service_started
+        condition: service_healthy
     networks: [scms]
 
   oes-db:
@@ -154,7 +157,7 @@ services:
       oes-db:
         condition: service_healthy
       hivemq:
-        condition: service_started
+        condition: service_healthy
     networks: [scms]
 
   oes-outbox:
@@ -167,7 +170,7 @@ services:
       oes-db:
         condition: service_healthy
       hivemq:
-        condition: service_started
+        condition: service_healthy
     networks: [scms]
 
   godot-simulator:

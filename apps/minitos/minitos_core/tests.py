@@ -1,4 +1,6 @@
-from django.test import TestCase
+from unittest.mock import Mock, patch
+
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.contrib.auth.models import User
 from rest_framework.test import APITestCase, APIClient
@@ -10,7 +12,29 @@ from minitos_core.models import (
     LayoutAsset, LayoutVersion,
 )
 from minitos_core.services import sync_yard_grid
+from minitos_core.mqtt import connect as connect_mqtt
 import json
+
+
+@override_settings(MQTT_HOST='broker', MQTT_PORT=1883)
+class MQTTConnectionTests(SimpleTestCase):
+    def test_connect_raises_immediately_when_retry_is_disabled(self):
+        client = Mock()
+        client.connect.side_effect = ConnectionRefusedError('broker down')
+
+        with self.assertRaises(ConnectionRefusedError):
+            connect_mqtt(client)
+
+    def test_connect_retries_transient_socket_failure(self):
+        client = Mock()
+        client.connect.side_effect = [ConnectionRefusedError('broker down'), 0]
+
+        with patch('minitos_core.mqtt.time.sleep') as sleep:
+            result = connect_mqtt(client, retry=True, retry_interval=0.25)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(client.connect.call_count, 2)
+        sleep.assert_called_once_with(0.25)
 
 class BaseTestCase(APITestCase):
     def setUp(self):

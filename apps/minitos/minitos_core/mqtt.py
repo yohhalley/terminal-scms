@@ -1,5 +1,11 @@
+import logging
+import time
+
 from django.conf import settings
 from paho.mqtt import client as mqtt
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_client(suffix):
@@ -15,5 +21,18 @@ def create_client(suffix):
     return client
 
 
-def connect(client):
-    client.connect(settings.MQTT_HOST, settings.MQTT_PORT, keepalive=60)
+def connect(client, *, retry=False, retry_interval=5.0):
+    while True:
+        try:
+            return client.connect(settings.MQTT_HOST, settings.MQTT_PORT, keepalive=60)
+        except OSError as exc:
+            if not retry:
+                raise
+            logger.warning(
+                'MQTT broker %s:%s is unavailable (%s); retrying in %.1f seconds.',
+                settings.MQTT_HOST,
+                settings.MQTT_PORT,
+                exc,
+                retry_interval,
+            )
+            time.sleep(retry_interval)
