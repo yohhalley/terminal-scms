@@ -85,6 +85,10 @@ services:
 
   minitos:
     <<: *minitos
+    environment:
+      <<: *minitos-environment
+      SIMULATOR_MINITOS_USERNAME: ${SIMULATOR_MINITOS_USERNAME:-}
+      SIMULATOR_MINITOS_PASSWORD: ${SIMULATOR_MINITOS_PASSWORD:-}
     ports:
       - "${MINITOS_HTTP_PORT:-8000}:8000"
     healthcheck:

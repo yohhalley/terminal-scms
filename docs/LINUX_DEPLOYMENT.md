@@ -65,9 +65,19 @@ docker compose exec minitos python manage.py createsuperuser
 docker compose exec terminal-oes python manage.py createsuperuser
 ```
 
-In the MiniTOS admin, create the non-staff `simulator` user with the password in
-`.env`. The headless simulator currently uses Django Basic Authentication only
-for reading terminal configuration; it sends execution state through MQTT.
+MiniTOS automatically creates or reconciles the non-staff simulator account
+from `SIMULATOR_MINITOS_USERNAME` and `SIMULATOR_MINITOS_PASSWORD` before its
+web process becomes healthy. The password in `.env` is authoritative and is
+reapplied after a change or container restart. It can also be reconciled
+manually after editing `.env`:
+
+```bash
+docker compose up --build --detach --force-recreate --wait minitos
+make bootstrap-simulator-user
+```
+
+The headless simulator uses Django Basic Authentication only for reading
+terminal configuration; it sends execution state through MQTT.
 
 ## 4. Start Godot
 

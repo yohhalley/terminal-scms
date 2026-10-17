@@ -147,11 +147,6 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
-# Configure static files directories for development
-STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, 'minitos_core', 'static'),
-]
-
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Default primary key field type

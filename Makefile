@@ -3,7 +3,8 @@ COMPOSE ?= docker compose
 .DEFAULT_GOAL := help
 .PHONY: help init setup config build pull up stop down restart ps logs \
 	test test-minitos test-oes migrations shell-minitos shell-oes \
-	create-minitos-admin create-oes-admin logs-simulator logs-mqtt diagnose
+	create-minitos-admin create-oes-admin bootstrap-simulator-user \
+	logs-simulator logs-mqtt diagnose
 
 help:
 	@printf '%s\n' \
@@ -22,7 +23,8 @@ help:
 		'  make shell-minitos  Open a MiniTOS Django shell' \
 		'  make shell-oes      Open a Terminal OES Django shell' \
 		'  make create-minitos-admin Create a MiniTOS administrator' \
-		'  make create-oes-admin     Create an OES console administrator'
+		'  make create-oes-admin     Create an OES console administrator' \
+		'  make bootstrap-simulator-user Reconcile the Godot MiniTOS account'
 
 init:
 	@test -f .env || cp .env.example .env
@@ -94,3 +96,6 @@ create-minitos-admin: init
 
 create-oes-admin: init
 	$(COMPOSE) exec terminal-oes python manage.py createsuperuser
+
+bootstrap-simulator-user: init
+	$(COMPOSE) exec minitos python manage.py ensure_simulator_user

@@ -76,9 +76,10 @@ make migrations
 make down
 ```
 
-Create one MiniTOS account for the simulator credentials configured in `.env`,
-and create an OES account for the protected operations console. The simulator
-will keep retrying until its MiniTOS account exists.
+MiniTOS automatically reconciles a non-staff service account from the simulator
+credentials configured in `.env`. Create administrator accounts separately for
+the MiniTOS admin and protected OES operations console. The simulator keeps
+retrying while MiniTOS is unavailable.
 
 `make down` retains named database, broker, and simulator session volumes. Do not add `--volumes`
 unless the stored development data is intentionally disposable.
