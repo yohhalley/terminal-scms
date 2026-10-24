@@ -44,6 +44,34 @@ SIMULATOR_OES_URL=http://terminal-oes:8000
 RUNNER_IDENTITY=linux-server-01
 ```
 
+Generate the runner token on the Linux host rather than using the placeholder:
+
+```bash
+openssl rand -hex 32
+nano .env
+```
+
+Paste the generated 64-character value after `SIMULATOR_RUNNER_TOKEN=` without
+angle brackets, quotes or spaces. For example, the resulting line has this
+shape:
+
+```dotenv
+SIMULATOR_RUNNER_TOKEN=8f1c...the-rest-of-the-generated-value
+```
+
+This is a shared authentication secret between the OES web container and the
+host-side runner. Do not publish it or commit `.env`. If the token is added or
+changed after OES is already running, recreate the OES services so they receive
+the new environment value:
+
+```bash
+docker compose up --detach --force-recreate \
+  terminal-oes oes-uns-consumer oes-outbox
+```
+
+An existing `.env` is intentionally not replaced by `git pull`. After upgrades,
+compare it with `.env.example` for newly introduced settings.
+
 The first headless image build downloads the Godot 4.2.1 Linux binary. There is
 no global terminal ID or MiniTOS simulator account: OES supplies the selected
 Site UUID and a short-lived session token for each on-demand process.
@@ -77,6 +105,11 @@ make build-simulator
 make test-runner
 make run-simulator-runner
 ```
+
+`make run-simulator-runner` sources `.env` into the host process. It exits with
+`SIMULATOR_RUNNER_TOKEN is required` when that file does not contain the token.
+The runner sends it in `X-Runner-Token`; OES accepts claims only when the value
+matches its own `SIMULATOR_RUNNER_TOKEN` setting.
 
 Run the last command as a supervised host service for unattended use. The
 runner accepts only OES-created session identities, a fixed image, and an
