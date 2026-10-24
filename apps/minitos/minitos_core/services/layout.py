@@ -1094,4 +1094,7 @@ def publish_layout(layout):
     layout.is_current = True
     layout.published_at = timezone.now()
     layout.save(update_fields=['status', 'is_current', 'published_at', 'updated_at'])
+    from .site_sync import publish_site_configuration
+
+    publish_site_configuration(layout)
     return layout

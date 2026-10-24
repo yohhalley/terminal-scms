@@ -47,9 +47,14 @@ class Command(BaseCommand):
                 event.attempts += 1
                 event.save(update_fields=["attempts"])
                 try:
+                    payload = (
+                        bytes(event.payload_bytes)
+                        if event.payload_bytes is not None
+                        else json.dumps(event.payload, separators=(",", ":"))
+                    )
                     result = client.publish(
                         event.topic,
-                        json.dumps(event.payload, separators=(",", ":")),
+                        payload,
                         qos=event.qos,
                         retain=event.retain,
                     )

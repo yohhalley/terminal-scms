@@ -20,9 +20,13 @@ class Command(BaseCommand):
             if reason_code.is_failure:
                 logger.error('MQTT connection failed: %s', reason_code)
                 return
-            topic = f'{settings.UNS_ROOT}/+/oes/orders/+/execution'
-            connected_client.subscribe(topic, qos=1)
-            self.stdout.write(f'Subscribed: {topic}')
+            topics = [
+                f'{settings.UNS_ROOT}/+/oes/orders/+/execution',
+                f'{settings.SITE_UNS_ROOT}/+/+/oes/orders/+/execution',
+            ]
+            for topic in topics:
+                connected_client.subscribe(topic, qos=1)
+                self.stdout.write(f'Subscribed: {topic}')
 
         def on_message(connected_client, userdata, message):
             try:

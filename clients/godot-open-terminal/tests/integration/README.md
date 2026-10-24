@@ -13,10 +13,12 @@ Run the Godot/Sparkplug checks from `godot-open-terminal`:
 This validates:
 
 - NDEATH last-will configuration and NBIRTH on broker connection.
-- `powered_on: false -> true` emits DBIRTH followed immediately by DDATA.
+- All participating CHE, including powered-off CHE, emit DBIRTH followed by DDATA.
 - `working: true` DDATA is due every 2 seconds and powered-on idle DDATA every 20 seconds.
-- `powered_on: true -> false` emits DDEATH.
+- `powered_on: true -> false` emits DDATA with `PoweredOn=false`; DDEATH remains a device-accessibility event.
 - Sparkplug topic names and nonempty protobuf payloads.
+- Duplicate DCMD delivery creates one action and replays the same result identity.
+- A same-session restart restores the configuration revision, in-flight command, and latest persisted CHE position.
 - Screen, world, latitude, and longitude coordinate conversion.
 
 Run the TOS API contract from `minitos`:
@@ -55,5 +57,7 @@ messages delivered by a broker on `127.0.0.1:1883`:
   --headless --path . --script tests/integration/test_local_mqtt_broker.gd
 ```
 
-The check requires NBIRTH, DBIRTH, DDATA, DDEATH, and NDEATH. Override the target
-with `MQTT_TEST_HOST` and `MQTT_TEST_PORT` when needed.
+The check requires NBIRTH, DBIRTH, powered-on and powered-off DDATA, explicit
+DDEATH, and NDEATH. Its explicit DDEATH simulates lost device accessibility; it
+is not the power-off transition. Override the target with `MQTT_TEST_HOST` and
+`MQTT_TEST_PORT` when needed.

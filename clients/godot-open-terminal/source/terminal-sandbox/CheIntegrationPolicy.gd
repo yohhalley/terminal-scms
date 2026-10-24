@@ -22,13 +22,8 @@ static func move_completed_state() -> Dictionary:
 
 static func transition_events(previous_powered_on: bool, powered_on: bool) -> Array[String]:
 	var events: Array[String] = []
-	if not powered_on:
-		if previous_powered_on:
-			events.append("DDEATH")
-		return events
-	if not previous_powered_on:
-		events.append("DBIRTH")
-	events.append("DDATA")
+	if previous_powered_on != powered_on:
+		events.append("DDATA")
 	return events
 
 

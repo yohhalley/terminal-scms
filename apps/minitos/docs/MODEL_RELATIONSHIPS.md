@@ -49,7 +49,16 @@ erDiagram
         CharField bill_of_lading
         CharField booking
         CharField status
+        ForeignKey current_che FK
         DateTimeField last_updated
+    }
+    Enterprise {
+        UUIDField id PK
+        SlugField code
+        CharField name
+        BooleanField is_active
+        DateTimeField created_at
+        DateTimeField updated_at
     }
     Location {
         BigAutoField id PK
@@ -66,6 +75,18 @@ erDiagram
         FloatField angle
         CharField timezone
     }
+    Site {
+        UUIDField id PK
+        ForeignKey enterprise FK
+        OneToOneField location FK
+        SlugField code
+        CharField lifecycle_status
+        PositiveIntegerField configuration_revision
+        BooleanField simulation_enabled
+        DateTimeField published_at
+        DateTimeField created_at
+        DateTimeField updated_at
+    }
     LayoutVersion {
         BigAutoField id PK
         ForeignKey location FK
@@ -79,6 +100,16 @@ erDiagram
         DateTimeField created_at
         DateTimeField updated_at
         DateTimeField published_at
+    }
+    SiteConfigurationSnapshot {
+        BigAutoField id PK
+        ForeignKey site FK
+        PositiveIntegerField revision
+        ForeignKey layout_version FK
+        CharField schema
+        CharField checksum
+        JSONField payload
+        DateTimeField created_at
     }
     LayoutAsset {
         BigAutoField id PK
@@ -211,6 +242,7 @@ erDiagram
         ForeignKey asset FK
         ForeignKey storage_grid FK
         ForeignKey axis FK
+        ForeignKey road_axis FK
         ForeignKey access_policy FK
         CharField code
         CharField name
@@ -222,6 +254,13 @@ erDiagram
         PositiveIntegerField row_start
         PositiveIntegerField row_end
         PositiveIntegerField capacity
+        PositiveSmallIntegerField lane_count
+        FloatField lane_spacing_m
+        CharField position_reference
+        ForeignKey reference_che FK
+        FloatField longitudinal_offset_m
+        FloatField lateral_offset_m
+        FloatField position_spacing_m
         BooleanField cargo_may_rest
         BooleanField requires_vehicle_present
         BooleanField is_enabled
@@ -231,6 +270,8 @@ erDiagram
         BigAutoField id PK
         ForeignKey transfer_interface FK
         PositiveIntegerField sequence
+        PositiveSmallIntegerField lane_index
+        PositiveIntegerField position_index
         CharField code
         CharField name
         FloatField latitude
@@ -262,6 +303,7 @@ erDiagram
         ForeignKey equipment_type FK
         ForeignKey asset FK
         ForeignKey axis FK
+        ForeignKey service_lane_axis FK
         FloatField min_chainage_m
         FloatField max_chainage_m
         PositiveIntegerField bay_start
@@ -280,6 +322,7 @@ erDiagram
         JSONField point
         ForeignKey asset FK
         OneToOneField operational_position FK
+        OneToOneField transfer_interface FK
         BooleanField is_generated
         BooleanField is_enabled
         JSONField metadata
@@ -332,12 +375,39 @@ erDiagram
     Order {
         BigAutoField id PK
         CharField order_type
+        CharField status
+        PositiveSmallIntegerField priority
         ForeignKey container_number FK
         ForeignKey work_queue FK
         DateTimeField etc
         DateTimeField atc
+        DateTimeField released_at
+        DateTimeField completed_at
         ForeignKey from_position FK
         ForeignKey to_position FK
+    }
+    IntegrationInbox {
+        UUIDField event_id PK
+        CharField source
+        CharField topic
+        CharField schema
+        JSONField payload
+        CharField status
+        TextField error
+        DateTimeField received_at
+        DateTimeField processed_at
+    }
+    IntegrationOutbox {
+        UUIDField event_id PK
+        CharField topic
+        CharField schema
+        JSONField payload
+        PositiveSmallIntegerField qos
+        BooleanField retain
+        PositiveIntegerField attempts
+        TextField last_error
+        DateTimeField created_at
+        DateTimeField published_at
     }
     OrderRoutePlan {
         BigAutoField id PK
@@ -776,7 +846,9 @@ erDiagram
     CarrierVisit o|--o{ VisitCargoRoute : "outbound_carrier_visit"
     CarrierVisit ||--o{ CarrierVisitEquipmentRequirement : "carrier_visit"
     Che o|--o{ CheOperatingScope : "che"
+    Che o|--o{ ContainerVisit : "current_che"
     Che o|--o{ OrderLeg : "che"
+    Che o|--o{ TransferInterface : "reference_che"
     Che ||--o{ CheComponent : "che"
     Che ||--o{ HandlingCycle : "che"
     Che ||--o{ OperationalStateInterval : "che"
@@ -796,6 +868,7 @@ erDiagram
     ContainerVisit o|--o{ HandlingCycle : "container_visit"
     ContainerVisit o|--o{ Order : "container_number"
     ContainerVisit ||--o| Position : "container_visit"
+    Enterprise ||--o{ Site : "enterprise"
     EquipmentType o|--o{ CarrierService : "primary_equipment_type"
     EquipmentType o|--o{ CarrierVisit : "primary_equipment_type"
     EquipmentType o|--o{ CheOperatingScope : "equipment_type"
@@ -825,10 +898,13 @@ erDiagram
     LayoutVersion ||--o{ OrderRoutePlan : "layout_version"
     LayoutVersion ||--o{ RouteEdge : "layout_version"
     LayoutVersion ||--o{ RouteNode : "layout_version"
+    LayoutVersion ||--o{ SiteConfigurationSnapshot : "layout_version"
     LinearAxis o|--o{ CheOperatingScope : "axis"
+    LinearAxis o|--o{ CheOperatingScope : "service_lane_axis"
     LinearAxis o|--o{ OperationalPosition : "axis"
     LinearAxis o|--o{ RouteEdge : "source_axis"
     LinearAxis o|--o{ TransferInterface : "axis"
+    LinearAxis o|--o{ TransferInterface : "road_axis"
     LinearAxis ||--o{ BerthSegment : "quay_face_axis"
     LinearAxis ||--o{ LinearMarker : "axis"
     LinearMarker o|--o{ CarrierService : "default_end_bollard"
@@ -844,6 +920,7 @@ erDiagram
     Location ||--o{ ContainerVisit : "location"
     Location ||--o{ LayoutVersion : "location"
     Location ||--o{ PointOfWork : "location"
+    Location ||--o| Site : "location"
     OperationalPosition o|--o{ Order : "from_position"
     OperationalPosition o|--o{ Order : "to_position"
     OperationalPosition o|--o{ OrderLeg : "end_position"
@@ -873,9 +950,11 @@ erDiagram
     RouteNode ||--o{ RouteEdge : "to_node"
     SignalBinding ||--o| CurrentSignalValue : "binding"
     SignalDefinition ||--o{ SignalBinding : "signal_definition"
+    Site ||--o{ SiteConfigurationSnapshot : "site"
     StorageGrid o|--o{ TransferInterface : "storage_grid"
     StorageGrid ||--o{ Pile : "storage_grid"
     TransferInterface ||--o{ InterfacePosition : "transfer_interface"
+    TransferInterface ||--o| RouteNode : "transfer_interface"
     VisitCargoRoute ||--o{ PileBooking : "visit_cargo_route"
     WorkQueue o|--o{ Order : "work_queue"
 ```

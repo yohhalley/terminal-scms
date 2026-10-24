@@ -24,12 +24,13 @@ from django_filters import rest_framework as filters
 from .models import (
     AccessPolicy, BerthSegment, BusinessProcess, BusinessProcessExecution,
     CarrierService, CarrierVisit, Che, CheComponent, CheOperatingScope,
-    ComponentType, ContainerOwner, ContainerUnit, ContainerVisit, EquipmentType,
+    ComponentType, ContainerOwner, ContainerUnit, ContainerVisit, Enterprise, EquipmentType,
     EquipmentTypeComponent, HandlingCycle, InterfacePosition, ISOType, LayoutAsset,
     LayoutPreset, LayoutVersion, LinearAxis, LinearMarker, Location,
     OperationalPosition, OperationalStateInterval, Order, OrderLeg,
     OrderRoutePlan, Pile, PileBooking, POD, PointOfWork, Position,
-    ProcessHierarchy, ProcessVersion, RouteEdge, RouteNode, ServiceCargoRoute,
+    ProcessHierarchy, ProcessVersion, RouteEdge, RouteNode, ServiceCargoRoute, Site,
+    SiteConfigurationSnapshot,
     SignalBinding, SignalDefinition, StorageGrid, TransferInterface,
     VisitCargoRoute, WorkQueue, validate_iana_timezone,
 )
@@ -39,7 +40,7 @@ from .serializers import (
     CarrierServiceSerializer, CarrierVisitSerializer, CheComponentSerializer,
     CheOperatingScopeSerializer, CheSerializer, ComponentTypeSerializer,
     ContainerUnitSerializer, ContainerVisitSerializer, CurrentSignalValueSerializer,
-    EquipmentTypeComponentSerializer, EquipmentTypeSerializer, GroupSerializer,
+    EnterpriseSerializer, EquipmentTypeComponentSerializer, EquipmentTypeSerializer, GroupSerializer,
     HandlingCycleSerializer, LayoutAssetSerializer, LayoutPresetSerializer,
     LayoutVersionSerializer, LinearAxisSerializer, LinearMarkerSerializer,
     LocationSerializer, OperationalPositionSerializer,
@@ -48,13 +49,15 @@ from .serializers import (
     PileSerializer, PointOfWorkSerializer, PositionSerializer,
     ProcessHierarchySerializer, ProcessVersionSerializer, RouteEdgeSerializer,
     RouteNodeSerializer, ServiceCargoRouteSerializer, SignalBindingSerializer,
-    SignalDefinitionSerializer, StorageGridSerializer,
+    SignalDefinitionSerializer, SiteConfigurationSnapshotSerializer, SiteSerializer,
+    StorageGridSerializer,
     TransferInterfaceSerializer, UserSerializer, VisitCargoRouteSerializer,
     WorkQueueSerializer,
 )
-from .permissions import IsMESService
+from .permissions import IsMESService, IsOESServiceOrAuthenticated
 from .services import (
-    EXECUTION_EVENTS, accessible_terminals, apply_execution_event, current_layout,
+    EXECUTION_EVENTS, accessible_terminals, apply_execution_event, create_site,
+    current_layout, ensure_site_for_location,
     generate_service_visits, plan_order_route, publish_layout, release_order,
     sync_road_junctions, terminal_capabilities, validate_layout,
 )
@@ -217,39 +220,39 @@ def location_api_save(request, location_id=None):
         try:
             data = JSONParser().parse(request)
 
-            if location_id:
-                # Update existing location
-                location = Location.objects.get(pk=location_id, location_type__in=['TL', 'ID'])
-                location.name = data.get('name', location.name)
-                location.latitude = data.get('latitude', location.latitude)
-                location.longitude = data.get('longitude', location.longitude)
-                location.map_origin_latitude = data.get('map_origin_latitude', location.map_origin_latitude)
-                location.map_origin_longitude = data.get('map_origin_longitude', location.map_origin_longitude)
-                location.map_width_m = data.get('map_width_m', location.map_width_m)
-                location.map_height_m = data.get('map_height_m', location.map_height_m)
-                location.map_units_per_meter = data.get('map_units_per_meter', location.map_units_per_meter)
-                location.default_zoom = data.get('default_zoom', location.default_zoom)
-                location.angle = data.get('angle', location.angle)
-                location.timezone = data.get('timezone', location.timezone)
-            else:
-                # Create new location
-                location = Location(
-                    name=data.get('name', 'New Location'),
-                    location_type=data.get('location_type', 'TL'),
-                    latitude=data.get('latitude'),
-                    longitude=data.get('longitude'),
-                    map_origin_latitude=data.get('map_origin_latitude') or data.get('latitude'),
-                    map_origin_longitude=data.get('map_origin_longitude') or data.get('longitude'),
-                    map_width_m=data.get('map_width_m', 1000.0),
-                    map_height_m=data.get('map_height_m', 1000.0),
-                    map_units_per_meter=data.get('map_units_per_meter', 1.0),
-                    default_zoom=data.get('default_zoom', 15),
-                    angle=data.get('angle', 0),
-                    timezone=data.get('timezone', 'UTC'),
-                )
+            with transaction.atomic():
+                if location_id:
+                    location = Location.objects.get(pk=location_id, location_type__in=['TL', 'ID'])
+                    location.name = data.get('name', location.name)
+                    location.latitude = data.get('latitude', location.latitude)
+                    location.longitude = data.get('longitude', location.longitude)
+                    location.map_origin_latitude = data.get('map_origin_latitude', location.map_origin_latitude)
+                    location.map_origin_longitude = data.get('map_origin_longitude', location.map_origin_longitude)
+                    location.map_width_m = data.get('map_width_m', location.map_width_m)
+                    location.map_height_m = data.get('map_height_m', location.map_height_m)
+                    location.map_units_per_meter = data.get('map_units_per_meter', location.map_units_per_meter)
+                    location.default_zoom = data.get('default_zoom', location.default_zoom)
+                    location.angle = data.get('angle', location.angle)
+                    location.timezone = data.get('timezone', location.timezone)
+                else:
+                    location = Location(
+                        name=data.get('name', 'New Location'),
+                        location_type=data.get('location_type', 'TL'),
+                        latitude=data.get('latitude'),
+                        longitude=data.get('longitude'),
+                        map_origin_latitude=data.get('map_origin_latitude') or data.get('latitude'),
+                        map_origin_longitude=data.get('map_origin_longitude') or data.get('longitude'),
+                        map_width_m=data.get('map_width_m', 1000.0),
+                        map_height_m=data.get('map_height_m', 1000.0),
+                        map_units_per_meter=data.get('map_units_per_meter', 1.0),
+                        default_zoom=data.get('default_zoom', 15),
+                        angle=data.get('angle', 0),
+                        timezone=data.get('timezone', 'UTC'),
+                    )
 
-            validate_iana_timezone(location.timezone)
-            location.save()
+                validate_iana_timezone(location.timezone)
+                location.save()
+                site, _ = ensure_site_for_location(location)
             return JsonResponse({
                 'id': location.id,
                 'name': location.name,
@@ -263,6 +266,7 @@ def location_api_save(request, location_id=None):
                 'map_units_per_meter': location.map_units_per_meter,
                 'default_zoom': location.default_zoom,
                 'angle': location.angle,
+                'site': {'id': str(site.pk), 'code': site.code},
                 **_location_time_data(location),
                 'message': 'Location saved successfully'
             })
@@ -341,6 +345,51 @@ class LocationViewSet(viewsets.ViewSet):
         serializer = LocationSerializer(location)
         return Response(serializer.data)
 
+
+class EnterpriseViewSet(viewsets.ModelViewSet):
+    queryset = Enterprise.objects.all().order_by('name')
+    serializer_class = EnterpriseSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+
+class SiteViewSet(viewsets.ModelViewSet):
+    serializer_class = SiteSerializer
+    permission_classes = [IsOESServiceOrAuthenticated]
+
+    def get_queryset(self):
+        return Site.objects.select_related('enterprise', 'location').order_by(
+            'enterprise__name', 'location__name',
+        )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        site = create_site(
+            enterprise=values['enterprise'],
+            location=values['location'],
+            code=values.get('code'),
+            simulation_enabled=values.get('simulation_enabled', True),
+        )
+        return Response(
+            self.get_serializer(site).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=['get'], url_path='execution-snapshot')
+    def execution_snapshot(self, request, *args, **kwargs):
+        site = self.get_object()
+        snapshots = SiteConfigurationSnapshot.objects.filter(site=site)
+        revision = request.query_params.get('revision')
+        if revision is not None:
+            try:
+                snapshots = snapshots.filter(revision=int(revision))
+            except (TypeError, ValueError):
+                raise DRFValidationError({'revision': 'Revision must be an integer.'})
+        else:
+            snapshots = snapshots.filter(revision=site.configuration_revision)
+        snapshot = get_object_or_404(snapshots)
+        return Response(SiteConfigurationSnapshotSerializer(snapshot).data)
 
 class StorageGridViewSet(viewsets.ModelViewSet):
     serializer_class = StorageGridSerializer

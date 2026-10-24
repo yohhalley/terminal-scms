@@ -8,7 +8,7 @@ from paho.mqtt import client as mqtt
 logger = logging.getLogger(__name__)
 
 
-def create_client(suffix):
+def create_client(suffix, *, host_application=False):
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"{settings.MQTT_CLIENT_ID}-{suffix}",
@@ -18,6 +18,13 @@ def create_client(suffix):
         client.username_pw_set(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)
     if settings.MQTT_TLS:
         client.tls_set()
+    if host_application:
+        client.will_set(
+            f"spBv1.0/STATE/{settings.SPARKPLUG_HOST_ID}",
+            payload="OFFLINE",
+            qos=1,
+            retain=True,
+        )
     return client
 
 

@@ -87,7 +87,7 @@
   <header>
     <strong>Terminal OES</strong>
     {% if request.user.is_authenticated %}
-      <nav><a href="{% url 'equipment-console-list' %}">Equipment</a><a href="/admin/">Admin</a></nav>
+      <nav><a href="{% url 'equipment-console-list' %}">Equipment</a><a href="{% url 'simulation-console' %}">Simulations</a><a href="/admin/">Admin</a></nav>
       <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>
     {% endif %}
   </header>

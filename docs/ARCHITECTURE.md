@@ -10,12 +10,14 @@ into one installable product.
 Optional resource-heavy capabilities should use deployment profiles:
 
 - `core`: MiniTOS, Terminal OES, HiveMQ, and PostgreSQL.
+- `simulation`: the allowlisted headless Godot image used by the host runner.
 - `automation`: FlowFuse and its hosted Node-RED applications.
 - `historian`: Timebase.
 - `ai`: a future local or external language-model gateway.
 
-Only `core` is implemented today. Optional profiles will be added after their
-host-specific prerequisites have been completed and measured.
+The `core` stack and `simulation` image profile are implemented today. The
+automation, historian, and AI profiles will be added after their host-specific
+prerequisites have been completed and measured.
 
 ## Ownership
 
@@ -33,6 +35,29 @@ itself. Services never synchronize tables or write another service's database.
 They exchange versioned facts and maintain projections designed for their own
 decisions.
 
+## Enterprise and Site identity
+
+`Enterprise` is the stable company/tenant boundary. `Site` is the stable
+execution boundary used by MiniTOS, OES, simulations, and MQTT. For the first
+milestone, a Site has a one-to-one relationship with a terminal or inland-depot
+`Location`; vessel, train, and truck Locations are not Sites. Existing data is
+seeded under the editable `terminal-velocity` Enterprise.
+
+Site UUIDs and codes are immutable integration identities. Location primary
+keys remain in editor APIs as local implementation identifiers, but they are
+never cross-system identity. All current business events use
+`scms/v2/{enterprise_code}/{site_code}`. A disabled MiniTOS compatibility flag
+can temporarily dual-publish released orders to `scms/v1`, but OES consumes
+only the multi-Site namespace.
+
+Publishing a valid layout increments `Site.configuration_revision`, freezes a
+`SiteConfigurationSnapshot`, and writes
+`scms.site.configuration.published.v1` to the MiniTOS outbox in the same
+transaction. OES consumes that event, downloads the exact revision over its
+authenticated HTTP endpoint, verifies the SHA-256 checksum and Site UUID, then
+marks its `SiteProjection` ready. A stale or corrupt revision cannot replace a
+newer ready projection.
+
 ## OES operational projections
 
 OES does not copy the MiniTOS schema. Its execution database contains compact
@@ -40,6 +65,7 @@ read models and ledgers:
 
 | OES model | Purpose | Authority |
 | --- | --- | --- |
+| `EnterpriseProjection` and `SiteProjection` | MiniTOS identity, configuration revision, checksum and readiness | MiniTOS owns identity/configuration; OES owns projection health |
 | `ExecutionOrder` and `ExecutionOperation` | Immutable released-plan snapshot and live operation state | OES owns execution; MiniTOS owns the planning source |
 | `EquipmentState` | Latest normalized CHE observation, freshness and debug override provenance | Simulator supplies observations; OES owns the dispatch projection |
 | `PositionState` | Planned addition for occupancy, restriction and freshness | MiniTOS supplies settled inventory; OES owns transient availability |
@@ -67,10 +93,13 @@ in Timebase; OES retains the current dispatch state and meaningful transitions.
    on broker retention alone. Snapshot/reconciliation endpoints and checkpoints
    rebuild projections after data loss or extended outage.
 7. Every business event carries a globally unique event ID, schema version,
-   terminal scope, aggregate identity/revision, source timestamp, correlation ID
+   Enterprise/Site scope, aggregate identity/revision, source timestamp, correlation ID
    and causation ID. Schema-breaking changes receive a new version.
 8. No bidirectional field synchronization is allowed. Each fact has one writer;
    other systems store clearly named projections.
+9. A Site is ready for simulation only after OES has verified the matching
+   published snapshot revision. Imported CHE master records begin unavailable;
+   live telemetry must establish execution availability.
 
 ## Order flow
 
@@ -80,8 +109,9 @@ in Timebase; OES retains the current dispatch state and meaningful transitions.
 4. Terminal OES consumes it idempotently and creates execution operations.
 5. OES filters by capability, power, availability, maintenance, freshness,
    operating scope and route feasibility before ranking candidates.
-6. OES writes a command and MQTT outbox event in one transaction.
-7. The headless simulator executes the command and publishes result milestones.
+6. OES writes a Sparkplug DCMD and binary MQTT outbox event in one transaction.
+7. The headless simulator validates and executes the DCMD, then publishes result
+   milestones as DDATA metrics.
 8. OES updates execution state and publishes `scms.execution.event.v1`.
 9. MiniTOS consumes the event and atomically updates order, CHE, and container custody.
 
@@ -89,20 +119,36 @@ QoS 1 guarantees at-least-once delivery, not exactly once. UUID inbox records ma
 
 ## Protocol split
 
-- Sparkplug B and Eclipse Tahu semantics are used for node/device lifecycle and CHE telemetry.
-- Versioned JSON events are used for business workflows such as order release, dispatch, pickup, drop, and completion.
+- Sparkplug B and Eclipse Tahu semantics are used for node/device lifecycle,
+  CHE telemetry, OES DCMD commands, and command-result metrics.
+- Versioned JSON events under `scms/v2` are used for business workflows such as
+  Site synchronization, order release, and settled execution evidence returned
+  to MiniTOS.
 
 Tahu is an SDK/reference implementation for Sparkplug. It is not an automatic database replication product.
+
+Sparkplug device connectivity and CHE power are related but independent facts.
+Per Sparkplug 3.0 section 6.4.26, DDEATH is valid when a device becomes
+inaccessible, including after power-off. The SCMS simulator has direct knowledge
+of simulated power state, so a participating CHE remains born and publishes
+`State/PoweredOn=false` in DDATA. It publishes DDEATH only when the simulated
+device becomes inaccessible. OES never infers the last physical power state
+from DDEATH alone.
 
 ## Headless simulator
 
 The interactive `TerminalSandbox.tscn` remains available for local visual work.
 The deployed service runs `source/headless/HeadlessSimulator.tscn` with Godot's
 `--headless` option. It has no UI or renderer dependency and is configured by
-environment variables. It reads static terminal/CHE configuration from MiniTOS,
-subscribes to OES commands, simulates motion in geographic coordinates and
-publishes Sparkplug lifecycle/telemetry plus versioned JSON command results.
+environment variables supplied by the restricted host runner. It retrieves a
+frozen, checksummed bootstrap snapshot from OES using a short-lived,
+session-scoped token. It never receives MiniTOS credentials. It subscribes to
+Sparkplug NCMD/DCMD, simulates motion in geographic coordinates, and publishes
+NBIRTH, DBIRTH, DDATA, DDEATH/NDEATH when appropriate, and command results.
 
-Compose starts PostgreSQL and HiveMQ first, then the healthy Django services,
-and finally Godot. Every process still implements retry behavior because startup
-ordering does not protect against a service restart later.
+Normal Compose startup excludes Godot. OES allows one active
+`SimulationSession` per ready Site. A host-side runner claims that session and
+launches the allowlisted image without exposing the Docker socket to OES. The
+session-specific volume stores command idempotency records, in-flight commands,
+and recent CHE state so a same-session restart resumes without executing a
+duplicate DCMD.

@@ -1,35 +1,24 @@
 from django.conf import settings
 
 
-def terminal_root(terminal_code):
-    return f"{settings.UNS_ROOT}/{terminal_code}"
+def site_root(site):
+    return f"{settings.SITE_UNS_ROOT}/{site.enterprise.code}/{site.code}"
 
 
-def released_order_topic(terminal_code, order_id):
-    return f"{terminal_root(terminal_code)}/tos/orders/{order_id}/released"
-
-
-def execution_event_topic(terminal_code, order_id):
-    return f"{terminal_root(terminal_code)}/oes/orders/{order_id}/execution"
-
-
-def equipment_state_topic(terminal_code, che_id):
-    return f"{terminal_root(terminal_code)}/simulator/che/{che_id}/state"
-
-
-def equipment_command_topic(terminal_code, che_id):
-    return f"{terminal_root(terminal_code)}/oes/che/{che_id}/command"
-
-
-def command_result_topic(terminal_code, command_id):
-    return f"{terminal_root(terminal_code)}/simulator/commands/{command_id}/result"
+def execution_event_topic(site, order_id):
+    return f"{site_root(site)}/oes/orders/{order_id}/execution"
 
 
 def subscriptions():
-    root = settings.UNS_ROOT
+    site_namespace = settings.SITE_UNS_ROOT
     return [
-        (f"{root}/+/tos/orders/+/released", 1),
-        (f"{root}/+/simulator/che/+/state", 1),
-        (f"{root}/+/simulator/commands/+/result", 1),
+        (f"{site_namespace}/+/+/tos/orders/+/released", 1),
+        (f"{site_namespace}/+/+/tos/site/created", 1),
+        (f"{site_namespace}/+/+/tos/configuration/published", 1),
+        ("spBv1.0/+/NBIRTH/+", 1),
+        ("spBv1.0/+/NDEATH/+", 1),
+        ("spBv1.0/+/NDATA/+", 1),
+        ("spBv1.0/+/DBIRTH/+/+", 1),
+        ("spBv1.0/+/DDEATH/+/+", 1),
+        ("spBv1.0/+/DDATA/+/+", 1),
     ]
-

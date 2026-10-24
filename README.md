@@ -7,7 +7,7 @@ integration contracts, and Docker deployment configuration.
 ## Components
 
 - **MiniTOS** owns planning, inventory, layout, routing, and operational master data.
-- **Terminal OES** owns released-order execution, CHE assignments, commands, and execution history.
+- **Terminal OES** owns released-order execution, CHE assignments, commands, execution history, and verified Site projections.
 - **Godot simulator** runs headlessly, executes OES commands, and publishes live Sparkplug B telemetry and command results.
 - **HiveMQ Community Edition** transports unified-namespace messages.
 - **PostgreSQL** provides one authoritative database per Django application.
@@ -17,6 +17,11 @@ integration contracts, and Docker deployment configuration.
 HiveMQ is an integration backbone, not a durable system of record. Each service
 owns its database and uses idempotent inboxes plus transactional outboxes for
 at-least-once messaging.
+
+MiniTOS seeds the `terminal-velocity` Enterprise and gives every terminal or
+inland-depot Location a stable Site UUID. Publishing a layout creates an
+immutable, checksummed execution snapshot; OES must verify that revision before
+the Site is ready for simulation.
 
 ## Repository layout
 
@@ -76,10 +81,13 @@ make migrations
 make down
 ```
 
-MiniTOS automatically reconciles a non-staff service account from the simulator
-credentials configured in `.env`. Create administrator accounts separately for
-the MiniTOS admin and protected OES operations console. The simulator keeps
-retrying while MiniTOS is unavailable.
+Create administrator accounts separately for the MiniTOS admin and protected
+OES operations console. Normal core startup intentionally creates no Godot
+process. After a Site configuration is published and its OES projection is
+ready, start the restricted host runner with `make run-simulator-runner`, then
+use the OES simulation console at `http://localhost:8010/simulations/` to start
+that Site. Godot bootstraps only from OES and communicates at runtime through
+Sparkplug B.
 
 `make down` retains named database, broker, and simulator session volumes. Do not add `--volumes`
 unless the stored development data is intentionally disposable.
@@ -93,8 +101,10 @@ portable single containers:
   Node-RED applications will connect to the SCMS HiveMQ endpoint.
 - Timebase 2.0 is beta and its agent runbook requires interactive certificate,
   administrator-password, client-secret, and optional AI-provider steps.
-- The interactive Godot scene remains available for local visual testing, while
-  Compose runs a separate non-interactive Linux service scene.
+- The interactive Godot scene remains available for local visual testing. The
+  non-interactive Linux image is launched on demand by the restricted host
+  runner; it is behind Compose's `simulation` profile and never starts with the
+  core stack.
 
 See [Architecture](docs/ARCHITECTURE.md), [Linux deployment](docs/LINUX_DEPLOYMENT.md),
 [FlowFuse](docs/FLOWFUSE.md), and [Timebase](docs/TIMEBASE.md).

@@ -96,10 +96,10 @@
 <section class="console-toolbar">
   <h1>Equipment operations</h1>
   <form method="get">
-    <select name="terminal_id" aria-label="Terminal">
-      <option value="">All terminals</option>
-      {% for terminal in terminal_options %}
-        <option value="{{ terminal.terminal_id }}" {% if terminal_id == terminal.terminal_id|stringformat:"s" %}selected{% endif %}>{{ terminal.terminal_code }}</option>
+    <select name="site_id" aria-label="Site">
+      <option value="">All Sites</option>
+      {% for site in site_options %}
+        <option value="{{ site.pk }}" {% if site_id == site.pk|stringformat:"s" %}selected{% endif %}>{{ site.enterprise.code }}/{{ site.code }}</option>
       {% endfor %}
     </select>
     <button type="submit">Filter</button>
@@ -116,12 +116,13 @@
         {% for item in equipment %}
           <tr class="{% if selected.pk == item.pk %}selected{% endif %}">
             <td>
-              {% if item.last_seen_at < stale_before %}<span class="status-dot stale" title="Stale"></span>
+              {% if not item.device_connected or not item.data_valid %}<span class="status-dot stale" title="Device disconnected"></span>
+              {% elif item.last_seen_at < stale_before %}<span class="status-dot stale" title="Stale"></span>
               {% elif not item.powered_on %}<span class="status-dot off" title="Powered off"></span>
               {% elif item.working %}<span class="status-dot busy" title="Working"></span>
               {% else %}<span class="status-dot live" title="Online"></span>{% endif %}
             </td>
-            <td><a href="?{% if terminal_id %}terminal_id={{ terminal_id }}&amp;{% endif %}equipment={{ item.pk }}"><span class="equipment-name">{{ item.name }}</span><span class="equipment-meta">{{ item.equipment_type_code|default:"CHE" }} · {{ item.terminal_code }}</span></a></td>
+            <td><a href="?{% if site_id %}site_id={{ site_id }}&amp;{% endif %}equipment={{ item.pk }}"><span class="equipment-name">{{ item.name }}</span><span class="equipment-meta">{{ item.equipment_type_code|default:"CHE" }} · {{ item.site.enterprise.code }}/{{ item.site.code }}</span></a></td>
             <td class="equipment-energy">{% if item.energy_level is not None %}{{ item.energy_level|floatformat:0 }}%{% elif item.fuel_level is not None %}{{ item.fuel_level|floatformat:0 }}%{% else %}—{% endif %}</td>
           </tr>
         {% endfor %}
@@ -144,7 +145,7 @@
       <div>
         <div class="identity">
           <h2>{{ selected.name }}</h2>
-          <div class="identity-line"><strong>{{ selected.equipment_type_code|default:"CHE" }}</strong><span>·</span><span>{{ selected.terminal_code }}</span></div>
+          <div class="identity-line"><strong>{{ selected.equipment_type_code|default:"CHE" }}</strong><span>·</span><span>{{ selected.site.enterprise.code }}/{{ selected.site.code }}</span></div>
         </div>
         <div class="facts">
           <div class="fact"><span>Latitude</span><strong>{{ selected.latitude|default_if_none:"—"|floatformat:7 }}</strong></div>
@@ -154,6 +155,8 @@
           <div class="fact"><span>Fuel</span><strong>{% if selected.fuel_level is not None %}{{ selected.fuel_level|floatformat:1 }}%{% else %}—{% endif %}</strong></div>
           <div class="fact"><span>Energy</span><strong>{% if selected.energy_level is not None %}{{ selected.energy_level|floatformat:1 }}%{% else %}—{% endif %}</strong></div>
           <div class="fact"><span>Source</span><strong>{{ selected.get_state_source_display }}</strong></div>
+          <div class="fact"><span>Device link</span><strong>{% if selected.device_connected and selected.data_valid %}Connected{% else %}Disconnected{% endif %}</strong></div>
+          <div class="fact"><span>Session</span><strong>{{ selected.simulation_session_id|default:"—" }}</strong></div>
           <div class="fact"><span>Last seen</span><strong>{{ selected.last_seen_at|date:"Y-m-d H:i:s" }} UTC</strong></div>
         </div>
         {% if selected.manual_override_at %}<p class="muted">Override {{ selected.manual_override_at|date:"Y-m-d H:i:s" }} UTC · {{ selected.manual_override_by }}</p>{% endif %}
@@ -273,7 +276,7 @@
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
     const hit = points.find(item => Math.hypot(item.x - x, item.y - y) <= 18);
-    if (hit) window.location.href = `?{% if terminal_id %}terminal_id={{ terminal_id }}&{% endif %}equipment=${hit.id}`;
+    if (hit) window.location.href = `?{% if site_id %}site_id={{ site_id }}&{% endif %}equipment=${hit.id}`;
   });
   window.addEventListener("resize", resize);
   resize();

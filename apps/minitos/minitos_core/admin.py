@@ -4,13 +4,14 @@ from .models import (
     AccessPolicy, Battery, BerthSegment, BusinessProcess,
     BusinessProcessExecution, CarrierService, CarrierVisit, Che, CheComponent,
     CheOperatingScope, ComponentType, ContainerOwner, ContainerUnit,
-    ContainerVisit, CurrentSignalValue, EnergyTank, Engine, EquipmentType,
+    ContainerVisit, CurrentSignalValue, EnergyTank, Engine, Enterprise, EquipmentType,
     EquipmentTypeComponent, HandlingCycle, IntegrationInbox, IntegrationOutbox,
     InterfacePosition, ISOType,
     LayoutAsset, LayoutPreset, LayoutVersion, LinearAxis, LinearMarker, Location,
     MotionAxis, OperationalPosition, OperationalStateInterval, Order, OrderLeg,
     OrderLegRouteEdge, OrderRoutePlan, Pile, POD, PointOfWork, Position,
-    ProcessHierarchy, ProcessVersion, RouteEdge, RouteEdgeRequirement, RouteNode,
+    ProcessHierarchy, ProcessVersion, RouteEdge, RouteEdgeRequirement, RouteNode, Site,
+    SiteConfigurationSnapshot,
     SignalBinding, SignalDefinition, Spreader, StorageGrid, TransferInterface,
     WorkQueue,
 )
@@ -20,6 +21,9 @@ admin.site.register(ContainerOwner)
 admin.site.register(ContainerUnit)
 admin.site.register(ContainerVisit)
 admin.site.register(Location)
+admin.site.register(Enterprise)
+admin.site.register(Site)
+admin.site.register(SiteConfigurationSnapshot)
 admin.site.register(LayoutVersion)
 admin.site.register(LayoutAsset)
 admin.site.register(StorageGrid)

@@ -16,6 +16,7 @@ from .layout import (
 )
 from .vessel_schedules import generate_service_visits, service_occurrence_dates, service_window
 from .terminal_access import accessible_terminals, terminal_capabilities
+from .site_sync import create_site, ensure_site_for_location, publish_site_configuration
 from .routing import plan_order_route
 from .order_execution import (
     EXECUTION_EVENTS,
@@ -57,4 +58,7 @@ __all__ = [
     'sync_yard_grid',
     'transition_operational_state',
     'validate_layout',
+    'ensure_site_for_location',
+    'create_site',
+    'publish_site_configuration',
 ]

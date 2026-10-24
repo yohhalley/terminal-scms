@@ -86,11 +86,21 @@ REST_FRAMEWORK = {
 }
 
 OES_API_TOKEN = os.getenv("OES_API_TOKEN", "")
+SIMULATOR_RUNNER_TOKEN = os.getenv("SIMULATOR_RUNNER_TOKEN", "")
+SIMULATOR_OES_URL = os.getenv("SIMULATOR_OES_URL", "http://terminal-oes:8000")
+SIMULATION_BOOTSTRAP_TOKEN_TTL_SECONDS = int(
+    os.getenv("SIMULATION_BOOTSTRAP_TOKEN_TTL_SECONDS", "300")
+)
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "terminal-oes")
 MQTT_TLS = env_bool("MQTT_TLS", False)
-UNS_ROOT = os.getenv("UNS_ROOT", "scms/v1").strip("/")
+SPARKPLUG_HOST_ID = os.getenv("SPARKPLUG_HOST_ID", "TERMINAL-OES")
+SITE_UNS_ROOT = os.getenv("SITE_UNS_ROOT", "scms/v2").strip("/")
+MINITOS_URL = os.getenv("MINITOS_URL", "http://localhost:8000")
+MINITOS_OES_TOKEN = os.getenv("MINITOS_OES_TOKEN", OES_API_TOKEN)
+MINITOS_HTTP_TIMEOUT_SECONDS = float(os.getenv("MINITOS_HTTP_TIMEOUT_SECONDS", "10"))
 EQUIPMENT_STALE_SECONDS = int(os.getenv("EQUIPMENT_STALE_SECONDS", "60"))
+EQUIPMENT_COMMAND_TTL_SECONDS = int(os.getenv("EQUIPMENT_COMMAND_TTL_SECONDS", "30"))

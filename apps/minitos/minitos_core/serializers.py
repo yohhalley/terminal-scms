@@ -9,12 +9,13 @@ from .models import (
     BusinessProcessExecution, CarrierService, CarrierServiceEquipmentRequirement,
     CarrierVisit, CarrierVisitEquipmentRequirement, Che, CheComponent,
     CheOperatingScope, ComponentType, ContainerOwner, ContainerUnit,
-    ContainerVisit, CurrentSignalValue, EnergyTank, Engine, EquipmentType,
+    ContainerVisit, CurrentSignalValue, EnergyTank, Engine, Enterprise, EquipmentType,
     EquipmentTypeComponent, HandlingCycle, InterfacePosition, ISOType, LayoutAsset,
     LayoutPreset, LayoutVersion, LinearAxis, LinearMarker, Location, MotionAxis,
     OperationalPosition, OperationalStateInterval, Order, OrderLeg,
     OrderLegRouteEdge, OrderRoutePlan, Pile, PileBooking, PointOfWork, Position,
-    ProcessHierarchy, ProcessVersion, RouteEdge, RouteEdgeRequirement, RouteNode,
+    ProcessHierarchy, ProcessVersion, RouteEdge, RouteEdgeRequirement, RouteNode, Site,
+    SiteConfigurationSnapshot,
     ServiceCargoRoute, SignalBinding, SignalDefinition, Spreader, StorageGrid,
     TransferInterface, VisitCargoRoute, WorkQueue,
 )
@@ -1973,6 +1974,7 @@ class LocationSerializer(serializers.ModelSerializer):
     current_layout = serializers.SerializerMethodField()
     timezone_utc_offset_minutes = serializers.SerializerMethodField()
     local_datetime = serializers.SerializerMethodField()
+    site = serializers.SerializerMethodField()
 
     def _local_now(self, obj):
         return django_timezone.now().astimezone(ZoneInfo(obj.timezone or 'UTC'))
@@ -1987,6 +1989,20 @@ class LocationSerializer(serializers.ModelSerializer):
         layout = obj.layout_versions.filter(is_current=True).first()
         return LayoutVersionSerializer(layout).data if layout else None
 
+    def get_site(self, obj):
+        try:
+            site = obj.site
+        except Site.DoesNotExist:
+            return None
+        return {
+            'id': str(site.pk),
+            'enterprise': str(site.enterprise_id),
+            'code': site.code,
+            'lifecycle_status': site.lifecycle_status,
+            'configuration_revision': site.configuration_revision,
+            'simulation_enabled': site.simulation_enabled,
+        }
+
     class Meta:
         model = Location
         fields = [
@@ -1994,5 +2010,63 @@ class LocationSerializer(serializers.ModelSerializer):
             'latitude', 'longitude', 'map_origin_latitude', 'map_origin_longitude',
             'map_width_m', 'map_height_m', 'map_units_per_meter',
             'default_zoom', 'angle', 'timezone', 'timezone_utc_offset_minutes', 'local_datetime',
-            'ches', 'layout_versions', 'current_layout'
+            'ches', 'layout_versions', 'current_layout', 'site'
         ]
+
+
+class EnterpriseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Enterprise
+        fields = [
+            'id', 'code', 'name', 'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_code(self, value):
+        if self.instance and value != self.instance.code:
+            raise serializers.ValidationError('Enterprise codes are immutable.')
+        return value
+
+
+class SiteSerializer(serializers.ModelSerializer):
+    location_details = LocationSerializer(source='location', read_only=True)
+    enterprise_code = serializers.CharField(source='enterprise.code', read_only=True)
+    enterprise_name = serializers.CharField(source='enterprise.name', read_only=True)
+
+    class Meta:
+        model = Site
+        fields = [
+            'id', 'enterprise', 'enterprise_code', 'enterprise_name', 'location',
+            'location_details', 'code', 'lifecycle_status',
+            'configuration_revision', 'simulation_enabled', 'published_at',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'lifecycle_status', 'configuration_revision', 'published_at',
+            'created_at', 'updated_at',
+        ]
+
+    def validate_code(self, value):
+        if self.instance and value != self.instance.code:
+            raise serializers.ValidationError('Site codes are immutable.')
+        return value
+
+    def validate_location(self, value):
+        if value.location_type not in {Location.TL, Location.ID}:
+            raise serializers.ValidationError(
+                'A Site requires a terminal or inland-depot Location.'
+            )
+        return value
+
+
+class SiteConfigurationSnapshotSerializer(serializers.ModelSerializer):
+    site = serializers.UUIDField(source='site_id', read_only=True)
+    layout_version = serializers.IntegerField(source='layout_version_id', read_only=True)
+
+    class Meta:
+        model = SiteConfigurationSnapshot
+        fields = [
+            'site', 'revision', 'layout_version', 'schema', 'checksum',
+            'payload', 'created_at',
+        ]
+        read_only_fields = fields

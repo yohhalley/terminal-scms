@@ -2,19 +2,28 @@
 
 The broker transports state and events. PostgreSQL remains the durable source of truth for MiniTOS and Terminal OES.
 
-## Topic root
+## Topic roots
 
-All business topics use `scms/v1/{terminal_code}`. Topic names identify ownership:
+All current business topics use the multi-Site namespace
+`scms/v2/{enterprise_code}/{site_code}`. The version changes because the topic
+scope and identity contract are different, not because the product is declaring
+an MVP release. MiniTOS retains an opt-in dual-publish flag for short migrations,
+but OES consumes only v2.
 
 | Producer | Topic | Schema |
 | --- | --- | --- |
 | MiniTOS | `.../tos/orders/{order_id}/released` | `scms.order.released.v1` |
-| Simulator | `.../simulator/che/{che_id}/state` | `scms.equipment.state.v1` |
-| OES | `.../oes/che/{che_id}/command` | `scms.equipment.command.v1` |
-| Simulator | `.../simulator/commands/{command_id}/result` | `scms.command.result.v1` |
 | OES | `.../oes/orders/{order_id}/execution` | `scms.execution.event.v1` |
+| MiniTOS | `scms/v2/.../tos/site/created` | `scms.site.created.v1` |
+| MiniTOS | `scms/v2/.../tos/configuration/published` | `scms.site.configuration.published.v1` |
 
-Messages use QoS 1 and an `event_id` or `command_id` UUID. Consumers must be idempotent because QoS 1 permits duplicate delivery. Business events and commands are not retained. The current JSON equipment-state projection is retained so OES can recover the latest observation after reconnecting; source timestamps prevent an older retained state from replacing a newer projection.
+Messages use QoS 1 and an `event_id` UUID. Consumers must be idempotent because
+QoS 1 permits duplicate delivery. Business events are not retained.
+
+The Site-created event creates a draft OES projection. A configuration-published
+event carries the MiniTOS snapshot path, Site revision, schema, and SHA-256
+checksum. OES retrieves that immutable document using `X-OES-Token`, verifies
+its identity and checksum, and only then sets the projection to `ready`.
 
 ## Released order
 
@@ -23,6 +32,8 @@ Messages use QoS 1 and an `event_id` or `command_id` UUID. Consumers must be ide
   "schema": "scms.order.released.v1",
   "event_id": "5cf69c7c-4ee0-4a03-a21e-803dfb2d693b",
   "occurred_at": "2026-10-12T10:00:00Z",
+  "enterprise": {"id": "...", "code": "terminal-velocity"},
+  "site": {"id": "...", "code": "test-terminal", "source_location_id": 1},
   "terminal": {"id": 1, "code": "TEST"},
   "data": {
     "order": {
@@ -54,13 +65,43 @@ Messages use QoS 1 and an `event_id` or `command_id` UUID. Consumers must be ide
 }
 ```
 
-## Telemetry boundary
+## Sparkplug runtime boundary
 
-Sparkplug B remains the preferred CHE telemetry contract (`NBIRTH`, `DBIRTH`, `DDATA`, `DDEATH`, `NDEATH`). The JSON equipment-state topic is the normalized operational projection consumed by the OES. A bridge may produce it from Sparkplug metrics until the OES has a production-grade Tahu decoder.
+OES is the Sparkplug Host Application. It publishes retained `ONLINE`/`OFFLINE`
+state at `spBv1.0/STATE/{host_id}`, consumes the Godot Edge Node lifecycle, and
+publishes device commands:
+
+| Direction | Topic form | Purpose |
+| --- | --- | --- |
+| Godot to OES | `spBv1.0/{group}/NBIRTH/{node}` | Session, Site, revision, checksum, and `bdSeq` identity |
+| Godot to OES | `spBv1.0/{group}/DBIRTH/{node}/{device}` | Register every participating CHE, including powered-off CHE |
+| Godot to OES | `spBv1.0/{group}/DDATA/{node}/{device}` | Independent state facts, GPS, heading, energy, motion, and command results |
+| Godot to OES | `spBv1.0/{group}/DDEATH/{node}/{device}` | Device is inaccessible to the Edge Node |
+| Godot to OES | `spBv1.0/{group}/NDEATH/{node}` | Edge Node death certificate or graceful shutdown |
+| OES to Godot | `spBv1.0/{group}/DCMD/{node}/{device}` | Idempotent, expiring equipment command |
+| OES to Godot | `spBv1.0/{group}/NCMD/{node}` | Node controls such as rebirth |
+
+NBIRTH must identify the active OES session, stable Site UUID, frozen
+configuration revision/checksum, and matching `bdSeq`. OES rejects device data
+before a valid NBIRTH. DBIRTH binds `CHE_{MiniTOS CHE ID}` only inside that
+Site/session, so overlapping local IDs at another Site cannot collide.
+
+Sparkplug 3.0 section 6.4.26 permits DDEATH after a device turns off and becomes
+inaccessible. In this simulator, however, power is an observable equipment fact:
+the CHE remains born and publishes `State/PoweredOn=false` in DDATA. DDEATH is
+reserved for lost device accessibility. OES stores physical power separately
+from `device_connected` and `data_valid` because DDEATH does not encode why the
+device disappeared.
+
+DCMD carries command, assignment, CHE, session, Site, configuration revision,
+expiry, inventory-position, and geographic destination metrics. Godot records
+the command ID before starting motion. Duplicate delivery replays the original
+result ID and never creates a second physical action. A session-specific runtime
+file preserves active commands and recent CHE state across process restart.
 
 Order release and execution lifecycle events are business messages and intentionally do not pretend to be Sparkplug device telemetry.
 
-The normalized equipment state includes the independent power, work,
+The OES equipment projection includes the independent power, work,
 availability, dispatch and maintenance facts, true-north heading, geographic
 position, speed, fuel/energy percentage, source timestamp and raw payload. OES
 stores the latest observation and its freshness; Timebase will store the
@@ -74,3 +115,5 @@ high-frequency series.
 - A released snapshot is immutable. Replanning creates a replacement version.
 - Physical completion and inventory commitment are distinct acknowledgements.
 - Snapshot/reconciliation APIs repair projections; direct database access does not.
+- Site configuration revisions only move forward; stale events are acknowledged
+  idempotently and cannot replace a newer projection.

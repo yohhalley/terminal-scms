@@ -1,5 +1,6 @@
 import logging
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from execution.mqtt import connect, create_client
@@ -14,12 +15,18 @@ class Command(BaseCommand):
     help = "Consume released orders, equipment state and command results from the UNS."
 
     def handle(self, *args, **options):
-        client = create_client("consumer")
+        client = create_client("consumer", host_application=True)
 
         def on_connect(connected_client, userdata, flags, reason_code, properties):
             if reason_code.is_failure:
                 logger.error("MQTT connection failed: %s", reason_code)
                 return
+            connected_client.publish(
+                f"spBv1.0/STATE/{settings.SPARKPLUG_HOST_ID}",
+                "ONLINE",
+                qos=1,
+                retain=True,
+            )
             for topic, qos in subscriptions():
                 connected_client.subscribe(topic, qos=qos)
                 self.stdout.write(f"Subscribed: {topic}")
@@ -39,4 +46,10 @@ class Command(BaseCommand):
         except KeyboardInterrupt:
             self.stdout.write("Stopping OES MQTT consumer.")
         finally:
+            client.publish(
+                f"spBv1.0/STATE/{settings.SPARKPLUG_HOST_ID}",
+                "OFFLINE",
+                qos=1,
+                retain=True,
+            ).wait_for_publish(timeout=5)
             client.disconnect()

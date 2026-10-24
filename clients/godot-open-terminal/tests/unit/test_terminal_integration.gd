@@ -2,6 +2,7 @@ extends SceneTree
 
 const MQTTNodeClient = preload("res://source/terminal-sandbox/MQTTNodeClient.gd")
 const SparkPlugManager = preload("res://source/sparkplugB/SparkPlugMQTTManager.gd")
+const HeadlessSimulator = preload("res://source/headless/HeadlessSimulator.gd")
 const TerminalWorld3D = preload("res://source/terminal-sandbox/TerminalWorld3D.gd")
 const CheIntegrationPolicy = preload("res://source/terminal-sandbox/CheIntegrationPolicy.gd")
 const MinitosClient = preload("res://source/terminal-sandbox/MinitosClient.gd")
@@ -71,6 +72,7 @@ func _initialize():
 	_test_node_session_birth_and_death_certificate()
 	_test_mqtt_cadence()
 	_test_power_transition_contract()
+	_test_headless_command_idempotency_and_restart_recovery()
 	_test_move_order_state_contract()
 	_test_sparkplug_topics_and_payloads()
 	_test_canvas_viewport_coordinate_conversion()
@@ -106,6 +108,10 @@ func _test_mqtt_node_che_lifecycle():
 	_assert(fake.calls.size() == 3 and fake.calls[2][0] == "DDATA", "Subsequent telemetry must not repeat DBIRTH")
 	_assert(client.publish_che_death(che), "DDEATH should be accepted for a born CHE")
 	_assert(fake.calls.back()[0] == "DDEATH", "CHE death did not publish DDEATH")
+	var powered_off = {"pk": 5, "name": "SC-05", "powered_on": false}
+	client.publish_powered_devices([powered_off])
+	_assert(fake.calls[-2][0] == "DBIRTH", "A participating powered-off CHE must still be born")
+	_assert(fake.calls[-1][0] == "DDATA", "A powered-off CHE must report PoweredOn=false as data")
 	_assert(client._format_broker_url("broker.example", 8883, "") == "ssl://broker.example:8883", "Port 8883 must default to TLS")
 	client.free()
 	fake.free()
@@ -127,6 +133,10 @@ func _test_sparkplug_topics_and_payloads():
 	_assert(mqtt.packets[2][0] == "spBv1.0/GROUP/DDEATH/NODE/CHE_4", "DDEATH topic is invalid")
 	for packet in mqtt.packets:
 		_assert((packet[1] as PackedByteArray).size() > 0, "Sparkplug payload must not be empty")
+	var decoded = SparkPlugManager.decode_payload(mqtt.packets[0][1])
+	var metrics = SparkPlugManager.metrics_by_name(decoded)
+	_assert(decoded.get("seq") == 0, "First Sparkplug payload must use sequence zero")
+	_assert(metrics.get("State/PoweredOn") == true, "Sparkplug decoder must preserve Boolean metrics")
 	manager.free()
 	mqtt.free()
 
@@ -141,6 +151,9 @@ func _test_node_session_birth_and_death_certificate():
 	manager.node_id = "NODE"
 	manager.broker_url = "ssl://broker.example:8883"
 	manager.birth_death_sequence = 7
+	manager.set_node_birth_metrics([
+		{"name": "Session/Id", "type": "String", "value": "session-1"},
+	])
 	manager.connect_to_broker()
 	_assert(mqtt.connected_url == manager.broker_url, "Sparkplug manager must connect to the configured broker URL")
 	_assert(mqtt.last_will.size() == 4, "Broker connection must include a death certificate")
@@ -150,6 +163,8 @@ func _test_node_session_birth_and_death_certificate():
 	manager._on_transport_connected()
 	_assert(mqtt.packets.size() == 1, "Broker connection must immediately emit NBIRTH")
 	_assert(mqtt.packets[0][0] == "spBv1.0/GROUP/NBIRTH/NODE", "NBIRTH topic is invalid")
+	var birth_metrics = SparkPlugManager.metrics_by_name(SparkPlugManager.decode_payload(mqtt.packets[0][1]))
+	_assert(birth_metrics.get("Session/Id") == "session-1", "NBIRTH must carry the OES session identity")
 	_assert(manager.publish_node_death(), "Intentional NDEATH should be queued before disconnect")
 	_assert(mqtt.packets[1][0] == "spBv1.0/GROUP/NDEATH/NODE", "Intentional NDEATH topic is invalid")
 	_assert(mqtt.packets[1][3] == 1, "Intentional NDEATH must use QoS 1")
@@ -166,10 +181,87 @@ func _test_mqtt_cadence():
 
 
 func _test_power_transition_contract():
-	_assert(CheIntegrationPolicy.transition_events(false, true) == ["DBIRTH", "DDATA"], "Turning a CHE on must emit DBIRTH and DDATA")
-	_assert(CheIntegrationPolicy.transition_events(true, true) == ["DDATA"], "Activity changes must emit DDATA")
-	_assert(CheIntegrationPolicy.transition_events(true, false) == ["DDEATH"], "Turning a CHE off must emit DDEATH")
+	_assert(CheIntegrationPolicy.transition_events(false, true) == ["DDATA"], "Turning a born CHE on must emit DDATA")
+	_assert(CheIntegrationPolicy.transition_events(true, true).is_empty(), "No power transition must remain silent")
+	_assert(CheIntegrationPolicy.transition_events(true, false) == ["DDATA"], "Turning a CHE off must emit PoweredOn=false as DDATA")
 	_assert(CheIntegrationPolicy.transition_events(false, false).is_empty(), "An already-off CHE must remain silent")
+
+
+func _test_headless_command_idempotency_and_restart_recovery():
+	var state_path = ProjectSettings.globalize_path("user://simulation_runtime_state.json")
+	DirAccess.remove_absolute(state_path)
+	var simulator = HeadlessSimulator.new()
+	var fake = FakeSparkplugManager.new()
+	simulator._session_id = "11111111-1111-4111-8111-111111111111"
+	simulator._site_id = "22222222-2222-4222-8222-222222222222"
+	simulator._configuration_revision = 7
+	simulator._configuration_checksum = "checksum-7"
+	simulator._mqtt._manager = fake
+	simulator._mqtt._connected = true
+	simulator._mqtt_connected = true
+	simulator._ches = {17: {
+		"pk": 17,
+		"name": "SC01",
+		"powered_on": true,
+		"working": false,
+		"is_available": true,
+		"is_dispatched": false,
+		"is_in_maintenance": false,
+		"latitude": 41.35,
+		"longitude": 2.17,
+	}}
+	var command_id = "33333333-3333-4333-8333-333333333333"
+	var metrics = {
+		"Command/Id": command_id,
+		"Command/CheId": 17,
+		"Command/SessionId": simulator._session_id,
+		"Command/SiteId": simulator._site_id,
+		"Command/ConfigurationRevision": 7,
+		"Command/ExpiresAtMs": int(Time.get_unix_time_from_system() * 1000.0) + 60000,
+		"Command/AssignmentId": "44444444-4444-4444-8444-444444444444",
+		"Command/DestinationLatitude": 41.351,
+		"Command/DestinationLongitude": 2.171,
+	}
+	simulator._on_sparkplug_command("spBv1.0/GROUP/DCMD/NODE/CHE_17", "DCMD", "CHE_17", metrics)
+	var original_call_count = fake.calls.size()
+	var result_id = str(simulator._command_outcomes[command_id].result_id)
+	_assert(simulator._active_commands.size() == 1, "A valid DCMD must create one physical action")
+	simulator._on_sparkplug_command("spBv1.0/GROUP/DCMD/NODE/CHE_17", "DCMD", "CHE_17", metrics)
+	_assert(simulator._active_commands.size() == 1, "A duplicate DCMD must not create a second physical action")
+	_assert(fake.calls.size() == original_call_count + 1, "A duplicate DCMD must only replay the recorded result")
+	_assert(str(simulator._command_outcomes[command_id].result_id) == result_id, "A duplicate DCMD must preserve the original result identity")
+	var moved_che: Dictionary = simulator._ches[17]
+	moved_che.latitude = 41.3505
+	moved_che.longitude = 2.1705
+	simulator._ches[17] = moved_che
+	simulator._save_runtime_state()
+
+	var restarted = HeadlessSimulator.new()
+	restarted._session_id = simulator._session_id
+	restarted._site_id = simulator._site_id
+	restarted._configuration_revision = simulator._configuration_revision
+	restarted._configuration_checksum = simulator._configuration_checksum
+	restarted._ches = {17: {
+		"pk": 17,
+		"name": "SC01",
+		"powered_on": true,
+		"latitude": 41.35,
+		"longitude": 2.17,
+	}}
+	restarted._load_runtime_state()
+	restarted._restore_runtime_state()
+	_assert(restarted._active_commands.size() == 1, "A same-session restart must recover the in-flight action")
+	_assert(is_equal_approx(float(restarted._ches[17].latitude), 41.3505), "A restart must recover the latest persisted CHE position")
+	_assert(restarted._command_outcomes.has(command_id), "A restart must retain the command idempotency record")
+
+	DirAccess.remove_absolute(state_path)
+	simulator._mqtt.free()
+	simulator._bootstrap.free()
+	simulator.free()
+	restarted._mqtt.free()
+	restarted._bootstrap.free()
+	restarted.free()
+	fake.free()
 
 
 func _test_move_order_state_contract():

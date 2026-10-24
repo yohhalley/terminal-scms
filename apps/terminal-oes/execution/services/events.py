@@ -17,12 +17,23 @@ def queue_execution_event(order, event, *, operation=None, equipment=None, extra
     if extra:
         data.update(extra)
     return OutboxEvent.objects.create(
-        topic=execution_event_topic(order.terminal_code, order.tos_order_id),
+        topic=execution_event_topic(order.site, order.tos_order_id),
         schema="scms.execution.event.v1",
         payload={
             "schema": "scms.execution.event.v1",
             "event_id": None,
-            "terminal": {"id": order.terminal_id, "code": order.terminal_code},
+            "enterprise": {
+                "id": str(order.site.enterprise.source_id),
+                "code": order.site.enterprise.code,
+                "name": order.site.enterprise.name,
+            },
+            "site": {
+                "id": str(order.site.source_id),
+                "code": order.site.code,
+                "name": order.site.name,
+                "source_location_id": order.site.source_location_id,
+                "configuration_revision": order.site.source_revision,
+            },
             "data": data,
         },
         qos=1,
@@ -33,4 +44,3 @@ def finalize_outbox_event(event):
     event.payload["event_id"] = str(event.event_id)
     event.save(update_fields=["payload"])
     return event
-

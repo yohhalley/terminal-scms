@@ -13,9 +13,9 @@ The Docker/Linux simulator starts at:
 `res://source/headless/HeadlessSimulator.tscn`
 
 The headless scene has no HUD, viewport, camera, or rendered terminal assets. It
-loads terminal/CHE configuration from MiniTOS, subscribes to OES commands,
-simulates geographic movement, and publishes Sparkplug telemetry plus JSON
-command results.
+retrieves a frozen Site projection from OES, subscribes to Sparkplug NCMD/DCMD,
+simulates geographic movement, and publishes Sparkplug telemetry and command
+results. It has no MiniTOS credentials or direct MiniTOS API path.
 
 The sandbox flow is intentionally smaller than the previous RTS-style game:
 
@@ -57,9 +57,15 @@ The broker check uses `res://source/terminal-sandbox/MQTTNodeClient.gd` and `res
 - `mqtt.gd` owns only MQTT 3.1.1 transport, sockets, subscriptions, and acknowledgements.
 - `SparkPlugMQTTManager.gd` owns the edge-node session, topics, protobuf payloads, sequence numbers, NBIRTH, and NDEATH.
 - `MQTTNodeClient.gd` owns CHE registration and the DBIRTH/DDATA/DDEATH lifecycle.
-- Versioned JSON topics carry OES commands, normalized equipment state, and command results.
+- OES commands and command results use Sparkplug DCMD and DDATA metrics.
 
-On connect, the manager publishes `NBIRTH`. It also sets an `NDEATH` last will before connecting and publishes `NDEATH` during explicit disconnects. Topics use the Sparkplug B form `spBv1.0/{group_id}/{message_type}/{edge_node_id}` and `spBv1.0/{group_id}/{message_type}/{edge_node_id}/{device_id}`.
+On connect, the manager publishes `NBIRTH`. It also sets an `NDEATH` last will
+before connecting and publishes `NDEATH` during explicit disconnects. Every Site
+CHE receives DBIRTH, including powered-off equipment. Power-off is DDATA with
+`State/PoweredOn=false`; DDEATH means that a device is no longer accessible.
+Topics use the Sparkplug B form
+`spBv1.0/{group_id}/{message_type}/{edge_node_id}` and
+`spBv1.0/{group_id}/{message_type}/{edge_node_id}/{device_id}`.
 
 Default broker fields:
 
@@ -68,10 +74,11 @@ Default broker fields:
 
 ## Headless environment
 
-The Linux runtime reads `MINITOS_URL`, `MINITOS_USERNAME`,
-`MINITOS_PASSWORD`, `SIMULATOR_LOCATION_ID`, `SIMULATOR_TERMINAL_CODE`,
-`MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `UNS_ROOT`,
-`SPARKPLUG_GROUP_ID`, and `SPARKPLUG_NODE_ID`.
+The Linux runtime reads `OES_URL`, `SIMULATOR_SITE_ID`,
+`SIMULATOR_SESSION_ID`, `SIMULATOR_TOKEN`, `SIMULATOR_CONFIG_REVISION`,
+`SIMULATOR_CONFIG_CHECKSUM`, `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, and
+`MQTT_PASSWORD`. The restricted runner supplies these values from an OES claim;
+operators do not configure a global Site in the Compose service.
 
 Run it locally without Docker:
 
@@ -81,6 +88,9 @@ godot --headless --path . res://source/headless/HeadlessSimulator.tscn
 
 The headless simulator publishes working CHE every two seconds and idle CHE
 every twenty seconds. Commands complete within a 0.5-meter target radius.
+Its session-specific `user://simulation_runtime_state.json` records command IDs,
+in-flight actions, and recent CHE positions so a restart resumes the same
+configuration revision without duplicating an action.
 
 The headless simulator intentionally uses a simple straight-line motion model.
 Road-graph path execution, crane-specific actions, collision handling and

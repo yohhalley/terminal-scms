@@ -39,14 +39,14 @@ Edit `.env` before starting. At minimum replace all placeholder secrets and set:
 MINITOS_ALLOWED_HOSTS=localhost,127.0.0.1,minitos,192.168.1.8
 OES_ALLOWED_HOSTS=localhost,127.0.0.1,terminal-oes,192.168.1.8
 GODOT_PLATFORM=linux/amd64
-SIMULATOR_LOCATION_ID=1
-SIMULATOR_TERMINAL_CODE=terminal-1
-SIMULATOR_MINITOS_USERNAME=simulator
-SIMULATOR_MINITOS_PASSWORD=<strong-local-password>
+SIMULATOR_RUNNER_TOKEN=<strong-runner-token>
+SIMULATOR_OES_URL=http://terminal-oes:8000
+RUNNER_IDENTITY=linux-server-01
 ```
 
-The terminal code must match MiniTOS's current `terminal-{location_id}` event
-mapping. The first headless image build downloads the Godot 4.2.1 Linux binary.
+The first headless image build downloads the Godot 4.2.1 Linux binary. There is
+no global terminal ID or MiniTOS simulator account: OES supplies the selected
+Site UUID and a short-lived session token for each on-demand process.
 
 ## 3. Start data and application services
 
@@ -65,30 +65,28 @@ docker compose exec minitos python manage.py createsuperuser
 docker compose exec terminal-oes python manage.py createsuperuser
 ```
 
-MiniTOS automatically creates or reconciles the non-staff simulator account
-from `SIMULATOR_MINITOS_USERNAME` and `SIMULATOR_MINITOS_PASSWORD` before its
-web process becomes healthy. The password in `.env` is authoritative and is
-reapplied after a change or container restart. It can also be reconciled
-manually after editing `.env`:
+Create a terminal or inland-depot Location and its Site in MiniTOS. Publish a
+valid layout after defining routing and CHE configuration. The Site-created and
+configuration-published events make the corresponding OES projection ready.
+Verify it at `http://192.168.1.8:8010/simulations/`.
+
+## 4. Build Godot and start the restricted runner
 
 ```bash
-docker compose up --build --detach --force-recreate --wait minitos
-make bootstrap-simulator-user
+make build-simulator
+make test-runner
+make run-simulator-runner
 ```
 
-The headless simulator uses Django Basic Authentication only for reading
-terminal configuration; it sends execution state through MQTT.
+Run the last command as a supervised host service for unattended use. The
+runner accepts only OES-created session identities, a fixed image, and an
+environment allowlist. OES never receives the Docker socket.
 
-## 4. Start Godot
-
-```bash
-docker compose up --build --detach godot-simulator
-docker compose logs --follow --tail=200 godot-simulator
-```
-
-A healthy startup reports MiniTOS authentication, loaded CHE records, Sparkplug
-NBIRTH and the OES command subscription. The process retries MiniTOS and MQTT
-connections every five seconds after an outage.
+Start a ready Site from the OES simulation console. A healthy session moves
+from pending to running after Godot retrieves its frozen OES bootstrap,
+connects to HiveMQ, publishes NBIRTH and the expected CHE DBIRTH messages, and
+subscribes to NCMD/DCMD. Other Sites remain inactive. Stopping the session
+terminates only that Site's Godot process.
 
 ## 5. Access from the development computer
 
@@ -105,7 +103,8 @@ the local subnet. Do not forward these ports from the internet.
 ```bash
 docker compose ps
 docker compose logs --follow --tail=200
-docker compose restart godot-simulator
+make test-runner
+make build-simulator
 docker compose pull --ignore-buildable
 git pull --ff-only
 docker compose up --build --detach --wait
@@ -172,9 +171,11 @@ sudo docker compose up --detach --wait
 Do not remove the named volumes as a general troubleshooting step. They contain
 broker and database state and are not required to be deleted to collect logs.
 
-Named volumes retain both PostgreSQL databases, HiveMQ data and the Godot
-Sparkplug birth/death sequence. Back up the database volumes before migrations
-or host replacement.
+Named volumes retain both PostgreSQL databases and HiveMQ data. Each claimed
+simulation also receives a session-specific Docker volume containing its
+Sparkplug birth/death sequence and command recovery state. Back up database
+volumes before migrations or host replacement. Remove a stopped session volume
+only after its restart and audit value is no longer needed.
 
 ## Current limitation
 

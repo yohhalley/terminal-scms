@@ -3,17 +3,24 @@
 The terminal editor uses composition instead of one Django table per visual
 asset subtype:
 
-1. `Location` owns versioned layouts through `LayoutVersion`.
-2. `LayoutAsset` stores the shared identity, hierarchy, WGS-84 geometry,
+1. `Enterprise` owns stable execution `Site` identities.
+2. Each terminal or inland-depot `Site` references one geographic `Location`.
+3. `Location` owns versioned layouts through `LayoutVersion`.
+4. `LayoutAsset` stores the shared identity, hierarchy, WGS-84 geometry,
    heading, visibility, and lifecycle for every civil-infrastructure object.
-3. `StorageGrid` adds yard-specific bay, row, tier, and slot behavior.
-4. `LinearAxis` adds ordered movement geometry such as gate lanes, rail tracks,
+5. `StorageGrid` adds yard-specific bay, row, tier, and slot behavior.
+6. `LinearAxis` adds ordered movement geometry such as gate lanes, rail tracks,
    roads, crane rails, transfer lanes, and quay faces.
-5. `LinearMarker` adds positions along an axis, including bollards and travel
+7. `LinearMarker` adds positions along an axis, including bollards and travel
    limits.
-6. `BerthSegment` adds quay-specific water-side and bollard-direction rules.
-7. `TransferInterface`, `RouteNode`, and `RouteEdge` turn the physical layout
+8. `BerthSegment` adds quay-specific water-side and bollard-direction rules.
+9. `TransferInterface`, `RouteNode`, and `RouteEdge` turn the physical layout
    into a routing graph.
+
+Publishing a valid layout freezes the complete layout, route graph, and CHE
+master definition in a checksummed `SiteConfigurationSnapshot`. OES consumes
+that immutable revision; it does not query MiniTOS layout tables or duplicate
+their schema.
 
 Yard transfer-side choices are stored in `LayoutAsset.metadata.editor_transfers`.
 The editor materializes each enabled side as a `TransferInterface`, records the

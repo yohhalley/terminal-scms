@@ -1,11 +1,11 @@
 # Django test coverage audit
 
-Audit date: 2026-10-12
+Audit date: 2026-10-19
 
-The discovered Django suite contains 120 tests, plus 51 focused terminal-editor
+The discovered Django suite contains 128 tests, plus 51 focused terminal-editor
 interaction tests executed with Node's built-in test runner:
 
-- `minitos_core/tests.py`: 33
+- `minitos_core/tests.py`: 35
 - `minitos_core/test_yard_grid.py`: 13
 - `minitos_core/test_berth_planning.py`: 7
 - `minitos_core/test_model_api_regressions.py`: 10
@@ -18,7 +18,8 @@ interaction tests executed with Node's built-in test runner:
 - `minitos_core/test_transfer_lanes.py`: 16
 - `minitos_core/test_che_rails.py`: 15
 - `minitos_core/test_order_routing.py`: 1
-- `minitos_core/test_order_execution.py`: 7
+- `minitos_core/test_order_execution.py`: 8
+- `minitos_core/test_sites.py`: 5
 
 The JavaScript interaction suite is
 `minitos_core/static/terminal_editor_map_tools.test.js`. It covers unrestricted
@@ -157,6 +158,14 @@ Substantive automated coverage exists for:
   and duplicate OES execution events are ignored by the MQTT integration inbox.
 - Migrations: CHE component data migration and the legacy-layout retirement to
   versioned assets/routing, including preservation of terminals and CHE.
+- Enterprise/Site identity: terminal-editor creation, default Enterprise,
+  terminal-only validation, immutable Site codes, transactional Site-created
+  outbox events, checksummed configuration snapshots, revision history, and
+  authenticated OES snapshot retrieval.
+- Multi-Site release contracts: v2 Enterprise/Site topic identity is the
+  default; opt-in legacy dual publication reuses the same event ID. The removed
+  MiniTOS simulator account tests reflect that headless Godot now bootstraps only
+  from OES with a session-scoped token.
 
 Models without substantive automated behavior coverage:
 
@@ -171,7 +180,8 @@ Covered endpoint families include containers, locations, storage grids and
 nested piles/positions, layout assets, access policies, linear axes, berth
 segments, transfer interfaces, route nodes/edges, CHE and component telemetry,
 carrier services/visits, business processes, terminal browser/layout/CHE editor
-pages, and nested orders/order legs.
+pages, Enterprise/Site identity and snapshot retrieval, and nested orders/order
+legs.
 
 Not yet directly covered:
 

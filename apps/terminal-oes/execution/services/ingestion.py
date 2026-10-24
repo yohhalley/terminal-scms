@@ -6,7 +6,9 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from execution.models import EquipmentState, ExecutionOperation, ExecutionOrder, InboxEvent
+from execution.models import (
+    ExecutionOperation, ExecutionOrder, InboxEvent, SiteProjection,
+)
 
 
 def _timestamp(value, *, required=False):
@@ -40,6 +42,27 @@ def _terminal(payload):
         raise ValidationError("The event envelope requires terminal.id and terminal.code.") from exc
 
 
+def _site(payload):
+    site_payload = payload.get("site") or {}
+    source_id = site_payload.get("id")
+    if source_id:
+        try:
+            return SiteProjection.objects.get(source_id=uuid.UUID(str(source_id)))
+        except (TypeError, ValueError, SiteProjection.DoesNotExist) as exc:
+            raise ValidationError("The event references an unknown Site UUID.") from exc
+
+    terminal_id, terminal_code = _terminal(payload)
+    candidates = SiteProjection.objects.filter(source_location_id=terminal_id)
+    exact = candidates.filter(code=terminal_code).first()
+    if exact:
+        return exact
+    if candidates.count() == 1:
+        return candidates.first()
+    raise ValidationError(
+        "A legacy terminal envelope cannot be resolved to exactly one Site projection."
+    )
+
+
 def _record_failure(event_id, topic, payload, exc):
     InboxEvent.objects.update_or_create(
         event_id=event_id,
@@ -59,11 +82,11 @@ def ingest_released_order(topic, payload):
     existing = InboxEvent.objects.filter(event_id=event_id, status=InboxEvent.PROCESSED).first()
     if existing:
         order_id = (existing.payload.get("data") or {}).get("order", {}).get("id")
-        return ExecutionOrder.objects.get(tos_order_id=order_id)
+        return ExecutionOrder.objects.get(site=_site(existing.payload), tos_order_id=order_id)
 
     try:
         with transaction.atomic():
-            terminal_id, terminal_code = _terminal(payload)
+            site = _site(payload)
             data = payload.get("data") or {}
             source_order = data.get("order") or {}
             legs = data.get("legs") or []
@@ -76,19 +99,16 @@ def ingest_released_order(topic, payload):
 
             order_id = int(source_order["id"])
             order, created = ExecutionOrder.objects.select_for_update().get_or_create(
+                site=site,
                 tos_order_id=order_id,
                 defaults={
-                    "terminal_id": terminal_id,
-                    "terminal_code": terminal_code,
                     "released_at": _timestamp(source_order.get("released_at"), required=True),
                 },
             )
-            if not created and order.terminal_id != terminal_id:
-                raise ValidationError("The TOS order is already owned by another terminal.")
             if order.status not in {ExecutionOrder.RELEASED, ExecutionOrder.PLANNED}:
                 return order
 
-            order.terminal_code = terminal_code
+            order.site = site
             order.status = ExecutionOrder.RELEASED
             order.priority = int(source_order.get("priority", 100))
             order.container_visit_id = source_order.get("container_number")
@@ -144,57 +164,3 @@ def ingest_released_order(topic, payload):
     except Exception as exc:
         _record_failure(event_id, topic, payload, exc)
         raise
-
-
-@transaction.atomic
-def ingest_equipment_state(topic, payload):
-    if payload.get("schema") != "scms.equipment.state.v1":
-        raise ValidationError("Unsupported equipment-state schema.")
-    terminal_id, terminal_code = _terminal(payload)
-    data = payload.get("data") or {}
-    try:
-        che_id = int(data["che_id"])
-        name = str(data["name"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValidationError("Equipment state requires data.che_id and data.name.") from exc
-    source_timestamp = _timestamp(data.get("timestamp") or payload.get("occurred_at"))
-    existing = EquipmentState.objects.filter(
-        terminal_id=terminal_id,
-        tos_che_id=che_id,
-    ).first()
-    if (
-        existing
-        and existing.source_timestamp
-        and source_timestamp
-        and source_timestamp < existing.source_timestamp
-    ):
-        return existing
-    energy_level = data.get("energy_level")
-    if energy_level is None:
-        energy_level = data.get("battery_level", data.get("state_of_charge"))
-    equipment, _ = EquipmentState.objects.update_or_create(
-        terminal_id=terminal_id,
-        tos_che_id=che_id,
-        defaults={
-            "terminal_code": terminal_code,
-            "name": name,
-            "equipment_type_id": data.get("equipment_type_id"),
-            "equipment_type_code": data.get("equipment_type_code", ""),
-            "powered_on": bool(data.get("powered_on", False)),
-            "working": bool(data.get("working", False)),
-            "is_available": bool(data.get("is_available", False)),
-            "is_dispatched": bool(data.get("is_dispatched", False)),
-            "is_in_maintenance": bool(data.get("is_in_maintenance", False)),
-            "latitude": data.get("latitude"),
-            "longitude": data.get("longitude"),
-            "rotation": float(data.get("rotation", 0.0)),
-            "fuel_level": data.get("fuel_level"),
-            "energy_level": energy_level,
-            "speed_mps": data.get("speed_mps"),
-            "state_source": EquipmentState.SIMULATOR,
-            "source_timestamp": source_timestamp,
-            "last_seen_at": timezone.now(),
-            "raw_state": data,
-        },
-    )
-    return equipment

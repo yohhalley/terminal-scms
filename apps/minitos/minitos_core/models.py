@@ -225,6 +225,22 @@ class ContainerVisit(models.Model):
 
 
 ###################################
+class Enterprise(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.SlugField(max_length=80, unique=True)
+    name = models.CharField(max_length=120)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+###################################
 class Location(models.Model):
     NA = 'NA'
     TL = 'TL'
@@ -274,6 +290,52 @@ class Location(models.Model):
 
 
 ###################################
+class Site(models.Model):
+    DRAFT = 'draft'
+    PUBLISHED = 'published'
+    ARCHIVED = 'archived'
+    STATUS_CHOICES = [
+        (DRAFT, 'Draft'),
+        (PUBLISHED, 'Published'),
+        (ARCHIVED, 'Archived'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    enterprise = models.ForeignKey(
+        Enterprise, related_name='sites', on_delete=models.RESTRICT,
+    )
+    location = models.OneToOneField(
+        Location, related_name='site', on_delete=models.RESTRICT,
+    )
+    code = models.SlugField(max_length=80)
+    lifecycle_status = models.CharField(
+        max_length=12, choices=STATUS_CHOICES, default=DRAFT,
+    )
+    configuration_revision = models.PositiveIntegerField(default=0)
+    simulation_enabled = models.BooleanField(default=True)
+    published_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['enterprise__name', 'location__name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['enterprise', 'code'], name='unique_site_code_per_enterprise',
+            ),
+        ]
+
+    def clean(self):
+        if self.location_id and self.location.location_type not in {Location.TL, Location.ID}:
+            raise ValidationError({
+                'location': 'A Site must reference a terminal or inland-depot Location.'
+            })
+
+    def __str__(self):
+        return f'{self.enterprise.code}/{self.code}'
+
+
+###################################
 class LayoutVersion(models.Model):
     DRAFT = 'draft'
     PUBLISHED = 'published'
@@ -318,6 +380,31 @@ class LayoutVersion(models.Model):
 
     def __str__(self):
         return f'{self.location.name} layout v{self.version}'
+
+
+class SiteConfigurationSnapshot(models.Model):
+    site = models.ForeignKey(
+        Site, related_name='configuration_snapshots', on_delete=models.CASCADE,
+    )
+    revision = models.PositiveIntegerField()
+    layout_version = models.ForeignKey(
+        LayoutVersion, related_name='site_configuration_snapshots', on_delete=models.RESTRICT,
+    )
+    schema = models.CharField(max_length=100, default='scms.site.execution-snapshot.v1')
+    checksum = models.CharField(max_length=64)
+    payload = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['site_id', '-revision']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['site', 'revision'], name='unique_site_configuration_revision',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.site} configuration r{self.revision}'
 
 
 class LayoutAsset(models.Model):

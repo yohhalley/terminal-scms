@@ -16,10 +16,13 @@ x-minitos: &minitos
     DB_PORT: "5432"
     USE_WHITENOISE: "True"
     MES_API_TOKEN: ${MES_API_TOKEN:-local-mes-token}
+    OES_API_TOKEN: ${OES_API_TOKEN:-local-oes-token}
     MQTT_HOST: hivemq
     MQTT_PORT: "1883"
     MQTT_CLIENT_ID: minitos
     UNS_ROOT: scms/v1
+    SITE_UNS_ROOT: scms/v2
+    UNS_DUAL_PUBLISH_LEGACY: "False"
     RUN_MIGRATIONS: "True"
   depends_on:
     minitos-db:
@@ -36,11 +39,18 @@ x-oes: &oes
     DJANGO_ALLOWED_HOSTS: ${OES_ALLOWED_HOSTS:-localhost,127.0.0.1,terminal-oes,192.168.1.8}
     DATABASE_URL: postgresql://${OES_DB_USER:-terminal_oes}:${OES_DB_PASSWORD:-terminal_oes}@oes-db:5432/${OES_DB_NAME:-terminal_oes}
     OES_API_TOKEN: ${OES_API_TOKEN:-local-oes-token}
+    SIMULATOR_RUNNER_TOKEN: ${SIMULATOR_RUNNER_TOKEN:-local-runner-token}
+    SIMULATOR_OES_URL: ${SIMULATOR_OES_URL:-http://terminal-oes:8000}
+    SIMULATION_BOOTSTRAP_TOKEN_TTL_SECONDS: ${SIMULATION_BOOTSTRAP_TOKEN_TTL_SECONDS:-300}
+    MINITOS_URL: http://minitos:8000
+    MINITOS_OES_TOKEN: ${OES_API_TOKEN:-local-oes-token}
     MQTT_HOST: hivemq
     MQTT_PORT: "1883"
     MQTT_CLIENT_ID: terminal-oes
-    UNS_ROOT: scms/v1
+    SPARKPLUG_HOST_ID: ${SPARKPLUG_HOST_ID:-TERMINAL-OES}
+    SITE_UNS_ROOT: scms/v2
     EQUIPMENT_STALE_SECONDS: "60"
+    EQUIPMENT_COMMAND_TTL_SECONDS: "30"
     RUN_MIGRATIONS: "true"
   depends_on:
     oes-db:
@@ -85,10 +95,6 @@ services:
 
   minitos:
     <<: *minitos
-    environment:
-      <<: *minitos-environment
-      SIMULATOR_MINITOS_USERNAME: ${SIMULATOR_MINITOS_USERNAME:-}
-      SIMULATOR_MINITOS_PASSWORD: ${SIMULATOR_MINITOS_PASSWORD:-}
     ports:
       - "${MINITOS_HTTP_PORT:-8000}:8000"
     healthcheck:
@@ -178,6 +184,7 @@ services:
     networks: [scms]
 
   godot-simulator:
+    profiles: ["simulation"]
     image: terminal-scms/godot-simulator:local
     platform: ${GODOT_PLATFORM:-linux/amd64}
     build:
@@ -185,27 +192,12 @@ services:
       dockerfile: Dockerfile.headless
       args:
         GODOT_VERSION: ${GODOT_VERSION:-4.2.1}
-    restart: unless-stopped
+    restart: "no"
     environment:
-      MINITOS_URL: http://minitos:8000
-      MINITOS_USERNAME: ${SIMULATOR_MINITOS_USERNAME:-}
-      MINITOS_PASSWORD: ${SIMULATOR_MINITOS_PASSWORD:-}
-      SIMULATOR_LOCATION_ID: ${SIMULATOR_LOCATION_ID:-1}
-      SIMULATOR_TERMINAL_CODE: ${SIMULATOR_TERMINAL_CODE:-terminal-1}
+      OES_URL: http://terminal-oes:8000
       SIMULATOR_DEFAULT_SPEED_MPS: ${SIMULATOR_DEFAULT_SPEED_MPS:-4.0}
-      SIMULATOR_TIME_SCALE: ${SIMULATOR_TIME_SCALE:-1.0}
-      MQTT_HOST: hivemq
-      MQTT_PORT: "1883"
-      MQTT_USERNAME: ${MQTT_USERNAME:-}
-      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
-      MQTT_CLIENT_ID: ${SIMULATOR_MQTT_CLIENT_ID:-godot-headless-1}
-      SPARKPLUG_GROUP_ID: ${SPARKPLUG_GROUP_ID:-MINI-TERMINAL}
-      SPARKPLUG_NODE_ID: ${SPARKPLUG_NODE_ID:-GODOT-SANDBOX}
-      UNS_ROOT: scms/v1
     depends_on:
       hivemq:
-        condition: service_healthy
-      minitos:
         condition: service_healthy
       terminal-oes:
         condition: service_healthy

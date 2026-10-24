@@ -1,3 +1,5 @@
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.conf import settings
 from django.db import transaction
@@ -13,6 +15,7 @@ from minitos_core.models import (
     Position,
 )
 from minitos_core.services.layout import resolved_interface_point
+from minitos_core.services.site_sync import ensure_site_for_location
 
 
 EXECUTION_EVENTS = {
@@ -62,13 +65,10 @@ def _position_coordinates(position):
 
 def _queue_released_order(order):
     location = order.work_queue.location
+    site, _ = ensure_site_for_location(location)
+    site = type(site).objects.select_related('enterprise', 'location').get(pk=site.pk)
     terminal_code = _terminal_code(location.pk)
-    event = IntegrationOutbox.objects.create(
-        topic=f'{settings.UNS_ROOT}/{terminal_code}/tos/orders/{order.pk}/released',
-        schema='scms.order.released.v1',
-        payload={},
-        qos=1,
-    )
+    logical_event_id = uuid.uuid4()
     legs = []
     for leg in _active_legs(order).select_related(
         'start_position__stack_position',
@@ -98,10 +98,23 @@ def _queue_released_order(order):
             'planned_start': leg.planned_start.isoformat() if leg.planned_start else None,
             'planned_end': leg.planned_end.isoformat() if leg.planned_end else None,
         })
-    event.payload = {
-        'schema': event.schema,
-        'event_id': str(event.event_id),
+    payload = {
+        'schema': 'scms.order.released.v1',
+        'event_id': str(logical_event_id),
         'occurred_at': order.released_at.isoformat(),
+        'enterprise': {
+            'id': str(site.enterprise_id),
+            'code': site.enterprise.code,
+            'name': site.enterprise.name,
+        },
+        'site': {
+            'id': str(site.pk),
+            'code': site.code,
+            'name': site.location.name,
+            'source_location_id': location.pk,
+            'location_type': location.location_type,
+            'configuration_revision': site.configuration_revision,
+        },
         'terminal': {'id': location.pk, 'code': terminal_code},
         'data': {
             'order': {
@@ -116,7 +129,23 @@ def _queue_released_order(order):
             'legs': legs,
         },
     }
-    event.save(update_fields=['payload'])
+    event = IntegrationOutbox.objects.create(
+        event_id=logical_event_id,
+        topic=(
+            f'{settings.SITE_UNS_ROOT}/{site.enterprise.code}/{site.code}'
+            f'/tos/orders/{order.pk}/released'
+        ),
+        schema='scms.order.released.v1',
+        payload=payload,
+        qos=1,
+    )
+    if settings.UNS_DUAL_PUBLISH_LEGACY:
+        IntegrationOutbox.objects.create(
+            topic=f'{settings.UNS_ROOT}/{terminal_code}/tos/orders/{order.pk}/released',
+            schema=event.schema,
+            payload=payload,
+            qos=1,
+        )
     return event
 
 

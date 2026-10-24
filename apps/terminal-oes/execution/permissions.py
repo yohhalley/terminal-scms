@@ -14,3 +14,13 @@ class HasOESServiceToken(BasePermission):
         supplied = request.headers.get("X-OES-Token", "")
         return bool(supplied) and hmac.compare_digest(supplied, configured)
 
+
+class HasRunnerToken(BasePermission):
+    message = "A valid simulator runner token is required."
+
+    def has_permission(self, request, view):
+        configured = settings.SIMULATOR_RUNNER_TOKEN
+        if not configured:
+            return settings.DEBUG
+        supplied = request.headers.get("X-Runner-Token", "")
+        return bool(supplied) and hmac.compare_digest(supplied, configured)

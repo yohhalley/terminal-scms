@@ -1,21 +1,27 @@
 extends Node
 
-const MinitosClient = preload("res://source/terminal-sandbox/MinitosClient.gd")
+const OESBootstrapClient = preload("res://source/headless/OESBootstrapClient.gd")
 const MQTTNodeClient = preload("res://source/terminal-sandbox/MQTTNodeClient.gd")
-const METERS_PER_LATITUDE_DEGREE := 111319.49079327358
+const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 
-var _minitos := MinitosClient.new()
+var _bootstrap := OESBootstrapClient.new()
 var _mqtt := MQTTNodeClient.new()
-var _location_id := ""
-var _terminal_code := ""
-var _uns_root := "scms/v1"
+var _oes_url := ""
+var _site_id := ""
+var _session_id := ""
+var _session_token := ""
+var _configuration_revision := 0
+var _configuration_checksum := ""
+var _sparkplug_group_id := ""
+var _sparkplug_node_id := ""
 var _mqtt_connected := false
 var _configuration_loaded := false
-var _minitos_retry_pending := false
+var _bootstrap_retry_pending := false
 var _mqtt_retry_pending := false
 var _ches := {}
 var _active_commands := {}
 var _command_outcomes := {}
+var _persisted_runtime_state := {}
 var _last_publish_ms := {}
 var _default_speed_mps := 4.0
 var _time_scale := 1.0
@@ -23,23 +29,25 @@ var _time_scale := 1.0
 
 func _ready():
 	randomize()
-	_location_id = _env("SIMULATOR_LOCATION_ID", "1")
-	_terminal_code = _env("SIMULATOR_TERMINAL_CODE", "terminal-%s" % _location_id)
-	_uns_root = _env("UNS_ROOT", "scms/v1").trim_suffix("/")
+	_oes_url = OS.get_environment("OES_URL").strip_edges()
+	_site_id = OS.get_environment("SIMULATOR_SITE_ID").strip_edges()
+	_session_id = OS.get_environment("SIMULATOR_SESSION_ID").strip_edges()
+	_session_token = OS.get_environment("SIMULATOR_TOKEN").strip_edges()
+	if _oes_url.is_empty() or _site_id.is_empty() or _session_id.is_empty() or _session_token.is_empty():
+		push_error("OES_URL, SIMULATOR_SITE_ID, SIMULATOR_SESSION_ID, and SIMULATOR_TOKEN are required")
+		get_tree().quit(2)
+		return
 	_default_speed_mps = max(float(_env("SIMULATOR_DEFAULT_SPEED_MPS", "4.0")), 0.1)
 	_time_scale = max(float(_env("SIMULATOR_TIME_SCALE", "1.0")), 0.01)
-
-	add_child(_minitos)
+	_load_runtime_state()
+	add_child(_bootstrap)
 	add_child(_mqtt)
-	_minitos.authenticated.connect(_on_authenticated)
-	_minitos.terminal_layout_loaded.connect(_on_terminal_layout_loaded)
+	_bootstrap.bootstrap_loaded.connect(_on_bootstrap_loaded)
 	_mqtt.broker_checked.connect(_on_broker_checked)
-	_mqtt.business_message_received.connect(_on_business_message)
+	_mqtt.sparkplug_command_received.connect(_on_sparkplug_command)
 	_mqtt.message_rejected.connect(_on_message_rejected)
-
-	_connect_minitos()
-	_connect_mqtt()
-	print("HEADLESS simulator starting for %s (location %s)" % [_terminal_code, _location_id])
+	_load_bootstrap()
+	print("HEADLESS simulator requesting OES session %s for Site %s" % [_session_id, _site_id])
 
 
 func _process(delta: float):
@@ -55,65 +63,94 @@ func _process(delta: float):
 			_publish_when_due(che)
 
 
-func _connect_minitos():
-	var server_url = _env("MINITOS_URL", "http://minitos:8000")
-	var username = _env("MINITOS_USERNAME", "")
-	var password = _env("MINITOS_PASSWORD", "")
-	_minitos.configure(server_url, username, password)
-	_minitos.authenticate(username, password)
+func _load_bootstrap():
+	_bootstrap.load_bootstrap(_oes_url, _session_id, _session_token)
 
 
-func _connect_mqtt():
-	_mqtt.connect_to_broker(
-		_env("MQTT_HOST", "hivemq"),
-		int(_env("MQTT_PORT", "1883")),
-		_env("MQTT_USERNAME", ""),
-		_env("MQTT_PASSWORD", ""),
-		_env("MQTT_PROTOCOL", ""),
-		_env("SPARKPLUG_GROUP_ID", "MINI-TERMINAL"),
-		_env("SPARKPLUG_NODE_ID", "GODOT-SANDBOX"),
-		_env("MQTT_CLIENT_ID", "godot-headless-%s" % _location_id)
-	)
-
-
-func _on_authenticated(ok: bool, message: String):
+func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 	if not ok:
-		push_error("MiniTOS authentication failed: %s" % message)
-		_schedule_minitos_retry()
+		push_error(message)
+		_schedule_bootstrap_retry()
 		return
-	_minitos_retry_pending = false
-	_minitos.refresh_terminal(_location_id)
-
-
-func _on_terminal_layout_loaded(
-	ok: bool,
-	_location_data: Dictionary,
-	_areas: Array,
-	_roads: Array,
-	ches: Array,
-	message: String
-):
-	if not ok:
-		push_error("MiniTOS terminal bootstrap failed: %s" % message)
-		_schedule_minitos_retry()
+	var session: Dictionary = document.get("session", {})
+	if str(session.get("id", "")) != _session_id or str(session.get("site_id", "")) != _site_id:
+		_fail_bootstrap("OES bootstrap identity does not match this process")
 		return
+	_configuration_revision = int(session.get("configuration_revision", 0))
+	_configuration_checksum = str(session.get("configuration_checksum", ""))
+	if _configuration_revision != int(_env("SIMULATOR_CONFIG_REVISION", str(_configuration_revision))):
+		_fail_bootstrap("OES bootstrap revision does not match the runner claim")
+		return
+	if _configuration_checksum != _env("SIMULATOR_CONFIG_CHECKSUM", _configuration_checksum):
+		_fail_bootstrap("OES bootstrap checksum does not match the runner claim")
+		return
+	_sparkplug_group_id = str(session.get("sparkplug_group_id", ""))
+	_sparkplug_node_id = str(session.get("sparkplug_node_id", ""))
+	if _sparkplug_group_id.is_empty() or _sparkplug_node_id.is_empty():
+		_fail_bootstrap("OES bootstrap is missing the Sparkplug identity")
+		return
+	_time_scale = max(float(session.get("time_scale", _time_scale)), 0.01)
+	_load_equipment(document)
+	_restore_runtime_state()
 	_configuration_loaded = true
+	_bootstrap_retry_pending = false
+	_mqtt.set_node_birth_metrics([
+		{"name": "Session/Id", "type": "String", "value": _session_id},
+		{"name": "Site/Id", "type": "String", "value": _site_id},
+		{"name": "Configuration/Revision", "type": "Int64", "value": _configuration_revision},
+		{"name": "Configuration/Checksum", "type": "String", "value": _configuration_checksum},
+	])
+	_connect_mqtt()
+	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
+
+
+func _fail_bootstrap(message: String):
+	push_error(message)
+	get_tree().quit(3)
+
+
+func _load_equipment(document: Dictionary):
 	_ches.clear()
-	for source_che in ches:
+	var projection: Dictionary = document.get("projection", {})
+	var equipment: Dictionary = projection.get("equipment", {})
+	var type_by_id := {}
+	for item in equipment.get("types", []):
+		if item is Dictionary:
+			type_by_id[int(item.get("id", 0))] = item
+	var state_by_id := {}
+	for item in document.get("equipment_state", []):
+		if item is Dictionary:
+			state_by_id[int(item.get("tos_che_id", 0))] = item
+	for source_che in equipment.get("ches", []):
 		if not source_che is Dictionary:
 			continue
 		var che: Dictionary = source_che.duplicate(true)
-		var che_id = int(che.get("pk", che.get("id", 0)))
+		var che_id = int(che.get("id", 0))
 		if che_id <= 0:
 			continue
+		for key in state_by_id.get(che_id, {}).keys():
+			var value = state_by_id[che_id][key]
+			if value != null:
+				che[key] = value
+		var equipment_type_id = int(che.get("equipment_type_id", 0))
+		var equipment_type: Dictionary = type_by_id.get(equipment_type_id, {})
 		che["pk"] = che_id
+		che["equipment_type"] = equipment_type_id
+		che["equipment_type_details"] = equipment_type
+		che["equipment_type_code"] = str(equipment_type.get("equipment_type", "CHE"))
 		che["speed_mps"] = 0.0
 		che["fuel_consumption_rate_lph"] = 0.0
 		che["fuel_consumed_liters"] = float(che.get("fuel_consumed_liters", 0.0))
 		_ches[che_id] = che
-	print("HEADLESS loaded %s CHE records for %s" % [_ches.size(), _terminal_code])
-	if _mqtt_connected:
-		_publish_birth_and_state()
+
+
+func _connect_mqtt():
+	_mqtt.connect_to_broker(
+		_env("MQTT_HOST", "hivemq"), int(_env("MQTT_PORT", "1883")),
+		_env("MQTT_USERNAME", ""), _env("MQTT_PASSWORD", ""),
+		_env("MQTT_PROTOCOL", ""), _sparkplug_group_id, _sparkplug_node_id,
+		_env("MQTT_CLIENT_ID", "godot-headless-%s" % _session_id)
+	)
 
 
 func _on_broker_checked(ok: bool, message: String):
@@ -123,58 +160,72 @@ func _on_broker_checked(ok: bool, message: String):
 		_schedule_mqtt_retry()
 		return
 	_mqtt_retry_pending = false
-	if not _mqtt.subscribe_business_commands(_uns_root, _terminal_code):
-		push_error("Could not subscribe to OES equipment commands")
+	if not _mqtt.subscribe_sparkplug_commands(_sparkplug_group_id, _sparkplug_node_id):
+		push_error("Could not subscribe to Sparkplug NCMD/DCMD topics")
 		return
-	print("HEADLESS subscribed to %s/%s/oes/che/+/command" % [_uns_root, _terminal_code])
-	if _configuration_loaded:
-		_publish_birth_and_state()
+	_publish_birth_and_state()
+	print("HEADLESS Sparkplug Edge Node is online and subscribed to commands")
 
 
-func _on_business_message(topic: String, payload: Dictionary):
-	if payload.get("schema") != "scms.equipment.command.v1":
+func _on_sparkplug_command(topic: String, message_type: String, device_id: String, metrics: Dictionary):
+	if message_type == "NCMD":
+		if bool(metrics.get("Node Control/Rebirth", false)):
+			if _mqtt.publish_rebirth():
+				_publish_birth_and_state()
 		return
-	var data = payload.get("data", {})
-	if not data is Dictionary:
-		return
-	var command_id = str(payload.get("command_id", ""))
-	var che_id = int(data.get("che_id", 0))
-	if command_id.is_empty() or not _ches.has(che_id):
-		_publish_command_result(command_id, "failed", 0, "Unknown command or CHE")
+	var command_id = str(metrics.get("Command/Id", ""))
+	if command_id.is_empty():
 		return
 	if _command_outcomes.has(command_id):
-		var outcome: Dictionary = _command_outcomes[command_id]
-		_publish_command_result(command_id, str(outcome.event), int(outcome.get("position_id", 0)), str(outcome.get("reason", "")))
+		_replay_command_result(command_id)
+		return
+	var che_id = int(metrics.get("Command/CheId", 0))
+	if not _ches.has(che_id) or device_id != "CHE_%s" % che_id:
+		_publish_command_result(che_id, command_id, "failed", 0, "Unknown command target")
+		return
+	if str(metrics.get("Command/SessionId", "")) != _session_id:
+		_publish_command_result(che_id, command_id, "failed", 0, "Session mismatch")
+		return
+	if str(metrics.get("Command/SiteId", "")) != _site_id:
+		_publish_command_result(che_id, command_id, "failed", 0, "Site mismatch")
+		return
+	if int(metrics.get("Command/ConfigurationRevision", -1)) != _configuration_revision:
+		_publish_command_result(che_id, command_id, "failed", 0, "Configuration revision mismatch")
+		return
+	if int(metrics.get("Command/ExpiresAtMs", 0)) <= int(Time.get_unix_time_from_system() * 1000.0):
+		_publish_command_result(che_id, command_id, "failed", 0, "Command expired")
+		return
+	if str(metrics.get("Command/AssignmentId", "")).is_empty():
+		_publish_command_result(che_id, command_id, "failed", 0, "Assignment identity is missing")
 		return
 	if _active_commands.has(che_id):
-		_publish_command_result(command_id, "failed", 0, "CHE already has an active command")
+		_publish_command_result(che_id, command_id, "failed", 0, "CHE already has an active command")
 		return
-	var destination_latitude = data.get("destination_latitude")
-	var destination_longitude = data.get("destination_longitude")
-	if destination_latitude == null or destination_longitude == null:
-		_publish_command_result(command_id, "failed", 0, "Command has no destination coordinates")
+	if not metrics.has("Command/DestinationLatitude") or not metrics.has("Command/DestinationLongitude"):
+		_publish_command_result(che_id, command_id, "failed", 0, "Command has no destination coordinates")
 		return
-
 	var che: Dictionary = _ches[che_id]
 	if not bool(che.get("powered_on", false)) or bool(che.get("is_in_maintenance", false)):
-		_publish_command_result(command_id, "failed", 0, "CHE is not executable")
+		_publish_command_result(che_id, command_id, "failed", 0, "CHE is not executable")
 		return
 	_active_commands[che_id] = {
 		"command_id": command_id,
-		"destination_latitude": float(destination_latitude),
-		"destination_longitude": float(destination_longitude),
-		"source_inventory_position_id": _int_or_zero(data.get("source_inventory_position_id")),
-		"destination_inventory_position_id": _int_or_zero(data.get("destination_inventory_position_id")),
+		"assignment_id": str(metrics.get("Command/AssignmentId", "")),
+		"destination_latitude": float(metrics["Command/DestinationLatitude"]),
+		"destination_longitude": float(metrics["Command/DestinationLongitude"]),
+		"source_inventory_position_id": int(metrics.get("Command/SourceInventoryPositionId", 0)),
+		"destination_inventory_position_id": int(metrics.get("Command/DestinationInventoryPositionId", 0)),
 		"picked_up": false,
 	}
 	che["working"] = true
 	che["is_dispatched"] = true
 	che["is_available"] = false
 	_ches[che_id] = che
-	_publish_command_result(command_id, "acknowledged")
-	_publish_command_result(command_id, "started")
+	_save_runtime_state()
+	_publish_command_result(che_id, command_id, "acknowledged")
+	_publish_command_result(che_id, command_id, "started")
 	_publish_equipment_state(che, true)
-	print("HEADLESS accepted command %s for CHE %s from %s" % [command_id, che_id, topic])
+	print("HEADLESS accepted DCMD %s for CHE %s from %s" % [command_id, che_id, topic])
 
 
 func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: float):
@@ -189,12 +240,11 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 	if distance_m <= 0.5:
 		_complete_command(che_id, che, command)
 		return
-
 	if not bool(command.picked_up) and int(command.source_inventory_position_id) > 0:
 		command["picked_up"] = true
 		_active_commands[che_id] = command
-		_publish_command_result(str(command.command_id), "container_picked_up")
-
+		_save_runtime_state()
+		_publish_command_result(che_id, str(command.command_id), "container_picked_up")
 	var speed_mps = _che_speed_mps(che)
 	var travel_m = min(speed_mps * delta, distance_m)
 	var ratio = travel_m / distance_m
@@ -218,12 +268,12 @@ func _complete_command(che_id: int, che: Dictionary, command: Dictionary):
 	che["fuel_consumption_rate_lph"] = 4.0 if bool(che.get("powered_on", false)) else 0.0
 	_ches[che_id] = che
 	_active_commands.erase(che_id)
+	_save_runtime_state()
 	var command_id = str(command.command_id)
 	var destination_position_id = int(command.destination_inventory_position_id)
 	if destination_position_id > 0:
-		_publish_command_result(command_id, "container_dropped", destination_position_id)
-	_publish_command_result(command_id, "completed")
-	_command_outcomes[command_id] = {"event": "completed", "position_id": destination_position_id}
+		_publish_command_result(che_id, command_id, "container_dropped", destination_position_id)
+	_publish_command_result(che_id, command_id, "completed", destination_position_id)
 	_publish_equipment_state(che, true)
 	print("HEADLESS completed command %s for CHE %s" % [command_id, che_id])
 
@@ -234,7 +284,7 @@ func _publish_birth_and_state():
 		all_ches.append(che)
 	_mqtt.publish_powered_devices(all_ches)
 	for che in all_ches:
-		_publish_equipment_state(che, true)
+		_last_publish_ms[int(che.pk)] = Time.get_ticks_msec()
 
 
 func _publish_when_due(che: Dictionary):
@@ -248,64 +298,100 @@ func _publish_when_due(che: Dictionary):
 	_publish_equipment_state(che)
 
 
-func _publish_equipment_state(che: Dictionary, force := false):
-	if not _mqtt_connected:
-		return
-	var che_id = int(che.pk)
-	if bool(che.get("powered_on", false)):
-		_mqtt.publish_che_data(che)
-	elif force:
-		_mqtt.publish_che_death(che)
-	var occurred_at = _utc_timestamp()
-	var equipment: Dictionary = che.get("equipment_type_details", {})
-	var payload = {
-		"schema": "scms.equipment.state.v1",
-		"event_id": _event_id(),
-		"occurred_at": occurred_at,
-		"terminal": {"id": int(_location_id), "code": _terminal_code},
-		"data": {
-			"che_id": che_id,
-			"name": str(che.get("name", "CHE_%s" % che_id)),
-			"equipment_type_id": che.get("equipment_type"),
-			"equipment_type_code": str(che.get("equipment_type_code", equipment.get("equipment_type", ""))),
-			"powered_on": bool(che.get("powered_on", false)),
-			"working": bool(che.get("working", false)),
-			"is_available": bool(che.get("is_available", false)),
-			"is_dispatched": bool(che.get("is_dispatched", false)),
-			"is_in_maintenance": bool(che.get("is_in_maintenance", false)),
-			"latitude": che.get("latitude"),
-			"longitude": che.get("longitude"),
-			"rotation": float(che.get("rotation", 0.0)),
-			"fuel_level": che.get("fuel_level"),
-			"energy_level": che.get("energy_level", che.get("battery_level")),
-			"speed_mps": float(che.get("speed_mps", 0.0)),
-			"fuel_consumption_rate_lph": float(che.get("fuel_consumption_rate_lph", 0.0)),
-			"fuel_consumed_liters": float(che.get("fuel_consumed_liters", 0.0)),
-			"timestamp": occurred_at,
-		},
-	}
-	var topic = "%s/%s/simulator/che/%s/state" % [_uns_root, _terminal_code, che_id]
-	if _mqtt.publish_business_event(topic, payload, true):
-		_last_publish_ms[che_id] = Time.get_ticks_msec()
+func _publish_equipment_state(che: Dictionary, _force := false):
+	if _mqtt_connected and _mqtt.publish_che_data(che):
+		_last_publish_ms[int(che.pk)] = Time.get_ticks_msec()
+		_save_runtime_state()
 
 
-func _publish_command_result(command_id: String, event: String, position_id := 0, reason := ""):
+func _publish_command_result(che_id: int, command_id: String, event: String, position_id := 0, reason := "", result_id := ""):
 	if command_id.is_empty() or not _mqtt_connected:
 		return
-	var data = {"command_id": command_id, "event": event}
+	if result_id.is_empty():
+		result_id = _event_id()
+	var metrics: Array = [
+		{"name": "Command/Result/Id", "type": "String", "value": result_id},
+		{"name": "Command/Result/CommandId", "type": "String", "value": command_id},
+		{"name": "Command/Result/Event", "type": "String", "value": event},
+	]
 	if position_id > 0:
-		data["position_id"] = position_id
+		metrics.append({"name": "Command/Result/PositionId", "type": "Int64", "value": position_id})
 	if not reason.is_empty():
-		data["reason"] = reason
-	var payload = {
-		"schema": "scms.command.result.v1",
-		"event_id": _event_id(),
-		"occurred_at": _utc_timestamp(),
-		"terminal": {"id": int(_location_id), "code": _terminal_code},
-		"data": data,
-	}
-	var topic = "%s/%s/simulator/commands/%s/result" % [_uns_root, _terminal_code, command_id]
-	_mqtt.publish_business_event(topic, payload)
+		metrics.append({"name": "Command/Result/Reason", "type": "String", "value": reason})
+	var che: Dictionary = _ches.get(che_id, {"pk": che_id})
+	if _mqtt.publish_command_result(che, metrics):
+		_command_outcomes[command_id] = {
+			"che_id": che_id, "event": event, "position_id": position_id,
+			"reason": reason, "result_id": result_id,
+		}
+		_save_runtime_state()
+
+
+func _replay_command_result(command_id: String):
+	var outcome: Dictionary = _command_outcomes[command_id]
+	_publish_command_result(
+		int(outcome.get("che_id", 0)), command_id, str(outcome.get("event", "failed")),
+		int(outcome.get("position_id", 0)), str(outcome.get("reason", "")),
+		str(outcome.get("result_id", ""))
+	)
+
+
+func _load_runtime_state():
+	if not FileAccess.file_exists(RUNTIME_STATE_PATH):
+		return
+	var file = FileAccess.open(RUNTIME_STATE_PATH, FileAccess.READ)
+	if file == null:
+		return
+	var json = JSON.new()
+	if json.parse(file.get_as_text()) == OK and json.get_data() is Dictionary:
+		_persisted_runtime_state = json.get_data()
+
+
+func _restore_runtime_state():
+	if _persisted_runtime_state.is_empty():
+		return
+	if str(_persisted_runtime_state.get("session_id", "")) != _session_id:
+		return
+	if str(_persisted_runtime_state.get("site_id", "")) != _site_id:
+		return
+	if int(_persisted_runtime_state.get("configuration_revision", -1)) != _configuration_revision:
+		return
+	if str(_persisted_runtime_state.get("configuration_checksum", "")) != _configuration_checksum:
+		return
+	var saved_ches: Dictionary = _persisted_runtime_state.get("ches", {})
+	for saved_id in saved_ches:
+		var che_id = int(saved_id)
+		if not _ches.has(che_id) or not saved_ches[saved_id] is Dictionary:
+			continue
+		var restored: Dictionary = _ches[che_id]
+		for key in saved_ches[saved_id]:
+			restored[key] = saved_ches[saved_id][key]
+		_ches[che_id] = restored
+	var saved_commands: Dictionary = _persisted_runtime_state.get("active_commands", {})
+	for saved_id in saved_commands:
+		var che_id = int(saved_id)
+		if _ches.has(che_id) and saved_commands[saved_id] is Dictionary:
+			_active_commands[che_id] = saved_commands[saved_id]
+	var saved_outcomes = _persisted_runtime_state.get("command_outcomes", {})
+	if saved_outcomes is Dictionary:
+		_command_outcomes = saved_outcomes
+	_persisted_runtime_state.clear()
+
+
+func _save_runtime_state():
+	if _session_id.is_empty() or _site_id.is_empty() or _configuration_revision <= 0:
+		return
+	var file = FileAccess.open(RUNTIME_STATE_PATH, FileAccess.WRITE)
+	if file != null:
+		file.store_string(JSON.stringify({
+			"session_id": _session_id,
+			"site_id": _site_id,
+			"configuration_revision": _configuration_revision,
+			"configuration_checksum": _configuration_checksum,
+			"ches": _ches,
+			"active_commands": _active_commands,
+			"command_outcomes": _command_outcomes,
+		}))
 
 
 func _che_speed_mps(che: Dictionary) -> float:
@@ -331,13 +417,13 @@ func _consume_fuel(che: Dictionary, rate_lph: float, delta: float):
 		che["fuel_level"] = max(float(che.fuel_level) - consumed_liters / capacity * 100.0, 0.0)
 
 
-func _schedule_minitos_retry():
-	if _minitos_retry_pending:
+func _schedule_bootstrap_retry():
+	if _bootstrap_retry_pending:
 		return
-	_minitos_retry_pending = true
+	_bootstrap_retry_pending = true
 	await get_tree().create_timer(5.0).timeout
-	_minitos_retry_pending = false
-	_connect_minitos()
+	_bootstrap_retry_pending = false
+	_load_bootstrap()
 
 
 func _schedule_mqtt_retry():
@@ -356,14 +442,6 @@ func _on_message_rejected(message_type: String, device_id: String, reason: Strin
 func _env(name: String, fallback: String) -> String:
 	var value = OS.get_environment(name)
 	return value if not value.is_empty() else fallback
-
-
-func _utc_timestamp() -> String:
-	return Time.get_datetime_string_from_unix_time(int(Time.get_unix_time_from_system()), false) + "Z"
-
-
-func _int_or_zero(value) -> int:
-	return 0 if value == null else int(value)
 
 
 func _event_id() -> String:

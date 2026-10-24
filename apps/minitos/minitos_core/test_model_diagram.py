@@ -16,6 +16,9 @@ class ModelDiagramTests(SimpleTestCase):
         self.assertIn('LayoutAsset ||--o{ LinearAxis', diagram)
         self.assertIn('LinearAxis ||--o{ LinearMarker', diagram)
         self.assertIn('LayoutAsset ||--o{ BerthSegment', diagram)
+        self.assertIn('Enterprise ||--o{ Site', diagram)
+        self.assertIn('Location ||--o| Site', diagram)
+        self.assertIn('Site ||--o{ SiteConfigurationSnapshot', diagram)
 
     def test_command_can_render_to_stdout(self):
         output = StringIO()

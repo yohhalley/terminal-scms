@@ -19,6 +19,7 @@ from minitos_core.models import (
     OrderLeg,
     OrderRoutePlan,
     Position,
+    Site,
     WorkQueue,
 )
 from minitos_core.services import (
@@ -127,12 +128,36 @@ class OrderExecutionTests(LayoutTestCase):
         self.assertIn('last_updated', visit_response.data)
         self.assertIsNone(visit_response.data['current_che'])
 
+    @override_settings(UNS_DUAL_PUBLISH_LEGACY=False)
+    def test_release_uses_v2_only_after_cutover(self):
+        released = self.client.post(self.order_url('release'), {}, format='json')
+
+        self.assertEqual(released.status_code, status.HTTP_200_OK, released.data)
+        topics = list(IntegrationOutbox.objects.filter(
+            schema='scms.order.released.v1',
+        ).values_list('topic', flat=True))
+        self.assertEqual(len(topics), 1)
+        self.assertTrue(topics[0].startswith('scms/v2/'))
+
+    @override_settings(UNS_DUAL_PUBLISH_LEGACY=True)
     def test_release_and_mes_callback_execute_pickup_drop_and_completion(self):
         released = self.client.post(self.order_url('release'), {}, format='json')
         self.assertEqual(released.status_code, status.HTTP_200_OK, released.data)
         self.assertEqual(released.data['status'], Order.RELEASED)
         self.assertIsNotNone(released.data['released_at'])
-        outgoing = IntegrationOutbox.objects.get(schema='scms.order.released.v1')
+        outgoing = IntegrationOutbox.objects.get(
+            schema='scms.order.released.v1', topic__startswith='scms/v2/',
+        )
+        legacy = IntegrationOutbox.objects.get(
+            schema='scms.order.released.v1', topic__startswith='scms/v1/',
+        )
+        self.assertEqual(outgoing.payload['event_id'], legacy.payload['event_id'])
+        site = Site.objects.get(location=self.location)
+        self.assertEqual(outgoing.payload['site']['id'], str(site.pk))
+        self.assertEqual(
+            outgoing.topic,
+            f'scms/v2/{site.enterprise.code}/{site.code}/tos/orders/{self.order.pk}/released',
+        )
         self.assertEqual(outgoing.payload['data']['order']['id'], self.order.pk)
         self.assertEqual(
             outgoing.payload['data']['legs'][0]['destination_inventory_position_id'],
@@ -200,6 +225,10 @@ class OrderExecutionTests(LayoutTestCase):
             'schema': 'scms.execution.event.v1',
             'event_id': str(event_id),
             'terminal': {'id': self.location.pk, 'code': f'terminal-{self.location.pk}'},
+            'site': {
+                'id': str(Site.objects.get(location=self.location).pk),
+                'code': Site.objects.get(location=self.location).code,
+            },
             'data': {
                 'event': 'leg_dispatched',
                 'order_id': self.order.pk,
@@ -208,7 +237,11 @@ class OrderExecutionTests(LayoutTestCase):
                 'occurred_at': '2026-10-12T10:00:00Z',
             },
         }
-        topic = f'scms/v1/terminal-{self.location.pk}/oes/orders/{self.order.pk}/execution'
+        site = Site.objects.select_related('enterprise').get(location=self.location)
+        topic = (
+            f'scms/v2/{site.enterprise.code}/{site.code}'
+            f'/oes/orders/{self.order.pk}/execution'
+        )
         apply_execution_message(topic, json.dumps(payload))
         apply_execution_message(topic, json.dumps(payload))
 

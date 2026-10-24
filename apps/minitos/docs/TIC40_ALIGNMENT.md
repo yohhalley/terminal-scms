@@ -1,6 +1,6 @@
 # TIC4.0 alignment record
 
-Last reviewed: 2026-09-24
+Last reviewed: 2026-10-18
 
 Official references reviewed:
 
@@ -46,7 +46,9 @@ telemetry:
 
 | MiniTOS concept | TIC4.0 relationship | Notes |
 | --- | --- | --- |
-| `Location` | Terminal / Place context | Terminal identity and geographic frame. |
+| `Enterprise` | MiniTOS / ISA-95 extension | Company or tenant boundary; not represented as a TIC4.0 subject. |
+| `Site` | Terminal integration identity | One-to-one with a terminal or inland-depot Location in this milestone; stable UUID/code for OES, UNS, and simulation scope. |
+| `Location` | Place and geographic context | Geographic frame for terminal, inland depot, vessel, train, or truck records. |
 | `LayoutAsset` | Physical Place representation | Land, water, quay, yard, block, parking, road corridor, rail area, gate, or building geometry. |
 | `OperationalPosition` | Addressable Place | Yard slots, transfer positions, work points, parking positions, and carrier slots. |
 | `latitude` / `longitude` and GeoJSON | Coordinate | WGS-84 longitude/latitude is authoritative; local simulator coordinates are derived. |
@@ -57,6 +59,14 @@ telemetry:
 `RouteNode`, `RouteEdge`, `CheOperatingScope`, and `LayoutPreset` are MiniTOS
 extensions. They encode executable layout constraints and routing behavior; they
 must not be presented as TIC4.0-defined subjects.
+
+The current TIC4.0 2026.020 Terminal definition identifies a terminal as a cargo
+handling facility and lists type and location among its required information.
+MiniTOS maps a terminal/depot `Site` to that facility identity while retaining
+`Location` as the reusable geographic/operational place record. `Enterprise`,
+configuration revisions, execution snapshots, and OES readiness are SCMS/ISA-95
+integration extensions rather than TIC4.0 facts. MiniTOS does not yet carry the
+UN/LOCODE identifier cited by the current Terminal definition.
 
 The current geometry payload is a deliberately small GeoJSON subset (`Point`,
 `LineString`, and `Polygon`) in WGS-84. It does not yet implement the full OGC
@@ -216,6 +226,10 @@ Legacy REST fields remain compatible but are no longer CHE columns:
 - Health, warning, fault-code, emergency-stop, control-mode, and detailed
   maintenance subjects need dedicated models before predictive maintenance is
   authoritative.
+- Sparkplug device connectivity is not yet persisted as an independent OES
+  field. DDEATH may follow intentional power-off or another loss of device
+  accessibility, so it must not overwrite MiniTOS's independent power fact or
+  be treated as a uniquely diagnosed shutdown reason.
 - OEE Availability and Performance can be calculated from state intervals and
   handling cycles. Quality currently means successful versus failed/aborted
   handling cycles; this is a MiniTOS operational interpretation.

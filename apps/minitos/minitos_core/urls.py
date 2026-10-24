@@ -14,6 +14,8 @@ app_name = 'minitos_core'
 router = routers.DefaultRouter()
 
 router.register(r'locations', views.LocationViewSet, basename='location')
+router.register(r'enterprises', views.EnterpriseViewSet, basename='enterprise')
+router.register(r'sites', views.SiteViewSet, basename='site')
 router.register(r'container-units', views.ContainerUnitViewSet, basename='containerunit')
 router.register(r'carrier-services', views.CarrierServiceViewSet, basename='carrier-service')
 router.register(r'points-of-work', views.PointOfWorkViewSet, basename='point-of-work')

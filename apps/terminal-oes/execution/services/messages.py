@@ -1,13 +1,11 @@
 import json
-import uuid
-
 from django.core.exceptions import ValidationError
-from django.db import transaction
-from django.utils import timezone
-
-from execution.models import InboxEvent
-from execution.services.dispatch import apply_command_event
-from execution.services.ingestion import ingest_equipment_state, ingest_released_order
+from execution.services.ingestion import ingest_released_order
+from execution.services.site_sync import (
+    ingest_site_configuration_published,
+    ingest_site_created,
+)
+from execution.services.sparkplug_runtime import process_sparkplug_message
 
 
 def _decode(payload):
@@ -20,49 +18,15 @@ def _decode(payload):
     return value
 
 
-def _process_command_result(topic, payload):
-    if payload.get("schema") != "scms.command.result.v1":
-        raise ValidationError("Unsupported command-result schema.")
-    try:
-        event_id = uuid.UUID(str(payload["event_id"]))
-        data = payload["data"]
-        command_id = uuid.UUID(str(data["command_id"]))
-        event = data["event"]
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValidationError("Command result requires event_id, command_id and event.") from exc
-
-    with transaction.atomic():
-        inbox, created = InboxEvent.objects.select_for_update().get_or_create(
-            event_id=event_id,
-            defaults={
-                "topic": topic,
-                "schema": payload["schema"],
-                "payload": payload,
-            },
-        )
-        if not created and inbox.status == InboxEvent.PROCESSED:
-            return inbox
-        apply_command_event(
-            command_id,
-            event,
-            position_id=data.get("position_id"),
-            reason=data.get("reason", ""),
-        )
-        inbox.status = InboxEvent.PROCESSED
-        inbox.error = ""
-        inbox.processed_at = timezone.now()
-        inbox.save(update_fields=["status", "error", "processed_at"])
-        return inbox
-
-
 def process_message(topic, raw_payload):
+    if topic.startswith("spBv1.0/"):
+        return process_sparkplug_message(topic, raw_payload)
     payload = _decode(raw_payload)
     schema = payload.get("schema")
     if schema == "scms.order.released.v1":
         return ingest_released_order(topic, payload)
-    if schema == "scms.equipment.state.v1":
-        return ingest_equipment_state(topic, payload)
-    if schema == "scms.command.result.v1":
-        return _process_command_result(topic, payload)
+    if schema == "scms.site.created.v1":
+        return ingest_site_created(topic, payload)
+    if schema == "scms.site.configuration.published.v1":
+        return ingest_site_configuration_published(topic, payload)
     raise ValidationError(f"Unsupported UNS message schema: {schema!r}.")
-

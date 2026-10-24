@@ -2,6 +2,7 @@ extends SceneTree
 
 const MQTTNodeClient = preload("res://source/terminal-sandbox/MQTTNodeClient.gd")
 const MQTTTransport = preload("res://addons/mqtt/mqtt.gd")
+const SparkPlugManager = preload("res://source/sparkplugB/SparkPlugMQTTManager.gd")
 
 var _client := MQTTNodeClient.new()
 var _observer = MQTTTransport.new()
@@ -13,6 +14,7 @@ var _failed := false
 var _host := "127.0.0.1"
 var _port := 1883
 var _received_topics: Array[String] = []
+var _saw_powered_off_data := false
 
 const EXPECTED_TOPICS: Array[String] = [
 	"spBv1.0/MINI-TERMINAL/NBIRTH/GODOT-SANDBOX",
@@ -72,6 +74,11 @@ func _process(delta):
 		if not _client.publish_che_data(che):
 			_fail("DDATA was rejected")
 			return
+		che.powered_on = false
+		che.is_available = false
+		if not _client.publish_che_data(che):
+			_fail("Powered-off DDATA was rejected")
+			return
 		if not _client.publish_che_death(che):
 			_fail("DDEATH was rejected")
 			return
@@ -82,6 +89,9 @@ func _process(delta):
 		var missing = EXPECTED_TOPICS.filter(func(topic): return not _received_topics.has(topic))
 		if not missing.is_empty():
 			_fail("Broker did not deliver topics: %s" % ", ".join(missing))
+			return
+		if not _saw_powered_off_data:
+			_fail("Broker did not deliver a DDATA observation with PoweredOn=false")
 			return
 		print("Local MQTT lifecycle received successfully")
 		quit(1 if _failed else 0)
@@ -95,8 +105,13 @@ func _on_observer_subscribed(_packet_id: int):
 	_client.connect_to_broker(_host, _port)
 
 
-func _on_observer_message(topic: String, _payload):
+func _on_observer_message(topic: String, payload):
 	_received_topics.append(topic)
+	if "/DDATA/" in topic:
+		var document = SparkPlugManager.decode_payload(payload)
+		var metrics = SparkPlugManager.metrics_by_name(document)
+		if metrics.get("State/PoweredOn") == false:
+			_saw_powered_off_data = true
 	print("Broker delivered: ", topic)
 
 

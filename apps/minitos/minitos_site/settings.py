@@ -30,6 +30,7 @@ ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',') if os.environ.get
 
 # Shared service credential used only by the OES execution callback API.
 MES_API_TOKEN = os.environ.get('MES_API_TOKEN', '')
+OES_API_TOKEN = os.environ.get('OES_API_TOKEN', '')
 MQTT_HOST = os.environ.get('MQTT_HOST', 'localhost')
 MQTT_PORT = int(os.environ.get('MQTT_PORT', '1883'))
 MQTT_USERNAME = os.environ.get('MQTT_USERNAME', '')
@@ -37,6 +38,10 @@ MQTT_PASSWORD = os.environ.get('MQTT_PASSWORD', '')
 MQTT_CLIENT_ID = os.environ.get('MQTT_CLIENT_ID', 'minitos')
 MQTT_TLS = os.environ.get('MQTT_TLS', 'False') == 'True'
 UNS_ROOT = os.environ.get('UNS_ROOT', 'scms/v1').strip('/')
+SITE_UNS_ROOT = os.environ.get('SITE_UNS_ROOT', 'scms/v2').strip('/')
+UNS_DUAL_PUBLISH_LEGACY = os.environ.get(
+    'UNS_DUAL_PUBLISH_LEGACY', 'False',
+).lower() in {'1', 'true', 'yes', 'on'}
 
 
 # Application definition

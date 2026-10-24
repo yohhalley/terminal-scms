@@ -4,7 +4,7 @@ extends Node
 signal broker_checked(ok: bool, message: String)
 signal message_published(message_type: String, device_id: String)
 signal message_rejected(message_type: String, device_id: String, reason: String)
-signal business_message_received(topic: String, payload: Dictionary)
+signal sparkplug_command_received(topic: String, message_type: String, device_id: String, metrics: Dictionary)
 
 const SPARKPLUG_MANAGER = preload("res://source/sparkplugB/SparkPlugMQTTManager.gd")
 const CONNECT_TIMEOUT_SECONDS := 8.0
@@ -59,6 +59,11 @@ func connect_to_broker(
 	call_deferred("_start_pending_connection")
 
 
+func set_node_birth_metrics(metrics: Array):
+	if _manager != null:
+		_manager.set_node_birth_metrics(metrics)
+
+
 func _start_pending_connection():
 	if _pending_connection.is_empty():
 		return
@@ -96,31 +101,29 @@ func publish_powered_devices(ches: Array):
 	if not is_broker_connected():
 		return
 	for che in ches:
-		if bool(che.get("powered_on", false)):
-			publish_che_birth(che)
+		publish_che_birth(che)
 	for che in ches:
-		if bool(che.get("powered_on", false)):
-			publish_che_data(che)
+		publish_che_data(che)
 
 
-func subscribe_business_commands(uns_root: String, terminal_code: String) -> bool:
+func subscribe_sparkplug_commands(group_id: String, node_id: String) -> bool:
 	if not is_broker_connected():
 		return false
-	return _manager.subscribe("%s/%s/oes/che/+/command" % [uns_root.trim_suffix("/"), terminal_code], 1)
+	var node_ok = _manager.subscribe("spBv1.0/%s/NCMD/%s" % [group_id, node_id], 1)
+	var device_ok = _manager.subscribe("spBv1.0/%s/DCMD/%s/+" % [group_id, node_id], 1)
+	return node_ok and device_ok
 
 
-func publish_business_event(topic: String, payload: Dictionary, retain := false) -> bool:
-	if not is_broker_connected():
-		_reject("JSON", topic, "MQTT broker is not connected")
-		return false
-	return _manager.publish_json(topic, payload, 1, retain)
+func publish_rebirth() -> bool:
+	_born_devices.clear()
+	return _manager != null and _manager.publish_rebirth()
 
 
 func publish_che_birth(che: Dictionary) -> bool:
 	var device_id = _device_id(che)
 	if not _can_publish("DBIRTH", device_id):
 		return false
-	if not bool(che.get("powered_on", false)) or _born_devices.has(device_id):
+	if _born_devices.has(device_id):
 		return false
 	if not _manager.publish_device_birth(device_id, _che_metrics(che)):
 		return false
@@ -131,11 +134,23 @@ func publish_che_birth(che: Dictionary) -> bool:
 
 func publish_che_data(che: Dictionary) -> bool:
 	var device_id = _device_id(che)
-	if not _can_publish("DDATA", device_id) or not bool(che.get("powered_on", false)):
+	if not _can_publish("DDATA", device_id):
 		return false
 	if not _born_devices.has(device_id) and not publish_che_birth(che):
 		return false
 	if not _manager.publish_device_data(device_id, _che_metrics(che)):
+		return false
+	message_published.emit("DDATA", device_id)
+	return true
+
+
+func publish_command_result(che: Dictionary, metrics: Array) -> bool:
+	var device_id = _device_id(che)
+	if not _can_publish("DDATA", device_id):
+		return false
+	if not _born_devices.has(device_id) and not publish_che_birth(che):
+		return false
+	if not _manager.publish_device_data(device_id, metrics):
 		return false
 	message_published.emit("DDATA", device_id)
 	return true
@@ -203,15 +218,22 @@ func _on_publish_failed(message_type: String, topic: String, message: String):
 
 
 func _on_message_received(topic: String, payload: PackedByteArray):
-	var json = JSON.new()
-	if json.parse(payload.get_string_from_utf8()) != OK:
-		_reject("JSON", topic, "Message payload is not valid JSON")
+	if topic.begins_with("spBv1.0/"):
+		var parts = topic.split("/")
+		if parts.size() not in [4, 5] or str(parts[2]) not in ["NCMD", "DCMD"]:
+			return
+		var document = SPARKPLUG_MANAGER.decode_payload(payload)
+		if document.is_empty():
+			_reject("SPARKPLUG", topic, "Message payload is not valid Sparkplug protobuf")
+			return
+		var device_id = str(parts[4]) if parts.size() == 5 else ""
+		sparkplug_command_received.emit(
+			topic,
+			str(parts[2]),
+			device_id,
+			SPARKPLUG_MANAGER.metrics_by_name(document)
+		)
 		return
-	var data = json.get_data()
-	if not data is Dictionary:
-		_reject("JSON", topic, "Message payload must be a JSON object")
-		return
-	business_message_received.emit(topic, data)
 
 
 func _device_id(che: Dictionary) -> String:
@@ -233,6 +255,8 @@ func _che_metrics(che: Dictionary) -> Array:
 		{"name": "Position/Longitude", "type": "Double", "value": float(che.get("longitude", 0.0))},
 		{"name": "Position/HeadingTrueNorthDeg", "type": "Float", "value": float(che.get("rotation", 0.0))},
 		{"name": "Fuel/LevelPercent", "type": "Float", "value": float(che.get("fuel_level", 100.0))},
+		{"name": "Energy/LevelPercent", "type": "Float", "value": float(che.get("energy_level", che.get("battery_level", 0.0)))},
+		{"name": "Motion/DrivingSpeedMps", "type": "Float", "value": float(che.get("speed_mps", 0.0))},
 		{"name": "Fuel/ConsumptionRateLitersPerHour", "type": "Float", "value": float(che.get("fuel_consumption_rate_lph", 0.0))},
 		{"name": "Fuel/ConsumedLitersSinceStart", "type": "Float", "value": float(che.get("fuel_consumed_liters", 0.0))},
 		{"name": "Fuel/TankCapacityLiters", "type": "Float", "value": float(equipment.get("fuel_tank_capacity", 0.0))},

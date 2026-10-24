@@ -29,6 +29,7 @@ var node_id := "GODOT-SANDBOX"
 var client_id := "godot-terminal-sandbox"
 var username := ""
 var password := ""
+var node_birth_metrics: Array = []
 
 var sequence_number := 0
 var birth_death_sequence := 0
@@ -96,6 +97,10 @@ func configure(
 	password = p_password
 
 
+func set_node_birth_metrics(metrics: Array):
+	node_birth_metrics = metrics.duplicate(true)
+
+
 func connect_to_broker() -> bool:
 	_ensure_transport()
 	if _state == ConnectionState.CONNECTED:
@@ -144,20 +149,27 @@ func publish_device_death(device_id: String) -> bool:
 	return _publish("DDEATH", _topic("DDEATH", device_id), _payload(), 0)
 
 
+func publish_node_data(metrics: Array) -> bool:
+	return _publish("NDATA", _topic("NDATA"), _payload(metrics), 0)
+
+
 func publish_node_birth() -> bool:
 	var metrics = [
 		metric("bdSeq", "Int64", birth_death_sequence),
 		metric("Node Control/Rebirth", "Boolean", false),
 	]
+	metrics.append_array(node_birth_metrics)
 	return _publish("NBIRTH", _topic("NBIRTH"), _payload(metrics), 0)
+
+
+func publish_rebirth() -> bool:
+	_advance_bdseq()
+	sequence_number = 0
+	return publish_node_birth()
 
 
 func publish_node_death() -> bool:
 	return _publish("NDEATH", _topic("NDEATH"), _ndeath_payload(), 1)
-
-
-func publish_json(topic: String, payload: Dictionary, qos := 1, retain := false) -> bool:
-	return _publish("JSON", topic, JSON.stringify(payload).to_utf8_buffer(), qos, retain)
 
 
 func subscribe(topic: String, qos := 1) -> bool:
@@ -343,3 +355,116 @@ static func _varint(value: int) -> PackedByteArray:
 		remaining >>= 7
 	encoded.append(remaining & 0x7f)
 	return encoded
+
+
+static func decode_payload(payload: PackedByteArray) -> Dictionary:
+	var result = {"timestamp": null, "seq": null, "metrics": []}
+	var offset = 0
+	while offset < payload.size():
+		var field = _read_field(payload, offset)
+		if field.is_empty():
+			return {}
+		offset = int(field.next_offset)
+		match int(field.number):
+			1:
+				result.timestamp = field.value
+			2:
+				var metric_data = _decode_metric(field.value)
+				if not metric_data.is_empty():
+					result.metrics.append(metric_data)
+			3:
+				result.seq = field.value
+	return result
+
+
+static func metrics_by_name(document: Dictionary) -> Dictionary:
+	var result := {}
+	for metric_data in document.get("metrics", []):
+		var name = str(metric_data.get("name", ""))
+		if not name.is_empty():
+			result[name] = metric_data.get("value")
+	return result
+
+
+static func _decode_metric(payload: PackedByteArray) -> Dictionary:
+	var result = {"name": "", "datatype": 0, "value": null}
+	var offset = 0
+	while offset < payload.size():
+		var field = _read_field(payload, offset)
+		if field.is_empty():
+			return {}
+		offset = int(field.next_offset)
+		match int(field.number):
+			1:
+				result.name = (field.value as PackedByteArray).get_string_from_utf8()
+			4:
+				result.datatype = int(field.value)
+			10, 11:
+				result.value = int(field.value)
+			12:
+				result.value = (field.value as PackedByteArray).decode_float(0)
+			13:
+				result.value = (field.value as PackedByteArray).decode_double(0)
+			14:
+				result.value = bool(field.value)
+			15:
+				result.value = (field.value as PackedByteArray).get_string_from_utf8()
+	return result
+
+
+static func _read_field(payload: PackedByteArray, offset: int) -> Dictionary:
+	var key_data = _read_varint(payload, offset)
+	if key_data.is_empty():
+		return {}
+	var key = int(key_data.value)
+	var wire_type = key & 0x07
+	offset = int(key_data.next_offset)
+	var value = null
+	match wire_type:
+		0:
+			var varint_data = _read_varint(payload, offset)
+			if varint_data.is_empty():
+				return {}
+			value = varint_data.value
+			offset = int(varint_data.next_offset)
+		1:
+			if offset + 8 > payload.size():
+				return {}
+			value = payload.slice(offset, offset + 8)
+			offset += 8
+		2:
+			var length_data = _read_varint(payload, offset)
+			if length_data.is_empty():
+				return {}
+			offset = int(length_data.next_offset)
+			var length = int(length_data.value)
+			if offset + length > payload.size():
+				return {}
+			value = payload.slice(offset, offset + length)
+			offset += length
+		5:
+			if offset + 4 > payload.size():
+				return {}
+			value = payload.slice(offset, offset + 4)
+			offset += 4
+		_:
+			return {}
+	return {
+		"number": key >> 3,
+		"wire_type": wire_type,
+		"value": value,
+		"next_offset": offset,
+	}
+
+
+static func _read_varint(payload: PackedByteArray, offset: int) -> Dictionary:
+	var value = 0
+	var shift = 0
+	while offset < payload.size() and shift <= 63:
+		var byte = int(payload[offset])
+		offset += 1
+		value |= (byte & 0x7f) << shift
+		if (byte & 0x80) == 0:
+			return {"value": value, "next_offset": offset}
+		shift += 7
+	return {}
