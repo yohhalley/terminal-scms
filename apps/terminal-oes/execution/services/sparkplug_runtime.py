@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from django.core.exceptions import ValidationError
@@ -10,8 +11,24 @@ from execution.models import (
     EquipmentState,
     SimulationSession,
 )
-from execution.services.dispatch import apply_command_event
+from execution.services.dispatch import COMMAND_CANCEL, apply_command_event
+from execution.services.handoffs import (
+    ResultRejected,
+    apply_handoff_completed,
+    apply_handoff_timed_out,
+    record_conflict,
+)
 from execution.sparkplug import decode_payload, metrics_by_name, parse_topic
+
+logger = logging.getLogger(__name__)
+
+# Results Godot publishes for observability only (contract §3.3, §4 steps 5/6/11).
+INFORMATIONAL_EVENTS = {
+    "arrived_at_source",
+    "arrived_at_destination",
+    "waiting_for_handoff",
+    "wait_started",
+}
 
 
 NODE_ID_METRIC = "Session/Id"
@@ -124,34 +141,131 @@ def _apply_device_metrics(equipment, session, metrics, sequence, *, birth=False)
     if birth:
         equipment.last_birth_at = now
         changed.append("last_birth_at")
+        if equipment.idle_since_event_ms is None and session.start_epoch_ms is not None:
+            # D-014: a CHE never given an order is idle since the run started.
+            equipment.idle_since_event_ms = session.start_epoch_ms
+            changed.append("idle_since_event_ms")
     equipment.save(update_fields=list(dict.fromkeys(changed)))
     return equipment
 
 
-def _apply_command_result(metrics):
+def _optional_int(metrics, name):
+    value = metrics.get(name)
+    if value in {None, ""}:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _route_result(command, event, metrics, result_id):
+    """Apply one result. Returns the receipt status; raises ``ValidationError`` to reject."""
+    event_ms = _optional_int(metrics, "Event/TimeMs")
+    sim_ms = _optional_int(metrics, "Sim/TimeMs")
+    operation = command.assignment.operation
+    if command.command_type == COMMAND_CANCEL:
+        # TCL-014a: only a failed cancel is reported on the cancel's own id;
+        # the cancelled command gets ``cancelled`` (HeadlessSimulator.gd:399-403).
+        logger.warning("Cancel DCMD %s reported %s: %s", command.pk, event,
+                       metrics.get("Command/Result/Reason", ""))
+        return CommandResultReceipt.INFORMATIONAL
+    if event in INFORMATIONAL_EVENTS:
+        return CommandResultReceipt.INFORMATIONAL
+    expected_number = operation.order.container_number
+    reported_number = str(metrics.get("Command/Result/ContainerNumber") or "")
+    if expected_number and reported_number and reported_number != expected_number:
+        raise ResultRejected("container_number_mismatch")
+    if event == "handoff_completed":
+        apply_handoff_completed(command, metrics, result_id=result_id, event_ms=event_ms)
+        return CommandResultReceipt.APPLIED
+    if event == "handoff_timed_out":
+        raised = apply_handoff_timed_out(command, metrics, event_ms=event_ms, sim_ms=sim_ms)
+        return CommandResultReceipt.APPLIED if raised else CommandResultReceipt.INFORMATIONAL
+    if event == "container_picked_up" and operation.incoming_handoffs.exists():
+        # The receiver's pick is the hand-off itself; custody moves with
+        # container_transferred, not with a second pick event.
+        return CommandResultReceipt.INFORMATIONAL
+    if event == "container_dropped" and operation.outgoing_handoffs.exists():
+        raise ResultRejected("handoff_giver_drop", "A hand-off giver does not drop (Q8-R5).")
+    position_id = _optional_int(metrics, "Command/Result/PositionId")
+    apply_command_event(
+        command.pk,
+        event,
+        position_id=position_id or None,
+        reason=str(metrics.get("Command/Result/Reason", "")),
+        event_ms=event_ms,
+        source=metrics.get("Command/Result/Source") or None,
+    )
+    return CommandResultReceipt.APPLIED
+
+
+def _apply_command_result(metrics, session=None):
+    """B4/B5: apply a Godot result once per ``Command/Result/Id``.
+
+    A repeat is a no-op. A result that cannot be applied is stored as a
+    ``rejected`` receipt with a reason and logged, and never rolls back the
+    DDATA that carried it (telemetry and sequence tracking still apply).
+    """
     if "Command/Result/Id" not in metrics:
         return None
     result_id = _uuid(metrics["Command/Result/Id"], "Command/Result/Id")
     existing = CommandResultReceipt.objects.filter(pk=result_id).first()
     if existing:
+        if session is not None and existing.simulation_session_id not in {None, session.pk}:
+            logger.warning("Result id %s reused across sessions; ignored.", result_id)
         return existing
     command_id = _uuid(metrics.get("Command/Result/CommandId"), "Command/Result/CommandId")
     event = str(metrics.get("Command/Result/Event", ""))
-    command = EquipmentCommand.objects.select_for_update().get(pk=command_id)
-    receipt = CommandResultReceipt.objects.create(
+    command = EquipmentCommand.objects.select_for_update().select_related(
+        "assignment__operation__order", "assignment__equipment",
+    ).filter(pk=command_id).first()
+    if command is None:
+        logger.warning("Result %s names unknown command %s.", result_id, command_id)
+        return None
+    status = CommandResultReceipt.APPLIED
+    reason = ""
+    try:
+        with transaction.atomic():
+            status = _route_result(command, event, metrics, result_id)
+    except ResultRejected as exc:
+        status, reason = CommandResultReceipt.REJECTED, exc.reason_code
+        if exc.conflict:
+            record_conflict(exc.conflict)
+    except ValidationError as exc:
+        status, reason = CommandResultReceipt.REJECTED, "; ".join(exc.messages)[:120]
+    if status == CommandResultReceipt.REJECTED:
+        logger.warning("Result %s (%s) for command %s rejected: %s",
+                       result_id, event, command_id, reason)
+    return CommandResultReceipt.objects.create(
         result_id=result_id,
         command=command,
-        event=event,
+        simulation_session=session or command.simulation_session,
+        event=event[:40],
+        status=status,
+        reason=reason,
+        event_seq=_optional_int(metrics, "Sim/EventSeq"),
+        sim_time_ms=_optional_int(metrics, "Sim/TimeMs"),
         raw_metrics=metrics,
     )
-    position_id = metrics.get("Command/Result/PositionId")
-    apply_command_event(
-        command_id,
-        event,
-        position_id=int(position_id) if position_id not in {None, ""} else None,
-        reason=str(metrics.get("Command/Result/Reason", "")),
-    )
-    return receipt
+
+
+def _is_stale(session, metrics):
+    """B5: a DDATA from another session (late replay after a restart) is dropped."""
+    reported = metrics.get("Session/Id")
+    if reported in {None, ""}:
+        return False  # assumption A-7: older publishers omit Session/Id
+    try:
+        return uuid.UUID(str(reported)) != session.pk
+    except ValueError:
+        return True
+
+
+def _advance_sim_clock(session, metrics):
+    sim_ms = _optional_int(metrics, "Sim/TimeMs")
+    if sim_ms is not None and sim_ms > session.last_sim_time_ms:
+        session.last_sim_time_ms = sim_ms
+        session.save(update_fields=["last_sim_time_ms", "updated_at"])
 
 
 def _handle_nbirth(session, document, metrics):
@@ -167,6 +281,15 @@ def _handle_nbirth(session, document, metrics):
     session.heartbeat_at = now
     session.last_node_birth_at = now
     session.failure_reason = ""
+    # D-014 tie-break seed and the Event/TimeMs origin (contract §2.1, NBIRTH only).
+    seed = _optional_int(metrics, "Sim/Seed")
+    if seed is not None:
+        session.seed = seed
+    start_epoch = _optional_int(metrics, "Sim/StartEpochMs")
+    if start_epoch is not None:
+        session.start_epoch_ms = start_epoch
+    command_ttl_s = _optional_int(metrics, "Sim/Timing/CommandTtlS")
+    session.command_ttl_s = command_ttl_s if command_ttl_s and command_ttl_s > 0 else None
     session.save()
     EquipmentState.objects.filter(site=session.site).update(
         simulation_session=session,
@@ -221,8 +344,14 @@ def process_sparkplug_message(topic, raw_payload):
     session.save(update_fields=[
         "sparkplug_last_sequence", "sequence_gap_count", "heartbeat_at", "updated_at",
     ])
+    if message_type in {"NDATA", "DDATA"} and _is_stale(session, metrics):
+        session.stale_message_count += 1
+        session.save(update_fields=["stale_message_count", "updated_at"])
+        logger.warning("Dropped %s from another session on %s.", message_type, topic)
+        return session
+    _advance_sim_clock(session, metrics)
     if message_type == "NDATA":
-        return _apply_command_result(metrics) or session
+        return _apply_command_result(metrics, session) or session
 
     device_id = topic_parts["device_id"]
     equipment = _equipment_for_device(
@@ -254,5 +383,5 @@ def process_sparkplug_message(topic, raw_payload):
         document["seq"],
         birth=message_type == "DBIRTH",
     )
-    _apply_command_result(metrics)
+    _apply_command_result(metrics, session)
     return result

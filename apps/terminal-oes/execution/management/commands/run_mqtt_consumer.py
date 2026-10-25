@@ -15,7 +15,7 @@ class Command(BaseCommand):
     help = "Consume released orders, equipment state and command results from the UNS."
 
     def handle(self, *args, **options):
-        client = create_client("consumer", host_application=True)
+        client = create_client("consumer", host_application=True, persistent_session=True)
 
         def on_connect(connected_client, userdata, flags, reason_code, properties):
             if reason_code.is_failure:

@@ -4,11 +4,20 @@ from execution.models import OutboxEvent
 from execution.uns import execution_event_topic
 
 
-def queue_execution_event(order, event, *, operation=None, equipment=None, extra=None):
+def queue_execution_event(
+    order, event, *, operation=None, equipment=None, extra=None,
+    occurred_at=None, event_id=None,
+):
+    """Queue one ``scms.execution.event.v1`` business event.
+
+    ``occurred_at`` is the event time (contract §2.1, from ``Event/TimeMs``)
+    when the caller knows it; ``event_id`` lets a caller make the event id
+    deterministic (``container_transferred`` uses uuid5 of the HandoffId).
+    """
     data = {
         "event": event,
         "order_id": order.tos_order_id,
-        "occurred_at": timezone.now().isoformat(),
+        "occurred_at": (occurred_at or timezone.now()).isoformat(),
     }
     if operation:
         data["leg_id"] = operation.tos_leg_id
@@ -16,7 +25,9 @@ def queue_execution_event(order, event, *, operation=None, equipment=None, extra
         data["che_id"] = equipment.tos_che_id
     if extra:
         data.update(extra)
+    identity = {"event_id": event_id} if event_id else {}
     return OutboxEvent.objects.create(
+        **identity,
         topic=execution_event_topic(order.site, order.tos_order_id),
         schema="scms.execution.event.v1",
         payload={

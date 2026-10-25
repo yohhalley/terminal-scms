@@ -162,7 +162,32 @@ def launch_environment(session, token):
         "SPARKPLUG_GROUP_ID": session.sparkplug_group_id,
         "SPARKPLUG_NODE_ID": session.sparkplug_node_id,
         "SPARKPLUG_PRIMARY_HOST_ID": settings.SPARKPLUG_HOST_ID,
+        **simulation_settings_environment(session),
     }
+
+
+def simulation_settings_environment(session):
+    """TCL-028: the SIMULATOR_* sim settings for the runner claim environment.
+
+    Values set on OES (``settings.SIMULATOR_SIM_SETTINGS``) are forwarded as
+    strings. Per-session values win: a seed or start epoch already fixed on the
+    session (a rerun, D-016) and the session id as run id. The command TTL is
+    always sent so Godot and OES use the same sim-time TTL (default 600 s).
+    """
+    environment = {
+        name: str(value)
+        for name, value in getattr(settings, "SIMULATOR_SIM_SETTINGS", {}).items()
+        if name in settings.SIMULATOR_SIM_SETTING_NAMES
+    }
+    environment.setdefault("SIMULATOR_RUN_ID", str(session.pk))
+    if session.seed is not None:
+        environment["SIMULATOR_SEED"] = str(session.seed)
+    if session.start_epoch_ms is not None:
+        environment["SIMULATOR_START_EPOCH_MS"] = str(session.start_epoch_ms)
+    environment.setdefault(
+        "SIMULATOR_COMMAND_TTL_S", str(int(settings.EQUIPMENT_COMMAND_TTL_SIM_SECONDS)),
+    )
+    return environment
 
 
 def validate_session_token(session, token):
