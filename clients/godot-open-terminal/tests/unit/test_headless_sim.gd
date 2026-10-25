@@ -1,0 +1,544 @@
+extends SceneTree
+
+## TCL-014a: seed determinism, fixed-step sim clock, QC discharge state machine
+## (incl. late TT), HandoffId pairing, command type routing, result outbox and
+## MQTT packet-id wrap. Runs without a broker or OES.
+##
+##   godot --headless --path . --script tests/unit/test_headless_sim.gd
+
+const HeadlessSimulator = preload("res://source/headless/HeadlessSimulator.gd")
+const SimClock = preload("res://source/headless/SimClock.gd")
+const SimRandom = preload("res://source/headless/SimRandom.gd")
+const SimIds = preload("res://source/headless/SimIds.gd")
+const QcDischarge = preload("res://source/headless/QcDischarge.gd")
+const MQTTClient = preload("res://addons/mqtt/mqtt.gd")
+
+const SESSION_ID := "11111111-1111-4111-8111-111111111111"
+const SITE_ID := "22222222-2222-4222-8222-222222222222"
+const QC_ID := 1
+const TT_ID := 2
+const QC_LAT := 41.35
+const QC_LON := 2.17
+const HANDOFF_ID := "55555555-5555-4555-8555-555555555555"
+
+var _failed := false
+var _command_counter := 0
+
+
+class FakeSparkplugManager:
+	extends Node
+	var calls: Array = []
+	var connected := true
+
+	func is_broker_connected():
+		return connected
+
+	func publish_device_birth(device_id: String, metrics: Array = []):
+		calls.append(["DBIRTH", device_id, metrics])
+		return true
+
+	func publish_device_data(device_id: String, metrics: Array):
+		calls.append(["DDATA", device_id, metrics])
+		return true
+
+	func publish_device_result(device_id: String, metrics: Array):
+		calls.append(["RESULT", device_id, metrics])
+		return true
+
+	func publish_device_death(device_id: String):
+		calls.append(["DDEATH", device_id, []])
+		return true
+
+
+func _initialize():
+	_test_seed_determinism()
+	_test_result_ids()
+	_test_sim_clock()
+	_test_qc_state_machine_tt_early()
+	_test_qc_state_machine_tt_late()
+	_test_sim_qc_tt_late_end_to_end()
+	_test_sim_qc_tt_early_end_to_end()
+	_test_sim_replay_same_seed()
+	_test_command_type_routing()
+	_test_handoff_id_rules()
+	_test_configurable_qc_waits()
+	_test_result_outbox_replays_in_order()
+	_test_device_id_mapping()
+	_test_mqtt_packet_id_wraps()
+	_cleanup_state_file()
+	if not _failed:
+		print("Headless simulation checks passed")
+	quit(1 if _failed else 0)
+
+
+# --- seed -------------------------------------------------------------------
+
+func _test_seed_determinism():
+	var a = SimRandom.new(42)
+	var b = SimRandom.new(42)
+	var c = SimRandom.new(43)
+	var seq_a: Array = []
+	var seq_b: Array = []
+	var seq_c: Array = []
+	for leg in range(20):
+		for index in range(2):
+			seq_a.append(a.draw_wait_s("CHE_1", "leg:%d" % leg, index, 10, 30))
+			seq_b.append(b.draw_wait_s("CHE_1", "leg:%d" % leg, index, 10, 30))
+			seq_c.append(c.draw_wait_s("CHE_1", "leg:%d" % leg, index, 10, 30))
+	_assert(seq_a == seq_b, "Same seed must give the same wait sequence")
+	_assert(seq_a != seq_c, "A different seed must change the wait sequence")
+	for value in seq_a:
+		_assert(typeof(value) == TYPE_INT and value >= 10 and value <= 30, "Waits must be whole seconds in 10..30")
+	# Per-draw derivation: a draw does not depend on draws made before it.
+	var fresh = SimRandom.new(42)
+	_assert(fresh.draw_wait_s("CHE_1", "leg:7", 1, 10, 30) == seq_a[15], "A draw must not depend on earlier draws")
+	_assert(fresh.draw_wait_s("CHE_1", "leg:7", 1, 10, 30) == seq_a[15], "Repeating a draw must give the same value")
+	# Both bounds are reachable (uniform inclusive) over many keys.
+	var seen := {}
+	for leg in range(400):
+		seen[a.draw_wait_s("CHE_9", "leg:%d" % leg, 0, 10, 30)] = true
+	_assert(seen.has(10) and seen.has(30) and seen.size() == 21, "All 21 whole-second values 10..30 must be drawable")
+	_assert(SimRandom.parse_seed("123") == 123, "Integer seed text must parse")
+	_assert(SimRandom.parse_seed("abc", 7) == 7, "Invalid seed text must fall back")
+	_assert(SimRandom.fnv1a32("a") == 0xe40c292c, "FNV-1a must match the reference value")
+
+
+func _test_result_ids():
+	var uuid = RegEx.new()
+	uuid.compile("^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+	var a = SimRandom.new(1, "run-a")
+	var id_a = a.result_id(SESSION_ID, "cmd", "completed", 3)
+	_assert(uuid.search(id_a) != null, "Result ids must be UUID shaped (v8, RFC 4122 variant): %s" % id_a)
+	_assert(id_a == SimRandom.new(1, "run-a").result_id(SESSION_ID, "cmd", "completed", 3), "Result ids must be deterministic")
+	_assert(id_a != SimRandom.new(1, "run-b").result_id(SESSION_ID, "cmd", "completed", 3), "Result ids must include the run id")
+	_assert(id_a != a.result_id(SESSION_ID, "cmd", "completed", 4), "Result ids must differ per event")
+
+
+# --- clock ------------------------------------------------------------------
+
+func _test_sim_clock():
+	var clock = SimClock.new(100, 1.0)
+	_assert(clock.steps_for_real_delta(0.05) == 0, "Half a step of real time must not run a step")
+	_assert(clock.steps_for_real_delta(0.05) == 1, "Accumulated real time must run one step")
+	_assert(clock.now_ms == 0, "steps_for_real_delta must not advance the clock itself")
+	clock.step()
+	_assert(clock.now_ms == 100, "A step must advance sim time by the fixed step")
+	var fast = SimClock.new(100, 50.0)
+	_assert(fast.steps_for_real_delta(1.0) == 500, "x50 must run 500 x 100 ms steps per real second")
+	var odd_frames = SimClock.new(100, 1.0)
+	var total := 0
+	for frame in [0.016, 0.017, 0.033, 0.25, 0.684]:
+		total += odd_frames.steps_for_real_delta(frame)
+	_assert(total == 10, "Irregular frames must sum to whole steps of real time")
+	var stalled = SimClock.new(100, 50.0)
+	_assert(stalled.steps_for_real_delta(60.0) == SimClock.MAX_STEPS_PER_FRAME, "A stalled frame must be capped")
+	_assert(stalled.steps_for_real_delta(0.0) == 0, "The dropped backlog must not run later")
+	clock.restore(123400)
+	_assert(clock.now_ms == 123400, "Restore must set sim time")
+	_assert(is_equal_approx(SimClock.new(250, 1.0).step_seconds(), 0.25), "Step seconds must follow the fixed step")
+	_assert(SimClock.new(100, 0.0).time_scale >= 0.01, "Time scale must stay positive")
+
+
+# --- pure QC state machine ---------------------------------------------------
+
+func _qc_command() -> Dictionary:
+	return {"command_id": "c", "container_visit_id": 101, "transfer_position_id": 112, "handoff_id": HANDOFF_ID}
+
+
+func _names(events: Array) -> Array:
+	var names: Array = []
+	for item in events:
+		names.append(str(item.event))
+	return names
+
+
+func _test_qc_state_machine_tt_early():
+	var command = _qc_command()
+	var events = QcDischarge.start(command, 1000, 15000)
+	_assert(_names(events) == ["acknowledged", "started", "container_picked_up"], "D-012: the container appears on receipt")
+	_assert(str(events[0].work_state) == QcDischarge.COMMANDED, "Acknowledged is reported in commanded")
+	_assert(command.work_state == QcDischarge.HOLDING and int(command.load_container_visit_id) == 101, "QC holds the container at once")
+	_assert(int(command.wait_until_ms) == 16000, "Hold wait starts as soon as the QC has the container")
+	_assert(QcDischarge.step(command, 15900, 7).is_empty(), "A ready TT must not shorten the hold wait")
+	events = QcDischarge.step(command, 16000, 7)
+	_assert(_names(events) == ["container_dropped", "handoff_completed", "completed"], "Deposit at hold end when TT is ready")
+	_assert(int(events[0].position_id) == 112 and int(events[1].counterpart_che_id) == 7, "Deposit reports position and TT")
+	_assert(str(events[1].get("handoff_role", "")) == "giver", "QC is the giver in discharge")
+	_assert(QcDischarge.is_finished(command) and int(command.load_container_visit_id) == 0, "QC ends empty in done")
+	_assert(not QcDischarge.new().has_method("picking"), "No picking phase exists")
+
+
+func _test_qc_state_machine_tt_late():
+	var command = _qc_command()
+	QcDischarge.start(command, 0, 10000)
+	_assert(QcDischarge.step(command, 9900, 0).is_empty(), "Nothing happens during the hold wait")
+	var events = QcDischarge.step(command, 10000, 0)
+	_assert(_names(events) == ["waiting_for_handoff"], "Hold end without a TT must wait for the TT")
+	_assert(command.work_state == QcDischarge.WAITING_FOR_TT and int(command.wait_until_ms) == 0, "QC enters waiting_for_tt")
+	_assert(QcDischarge.step(command, 45000, 0).is_empty(), "QC keeps waiting while no TT is ready")
+	events = QcDischarge.step(command, 45100, 9)
+	_assert(_names(events) == ["container_dropped", "handoff_completed", "completed"], "Deposit as soon as the late TT is ready")
+	_assert(int(events[2].counterpart_che_id) == 9, "Completion names the TT")
+
+
+# --- simulator end to end ------------------------------------------------------
+
+func _new_simulator(run_seed: int, tt_lat: float) -> HeadlessSimulator:
+	_cleanup_state_file()
+	var simulator = HeadlessSimulator.new()
+	var fake = FakeSparkplugManager.new()
+	simulator._session_id = SESSION_ID
+	simulator._site_id = SITE_ID
+	simulator._configuration_revision = 7
+	simulator._configuration_checksum = "checksum-7"
+	simulator._mqtt._manager = fake
+	simulator._mqtt._connected = true
+	simulator._mqtt_connected = true
+	simulator._random = SimRandom.new(run_seed, "test-run")
+	simulator._clock = SimClock.new(100, 1.0)
+	simulator._start_epoch_ms = 1764583200000
+	simulator._ches = {
+		QC_ID: _che(QC_ID, "QC01", QC_LAT, QC_LON),
+		TT_ID: _che(TT_ID, "TT01", tt_lat, QC_LON),
+	}
+	return simulator
+
+
+func _che(id: int, name: String, lat: float, lon: float) -> Dictionary:
+	return {
+		"pk": id, "name": name, "powered_on": true, "working": false, "is_available": true,
+		"is_dispatched": false, "is_in_maintenance": false, "latitude": lat, "longitude": lon,
+	}
+
+
+func _free_simulator(simulator):
+	var fake = simulator._mqtt._manager
+	simulator._mqtt.free()
+	simulator._bootstrap.free()
+	simulator.free()
+	fake.free()
+	_cleanup_state_file()
+
+
+func _cleanup_state_file():
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://simulation_runtime_state.json"))
+
+
+func _command(che_id: int, extra: Dictionary) -> Dictionary:
+	_command_counter += 1
+	var metrics = {
+		"Command/Id": "33333333-3333-4333-8333-%012d" % _command_counter,
+		"Command/CheId": che_id,
+		"Command/SessionId": SESSION_ID,
+		"Command/SiteId": SITE_ID,
+		"Command/ConfigurationRevision": 7,
+		"Command/ExpiresAtMs": int(Time.get_unix_time_from_system() * 1000.0) + 60000,
+		"Command/AssignmentId": "44444444-4444-4444-8444-444444444444",
+	}
+	for key in extra:
+		metrics[key] = extra[key]
+	return metrics
+
+
+func _send(simulator, che_id: int, metrics: Dictionary):
+	var device_id = SimIds.device_id_for(che_id, simulator._ches)
+	simulator._on_sparkplug_command("spBv1.0/G/DCMD/N/%s" % device_id, "DCMD", device_id, metrics)
+
+
+func _qc_metrics() -> Dictionary:
+	return {
+		"Command/Type": "qc_discharge", "Command/OrderId": 41, "Command/LegId": 4101,
+		"Command/ContainerVisitId": 101, "Command/ContainerNumber": "MSCU1234565",
+		"Command/HandoffId": HANDOFF_ID, "Command/CounterpartCheId": TT_ID,
+		"Command/DestinationInventoryPositionId": 112, "Command/MoveKind": "discharge",
+	}
+
+
+func _tt_metrics() -> Dictionary:
+	return {
+		"Command/Type": "execute_order_leg", "Command/OrderId": 41, "Command/LegId": 4102,
+		"Command/ContainerVisitId": 101, "Command/HandoffId": HANDOFF_ID, "Command/CounterpartCheId": QC_ID,
+		"Command/SourcePositionId": 112, "Command/SourceLatitude": QC_LAT, "Command/SourceLongitude": QC_LON,
+		"Command/DestinationLatitude": QC_LAT + 0.001, "Command/DestinationLongitude": QC_LON,
+		"Command/DestinationInventoryPositionId": 900,
+	}
+
+
+func _run_steps(simulator, max_steps: int):
+	for _i in range(max_steps):
+		simulator._clock.step()
+		simulator._simulation_step(simulator._clock.step_seconds())
+		if simulator._active_commands.is_empty():
+			return
+
+
+## Decoded command results in publish order: [{device, metrics by name}].
+func _results(simulator) -> Array:
+	var out: Array = []
+	for call in simulator._mqtt._manager.calls:
+		if str(call[0]) != "RESULT":
+			continue
+		var by_name := {}
+		for metric in call[2]:
+			by_name[str(metric.name)] = metric.value
+		out.append({"device": str(call[1]), "m": by_name})
+	return out
+
+
+func _events_of(results: Array, device: String) -> Array:
+	var names: Array = []
+	for item in results:
+		if item.device == device:
+			names.append(str(item.m["Command/Result/Event"]))
+	return names
+
+
+func _find(results: Array, device: String, event: String) -> Dictionary:
+	for item in results:
+		if item.device == device and str(item.m["Command/Result/Event"]) == event:
+			return item.m
+	return {}
+
+
+func _test_sim_qc_tt_late_end_to_end():
+	# TT starts 400 m away at 4 m/s: it reaches the QC after ~100 s, after the hold wait (<= 30 s).
+	var simulator = _new_simulator(42, QC_LAT - 0.0036)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(simulator._active_commands.size() == 2, "QC and TT commands must both be accepted")
+	_run_steps(simulator, 3000)
+	_assert(simulator._active_commands.is_empty(), "QC and TT must both finish")
+	var results = _results(simulator)
+	var qc_events = _events_of(results, "CHE_1")
+	_assert(qc_events == [
+		"acknowledged", "started", "container_picked_up", "waiting_for_handoff",
+		"container_dropped", "handoff_completed", "completed",
+	], "Late TT: QC event order: %s" % [qc_events])
+	var tt_events = _events_of(results, "CHE_2")
+	_assert(tt_events == [
+		"acknowledged", "started", "arrived_at_source", "waiting_for_handoff",
+		"container_picked_up", "handoff_completed", "container_dropped", "completed",
+	], "Late TT: TT event order: %s" % [tt_events])
+	var picked = _find(results, "CHE_1", "container_picked_up")
+	var waiting = _find(results, "CHE_1", "waiting_for_handoff")
+	var arrived = _find(results, "CHE_2", "arrived_at_source")
+	var dropped = _find(results, "CHE_1", "container_dropped")
+	var pick_ms = int(picked["Sim/TimeMs"])
+	var hold_s = SimRandom.new(42).draw_wait_s("CHE_1", "leg:4101", 0, 10, 30)
+	_assert(pick_ms == 0, "D-012: the container appears when the command arrives (%s ms)" % pick_ms)
+	_assert(int(waiting["Sim/TimeMs"]) == pick_ms + hold_s * 1000, "QC waits for the TT exactly at the seeded hold-wait end")
+	_assert(int(dropped["Sim/TimeMs"]) == int(arrived["Sim/TimeMs"]), "Deposit must happen when the late TT is ready")
+	_assert(int(dropped["Command/Result/PositionId"]) == 112, "container_dropped must carry the transfer PositionId")
+	_assert(int(dropped["Command/Result/ContainerVisitId"]) == 101, "Results must carry ContainerVisitId")
+	_assert(int(dropped["Command/Result/CounterpartCheId"]) == TT_ID, "QC deposit must name the TT")
+	_assert(str(dropped["Command/Result/ContainerNumber"]) == "MSCU1234565", "Results echo the container number")
+	_assert(str(dropped["Command/Result/MoveKind"]) == "discharge", "MoveKind is echoed back unchanged")
+	_assert(str(dropped["Session/Id"]) == SESSION_ID, "Session/Id must be on every result")
+	_assert(int(dropped["Event/TimeMs"]) == 1764583200000 + int(dropped["Sim/TimeMs"]), "Event/TimeMs = StartEpochMs + Sim/TimeMs")
+	var qc_handoff = _find(results, "CHE_1", "handoff_completed")
+	var tt_handoff = _find(results, "CHE_2", "handoff_completed")
+	_assert(str(qc_handoff["Command/Result/HandoffId"]) == HANDOFF_ID and str(tt_handoff["Command/Result/HandoffId"]) == HANDOFF_ID, "Both sides report the HandoffId")
+	_assert(str(qc_handoff["Command/Result/HandoffRole"]) == "giver", "QC handoff role is giver")
+	_assert(str(tt_handoff["Command/Result/HandoffRole"]) == "receiver", "TT handoff role is receiver")
+	_assert(int(tt_handoff["Command/Result/CounterpartCheId"]) == QC_ID, "TT handoff names the QC")
+	_assert(str(_find(results, "CHE_1", "acknowledged")["Work/State"]) == "commanded", "Acknowledged is published in commanded")
+	_assert(str(waiting["Work/State"]) == "waiting_for_tt", "QC Work/State waiting_for_tt")
+	_assert(str(_find(results, "CHE_1", "completed")["Work/State"]) == "done", "QC Work/State done on completion")
+	var seqs: Array = []
+	for item in results:
+		seqs.append(int(item.m["Sim/EventSeq"]))
+	var sorted_seqs = seqs.duplicate()
+	sorted_seqs.sort()
+	_assert(seqs == sorted_seqs and seqs.size() == results.size(), "Sim/EventSeq must increase in publish order")
+	_assert(not bool(simulator._ches[QC_ID].working) and bool(simulator._ches[QC_ID].is_available), "QC is idle again")
+	_free_simulator(simulator)
+
+
+func _test_sim_qc_tt_early_end_to_end():
+	# TT starts at the transfer point: it is ready before the hold wait ends, so the QC never waits.
+	var simulator = _new_simulator(7, QC_LAT)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_run_steps(simulator, 3000)
+	var results = _results(simulator)
+	_assert(not _events_of(results, "CHE_1").has("waiting_for_handoff"), "Early TT: QC must not wait")
+	var picked = _find(results, "CHE_1", "container_picked_up")
+	var dropped = _find(results, "CHE_1", "container_dropped")
+	var hold_s = SimRandom.new(7).draw_wait_s("CHE_1", "leg:4101", 0, 10, 30)
+	_assert(int(dropped["Sim/TimeMs"]) == int(picked["Sim/TimeMs"]) + hold_s * 1000, "Early TT: deposit at hold-wait end")
+	_assert(simulator._active_commands.is_empty(), "Early TT: both commands finish")
+	_free_simulator(simulator)
+
+
+func _trace(run_seed: int) -> Array:
+	var simulator = _new_simulator(run_seed, QC_LAT - 0.0036)
+	_command_counter = 100
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_run_steps(simulator, 3000)
+	var trace: Array = []
+	for item in _results(simulator):
+		trace.append([item.device, item.m["Command/Result/Event"], int(item.m["Sim/TimeMs"]), item.m["Command/Result/Id"]])
+	_free_simulator(simulator)
+	return trace
+
+
+func _test_sim_replay_same_seed():
+	var first = _trace(1234)
+	var second = _trace(1234)
+	var other = _trace(4321)
+	_assert(not first.is_empty() and first == second, "Same seed and inputs must replay the same events, times and ids")
+	_assert(first != other, "A different seed must change the run")
+
+
+# --- command routing and validation ---------------------------------------------
+
+func _last_result(simulator) -> Dictionary:
+	var results = _results(simulator)
+	return results[-1].m if not results.is_empty() else {}
+
+
+func _test_command_type_routing():
+	var simulator = _new_simulator(1, QC_LAT)
+	var legacy = _command(TT_ID, {"Command/DestinationLatitude": QC_LAT + 0.001, "Command/DestinationLongitude": QC_LON})
+	_send(simulator, TT_ID, legacy)
+	_assert(simulator._active_commands.has(TT_ID), "A DCMD without Command/Type stays execute_order_leg")
+	_assert(str(simulator._active_commands[TT_ID].command_type) == "execute_order_leg", "Legacy type is execute_order_leg")
+	_assert(not simulator._active_commands[TT_ID].has("tt_phase"), "Legacy commands keep legacy movement")
+	_send(simulator, QC_ID, _command(QC_ID, {"Command/Type": "qc_load", "Command/HandoffId": "h"}))
+	var last = _last_result(simulator)
+	_assert(str(last["Command/Result/Event"]) == "failed" and str(last["Command/Result/Reason"]).begins_with("Unsupported command type"), "Unknown types are rejected")
+	_assert(not simulator._active_commands.has(QC_ID), "A rejected type creates no action")
+	var no_handoff = _qc_metrics()
+	no_handoff.erase("Command/HandoffId")
+	_send(simulator, QC_ID, _command(QC_ID, no_handoff))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]).contains("HandoffId"), "qc_discharge needs a HandoffId")
+	var bad_number = _qc_metrics()
+	bad_number["Command/ContainerNumber"] = "MSC-1234"
+	_send(simulator, QC_ID, _command(QC_ID, bad_number))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]).contains("Container number"), "Malformed container numbers are rejected")
+	_assert(HeadlessSimulator.is_container_number_format("MSCU1234565"), "A well-formed container number passes")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_assert(simulator._active_commands.has(QC_ID), "A valid qc_discharge is accepted")
+	_free_simulator(simulator)
+
+
+func _test_handoff_id_rules():
+	var simulator = _new_simulator(1, QC_LAT - 0.0036)
+	simulator._ches[3] = _che(3, "TT02", QC_LAT - 0.0036, QC_LON)
+	simulator._ches[4] = _che(4, "QC02", QC_LAT, QC_LON)
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	var second_tt = _tt_metrics()
+	second_tt["Command/CounterpartCheId"] = QC_ID
+	_send(simulator, 3, _command(3, second_tt))
+	_assert(not simulator._active_commands.has(3), "A second receiver for the same HandoffId is rejected")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]).contains("HandoffId"), "Rejection names the HandoffId")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, 4, _command(4, _qc_metrics()))
+	_assert(simulator._active_commands.has(QC_ID) and not simulator._active_commands.has(4), "A second giver for the same HandoffId is rejected")
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "CHE already has an active command", "A TT holds one handoff at a time")
+	# Pairing is by HandoffId, not by container: a TT with the same container but another HandoffId is never used.
+	var simulator2 = _new_simulator(1, QC_LAT)
+	var other_tt = _tt_metrics()
+	other_tt["Command/HandoffId"] = "66666666-6666-4666-8666-666666666666"
+	var qc = _qc_metrics()
+	qc.erase("Command/CounterpartCheId")
+	_send(simulator2, QC_ID, _command(QC_ID, qc))
+	_send(simulator2, TT_ID, _command(TT_ID, other_tt))
+	_run_steps(simulator2, 1200)
+	_assert(simulator2._active_commands.has(QC_ID), "QC must keep waiting when only a TT with another HandoffId is present")
+	_assert(str(simulator2._active_commands[QC_ID].work_state) == "waiting_for_tt", "QC waits for its own HandoffId")
+	_free_simulator(simulator2)
+	_free_simulator(simulator)
+
+
+func _test_configurable_qc_waits():
+	var simulator = _new_simulator(5, QC_LAT)
+	_assert(simulator.configure_qc_wait("hold", "4", "4"), "A valid hold range must apply")
+	_assert(not simulator.configure_qc_wait("hold", "9", "2"), "min > max must be rejected")
+	_assert(not simulator.configure_qc_wait("hold", "x", "3"), "Non-integer bounds must be rejected")
+	_assert(not simulator.configure_qc_wait("pick", "3", "3"), "D-012: there is no pick wait to configure")
+	_assert(simulator._qc_wait_s.keys() == ["hold"] and simulator._qc_wait_s.hold == [4, 4], "Rejected ranges keep the last valid range")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	var command = simulator._active_commands[QC_ID]
+	_assert(int(command.hold_wait_ms) == 4000 and int(command.wait_until_ms) == 4000, "Configured hold wait applies from receipt")
+	var defaults = HeadlessSimulator.new()
+	_assert(defaults._qc_wait_s.hold == [10, 30], "Default hold wait is 10..30 s")
+	defaults._mqtt.free()
+	defaults._bootstrap.free()
+	defaults.free()
+	_free_simulator(simulator)
+
+
+func _test_result_outbox_replays_in_order():
+	var simulator = _new_simulator(2, QC_LAT)
+	var fake = simulator._mqtt._manager
+	simulator._mqtt_connected = false
+	fake.connected = false
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_run_steps(simulator, 400)
+	_assert(_results(simulator).is_empty(), "No results go out while disconnected")
+	var buffered = simulator._result_outbox.size()
+	_assert(buffered >= 3, "Results are buffered while disconnected (%s)" % buffered)
+	var restarted = HeadlessSimulator.new()
+	restarted._session_id = SESSION_ID
+	restarted._site_id = SITE_ID
+	restarted._configuration_revision = 7
+	restarted._configuration_checksum = "checksum-7"
+	restarted._ches = {QC_ID: _che(QC_ID, "QC01", QC_LAT, QC_LON)}
+	restarted._load_runtime_state()
+	restarted._restore_runtime_state()
+	_assert(restarted._result_outbox.size() == buffered, "The outbox survives a same-session restart")
+	var lost_ms = simulator._clock.now_ms - restarted._clock.now_ms
+	_assert(lost_ms >= 0 and lost_ms <= HeadlessSimulator.SIM_TIME_CHECKPOINT_MS, "Sim time survives a restart within one checkpoint (%s ms lost)" % lost_ms)
+	restarted._mqtt.free()
+	restarted._bootstrap.free()
+	restarted.free()
+	fake.connected = true
+	simulator._mqtt_connected = true
+	simulator._flush_result_outbox()
+	var events: Array = []
+	var seqs: Array = []
+	for item in _results(simulator):
+		events.append(str(item.m["Command/Result/Event"]))
+		seqs.append(int(item.m["Sim/EventSeq"]))
+	_assert(events.size() == buffered and simulator._result_outbox.is_empty(), "Every pending result is replayed after reconnect")
+	_assert(events.slice(0, 4) == ["acknowledged", "started", "container_picked_up", "waiting_for_handoff"], "Replay keeps publish order: %s" % [events])
+	var sorted_seqs = seqs.duplicate()
+	sorted_seqs.sort()
+	_assert(seqs == sorted_seqs, "Replayed results keep their EventSeq order")
+	_free_simulator(simulator)
+
+
+func _test_device_id_mapping():
+	var che = {"pk": 12, "name": "QC01"}
+	_assert(SimIds.device_id(che) == "CHE_12", "Legacy device id is CHE_{id}")
+	SimIds.use_che_name = true
+	_assert(SimIds.device_id(che) == "QC01", "Name mode uses MiniTOS Che.name")
+	_assert(SimIds.device_id({"pk": 3, "name": ""}) == "CHE_3", "Name mode falls back when the name is empty")
+	_assert(SimIds.device_id({"pk": 3, "name": "TT/1"}) == "TT_1", "Device ids are sanitised for Sparkplug")
+	SimIds.use_che_name = false
+	_assert(SimIds.device_id({"pk": 3, "device_id": "RTG01"}) == "RTG01", "An explicit device_id wins")
+
+
+func _test_mqtt_packet_id_wraps():
+	var client = MQTTClient.new()
+	_assert(client.next_packet_id() == 1, "First packet id is 1")
+	client.pid = 65534
+	_assert(client.next_packet_id() == 65535, "65535 is a valid packet id")
+	_assert(client.next_packet_id() == 1, "Packet id wraps from 65535 to 1, never 0")
+	client.pid = 0
+	for _i in range(70000):
+		var value = client.next_packet_id()
+		if value < 1 or value > 65535:
+			_assert(false, "Packet id out of range: %s" % value)
+			break
+	client.free()
+
+
+func _assert(condition: bool, message: String):
+	if condition:
+		return
+	push_error(message)
+	_failed = true
