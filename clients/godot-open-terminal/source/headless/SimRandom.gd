@@ -49,7 +49,9 @@ func derive_seed(parts: Array) -> int:
 
 
 ## Whole seconds, uniform over [min_s, max_s] inclusive.
-func draw_wait_s(che_key: String, command_key: String, wait_index: int, min_s: int, max_s: int) -> int:
+func draw_wait_s(
+	che_key: String, command_key: String, wait_index: int, min_s: int, max_s: int
+) -> int:
 	var low = mini(min_s, max_s)
 	var high = maxi(min_s, max_s)
 	_rng.seed = derive_seed(["wait", che_key, command_key, wait_index])
@@ -64,6 +66,7 @@ func result_id(session_id: String, command_id: String, event: String, event_seq:
 	var b = fnv1a32("1|" + key)
 	var c = fnv1a32("2|" + key)
 	var d = fnv1a32("3|" + key)
-	return "%08x-%04x-8%03x-%04x-%04x%08x" % [
-		a, (b >> 16) & 0xffff, b & 0xfff, ((c >> 16) & 0x3fff) | 0x8000, c & 0xffff, d
-	]
+	return (
+		"%08x-%04x-8%03x-%04x-%04x%08x"
+		% [a, (b >> 16) & 0xffff, b & 0xfff, ((c >> 16) & 0x3fff) | 0x8000, c & 0xffff, d]
+	)

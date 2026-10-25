@@ -14,6 +14,8 @@ const TT_AT_SOURCE_WAITING := "at_source_waiting"
 const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
 const DEFAULT_QC_WAIT_MIN_S := 10
 const DEFAULT_QC_WAIT_MAX_S := 30
+## Sim time is checkpointed at least this often, so a restart loses at most this much.
+const SIM_TIME_CHECKPOINT_MS := 1000
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 
 var _bootstrap := OESBootstrapClient.new()
@@ -43,9 +45,9 @@ var _clock := SimClock.new()
 var _random := SimRandom.new()
 var _event_seq := 0
 var _start_epoch_ms := 0
-## Seconds, inclusive, per QC wait step ("pick" = wait #1, "hold" = wait #2).
+var _last_checkpoint_sim_ms := 0
+## Whole seconds, inclusive, per QC wait step. D-012: only the hold wait exists.
 var _qc_wait_s := {
-	"pick": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
 	"hold": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
 }
 
@@ -87,7 +89,7 @@ func _configure_simulation():
 	_mqtt.session_id = _session_id
 	var default_min = _env_any(["SIMULATOR_QC_WAIT_MIN_S", "SIM_QC_WAIT_MIN_S"], str(DEFAULT_QC_WAIT_MIN_S))
 	var default_max = _env_any(["SIMULATOR_QC_WAIT_MAX_S", "SIM_QC_WAIT_MAX_S"], str(DEFAULT_QC_WAIT_MAX_S))
-	for step_name in ["pick", "hold"]:
+	for step_name in _qc_wait_s.keys():
 		var upper = step_name.to_upper()
 		configure_qc_wait(
 			step_name,
@@ -99,6 +101,9 @@ func _configure_simulation():
 ## Sets the inclusive whole-second range of one QC wait step. Invalid values keep
 ## the 10..30 s default. Returns true when the given range was applied.
 func configure_qc_wait(step_name: String, min_text: String, max_text: String) -> bool:
+	if not _qc_wait_s.has(step_name):
+		push_warning("Unknown QC wait step %s" % step_name)
+		return false
 	var low_text = min_text.strip_edges()
 	var high_text = max_text.strip_edges()
 	if low_text.is_valid_int() and high_text.is_valid_int():
@@ -135,6 +140,8 @@ func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		if _active_commands.has(che_id) and _is_qc_command(_active_commands[che_id]):
 			_step_qc(int(che_id), _ches[che_id], _active_commands[che_id])
+	if _clock.now_ms - _last_checkpoint_sim_ms >= SIM_TIME_CHECKPOINT_MS:
+		_save_runtime_state()
 
 
 func _load_bootstrap():
@@ -314,6 +321,10 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 		if int(metrics.get("Command/ContainerVisitId", 0)) <= 0:
 			_publish_command_result(che_id, command_id, "failed", 0, "qc_discharge requires Command/ContainerVisitId")
 			return
+	var handoff_id = str(metrics.get("Command/HandoffId", "")).strip_edges()
+	if not handoff_id.is_empty() and _handoff_side_taken(handoff_id, command_type == COMMAND_QC_DISCHARGE):
+		_publish_command_result(che_id, command_id, "failed", 0, "HandoffId is already held by another active command")
+		return
 	var che: Dictionary = _ches[che_id]
 	if not bool(che.get("powered_on", false)) or bool(che.get("is_in_maintenance", false)):
 		_publish_command_result(che_id, command_id, "failed", 0, "CHE is not executable")
@@ -327,9 +338,8 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	_active_commands[che_id] = command
 	if command_type == COMMAND_QC_DISCHARGE:
 		var command_key = _command_seed_key(command)
-		var pick_s = _draw_qc_wait_s(che, command_key, 0, "pick")
-		var hold_s = _draw_qc_wait_s(che, command_key, 1, "hold")
-		var events = QcDischarge.start(command, _clock.now_ms, pick_s * 1000, hold_s * 1000)
+		var hold_s = _draw_qc_wait_s(che, command_key, 0, "hold")
+		var events = QcDischarge.start(command, _clock.now_ms, hold_s * 1000)
 		_active_commands[che_id] = command
 		_save_runtime_state()
 		_publish_events(che_id, command, events)
@@ -371,6 +381,16 @@ func _build_command(command_type: String, command_id: String, metrics: Dictionar
 		var transfer_id = int(command.destination_inventory_position_id)
 		command["transfer_position_id"] = transfer_id if transfer_id > 0 else int(command.destination_position_id)
 	return command
+
+
+## One HandoffId per transfer: each side (QC giver, TT receiver) can be held by
+## one active command only. A CHE holds one active command, so a TT also holds
+## at most one handoff.
+func _handoff_side_taken(handoff_id: String, qc_side: bool) -> bool:
+	for other in _active_commands.values():
+		if str(other.get("handoff_id", "")) == handoff_id and _is_qc_command(other) == qc_side:
+			return true
+	return false
 
 
 func _is_qc_command(command: Dictionary) -> bool:
@@ -457,7 +477,7 @@ func _complete_tt_handoff(tt_id: int, qc_id: int):
 		position_id = int(command.get("source_position_id", 0))
 	_publish_events(tt_id, command, [
 		{"event": "container_picked_up", "position_id": position_id, "counterpart_che_id": qc_id},
-		{"event": "handoff_completed", "position_id": position_id, "counterpart_che_id": qc_id},
+		{"event": "handoff_completed", "position_id": position_id, "counterpart_che_id": qc_id, "handoff_role": "receiver"},
 	])
 
 
@@ -468,6 +488,8 @@ func _publish_events(che_id: int, command: Dictionary, events: Array):
 			context["counterpart_che_id"] = int(item.counterpart_che_id)
 		if item.has("work_state"):
 			context["work_state"] = str(item.work_state)
+		if item.has("handoff_role"):
+			context["handoff_role"] = str(item.handoff_role)
 		_publish_command_result(
 			che_id, str(command.command_id), str(item.event), int(item.get("position_id", 0)), "", "", context
 		)
@@ -639,6 +661,8 @@ func _result_context_metrics(context: Dictionary) -> Array:
 		metrics.append({"name": "Command/Result/HandoffId", "type": "String", "value": str(context.handoff_id)})
 	if int(context.get("counterpart_che_id", 0)) > 0:
 		metrics.append({"name": "Command/Result/CounterpartCheId", "type": "Int64", "value": int(context.counterpart_che_id)})
+	if not str(context.get("handoff_role", "")).is_empty():
+		metrics.append({"name": "Command/Result/HandoffRole", "type": "String", "value": str(context.handoff_role)})
 	if not str(context.get("move_kind", "")).is_empty():
 		metrics.append({"name": "Command/Result/MoveKind", "type": "String", "value": str(context.move_kind)})
 	var work_state = str(context.get("work_state", context.get("tt_phase", "")))
@@ -728,6 +752,7 @@ func _restore_runtime_state():
 func _save_runtime_state():
 	if _session_id.is_empty() or _site_id.is_empty() or _configuration_revision <= 0:
 		return
+	_last_checkpoint_sim_ms = _clock.now_ms
 	var file = FileAccess.open(RUNTIME_STATE_PATH, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify({
