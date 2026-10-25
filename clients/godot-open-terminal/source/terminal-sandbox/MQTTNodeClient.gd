@@ -18,6 +18,9 @@ var _connected := false
 var _disconnect_requested := false
 ## When set (headless sessions), Session/Id is added to every DBIRTH and DDATA.
 var session_id := ""
+## Headless sessions set the sim clock (ms) before each publish; it is added
+## as Sim/TimeMs to DBIRTH/DDATA so OES has a sim-time source. -1 = not set.
+var sim_time_ms := -1
 
 
 func _ready():
@@ -252,6 +255,8 @@ func _che_metrics(che: Dictionary) -> Array:
 	var metrics = _equipment_metrics(che)
 	if not session_id.is_empty():
 		metrics.append({"name": "Session/Id", "type": "String", "value": session_id})
+	if sim_time_ms >= 0:
+		metrics.append({"name": "Sim/TimeMs", "type": "Int64", "value": sim_time_ms})
 	return metrics
 
 

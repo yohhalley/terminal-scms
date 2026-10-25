@@ -715,6 +715,7 @@ func _publish_when_due(che: Dictionary):
 
 
 func _publish_equipment_state(che: Dictionary, _force := false):
+	_mqtt.sim_time_ms = _clock.now_ms
 	if _mqtt_connected and _mqtt.publish_che_data(che):
 		_last_publish_ms[int(che.pk)] = _clock.now_ms
 		_save_runtime_state()
@@ -780,6 +781,7 @@ func _result_context_metrics(context: Dictionary) -> Array:
 
 func _flush_result_outbox():
 	var sent := 0
+	_mqtt.sim_time_ms = _clock.now_ms
 	while not _result_outbox.is_empty() and _mqtt_connected:
 		var item: Dictionary = _result_outbox[0]
 		var che_id = int(item.get("che_id", 0))

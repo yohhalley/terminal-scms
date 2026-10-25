@@ -65,6 +65,7 @@ func _initialize():
 	_test_command_type_routing()
 	_test_handoff_id_rules()
 	_test_cancel_releases_che()
+	_test_periodic_ddata_carries_sim_time()
 	_test_command_expiry_uses_sim_time()
 	_test_sim_tt_no_show_then_cancel()
 	_test_configurable_qc_waits()
@@ -537,6 +538,31 @@ func _leg(che_id: int, expires_at) -> Dictionary:
 	else:
 		metrics["Command/ExpiresAtMs"] = expires_at
 	return metrics
+
+
+func _test_periodic_ddata_carries_sim_time():
+	var simulator = _new_simulator(1, QC_LAT)
+	simulator._mqtt.session_id = SESSION_ID
+	simulator._clock.restore(40000)
+	for _i in range(250):
+		simulator._clock.step()
+		simulator._simulation_step(simulator._clock.step_seconds())
+	var samples: Array = []
+	for call in simulator._mqtt._manager.calls:
+		if str(call[0]) != "DDATA":
+			continue
+		var by_name := {}
+		for metric in call[2]:
+			by_name[str(metric.name)] = metric.value
+		samples.append(by_name)
+	_assert(samples.size() >= 2, "Idle CHE publish periodic DDATA (%s)" % samples.size())
+	var previous := -1
+	for sample in samples:
+		_assert(sample.has("Sim/TimeMs") and str(sample.get("Session/Id", "")) == SESSION_ID, "Periodic DDATA carries Sim/TimeMs and Session/Id")
+		_assert(int(sample.get("Sim/TimeMs", -1)) >= 40000 and int(sample.get("Sim/TimeMs", -1)) >= previous, "Sim/TimeMs is the sim clock and never goes back")
+		previous = int(sample.get("Sim/TimeMs", -1))
+	_assert(int(samples[-1]["Sim/TimeMs"]) - int(samples[0]["Sim/TimeMs"]) == 20000, "Idle cadence is 20 s of sim time")
+	_free_simulator(simulator)
 
 
 func _test_command_expiry_uses_sim_time():
