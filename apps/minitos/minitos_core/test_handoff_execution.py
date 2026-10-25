@@ -127,7 +127,9 @@ class HandoffExecutionTests(LayoutTestCase):
         slot = Position.objects.get(container_visit=self.visit)
         self.assertEqual(slot.pile.storage_grid.name, 'BLOCK01')
         self.assertEqual(slot, self.planned)
-        self.assertEqual(self.order.status, Order.CANCELLED)
+        # A-1 (TL interim, pending Yael): completed by exception, visit flagged.
+        self.assertEqual(self.order.status, Order.COMPLETE)
+        self.assertIsNotNone(self.order.atc)
         self.assertEqual(
             set(OrderLeg.objects.filter(order=self.order).values_list('status', flat=True)),
             {OrderLeg.CANCELLED},
@@ -139,6 +141,40 @@ class HandoffExecutionTests(LayoutTestCase):
         # Duplicate exception: no second move.
         self.event('handoff_exception', leg=self.legs[0], che=self.qc, **details)
         self.assertEqual(Position.objects.filter(container_visit=self.visit).count(), 1)
+
+    def test_handoff_exception_without_reason_is_rejected(self):
+        """QA/TL: the schema requires reason; no HANDOFF_EXCEPTION default."""
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        for reason in (None, ''):
+            details = {'from_che_id': self.qc.pk, 'to_che_id': self.tt.pk}
+            if reason is not None:
+                details['reason'] = reason
+            with self.assertRaises(ValidationError) as caught:
+                self.event('handoff_exception', leg=self.legs[0], che=self.qc, **details)
+            self.assertEqual(caught.exception.code, 'reason_required')
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.current_che, self.qc)
+        self.assertEqual(self.visit.exception_reason, '')
+
+    def test_container_identity_mismatch_is_rejected(self):
+        """QA/TL: container_visit_id / container_number must match the order."""
+        cases = (
+            {'container_visit_id': self.visit.pk + 999},
+            {'container_number': 'TGHU0000001'},
+            {'container_visit_id': self.visit.pk, 'container_number': 'TGHU0000001'},
+        )
+        for details in cases:
+            with self.subTest(details=details):
+                with self.assertRaises(ValidationError) as caught:
+                    self.event('container_picked_up', che=self.qc, source='VESSEL', **details)
+                self.assertEqual(caught.exception.code, 'container_number_mismatch')
+                self.visit.refresh_from_db()
+                self.assertIsNone(self.visit.current_che)
+        # Matching identity (number case-insensitive) is accepted.
+        self.event('container_picked_up', che=self.qc, source='VESSEL',
+                   container_visit_id=self.visit.pk, container_number='mscu1234565')
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.current_che, self.qc)
 
     def test_exception_uses_first_free_block01_slot_when_planned_is_taken(self):
         self.event('container_picked_up', che=self.qc, source='VESSEL')

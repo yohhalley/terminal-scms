@@ -39,6 +39,37 @@ VESSEL_SOURCE = 'VESSEL'
 EXCEPTION_BLOCK_NAME = 'BLOCK01'
 
 
+# Assumption A-1 (TL interim call, pending Yael): a TT no-show completes the
+# order *by exception*; the visit carries the exception reason. Flip to
+# Order.CANCELLED here (and NO_SHOW_ORDER_STATUS in OES handoffs.py) if Yael
+# decides no-show cancels the order.
+NO_SHOW_ORDER_STATUS = Order.COMPLETE
+
+
+def _check_container_identity(order, details):
+    """QA/TL: an event naming a different container than the order is rejected."""
+    visit_id = details.get('container_visit_id')
+    number = details.get('container_number')
+    if visit_id is None and not number:
+        return
+    expected_visit = order.container_number_id
+    expected_number = (
+        order.container_number.container_number_id if order.container_number_id else None
+    )
+    if visit_id is not None and (expected_visit is None or int(visit_id) != expected_visit):
+        raise ValidationError(
+            f'container_number_mismatch: event container_visit_id {visit_id} '
+            f'does not match order container visit {expected_visit}.',
+            code='container_number_mismatch',
+        )
+    if number and str(number).strip().upper() != str(expected_number or '').upper():
+        raise ValidationError(
+            f'container_number_mismatch: event container_number {number} '
+            f'does not match order container {expected_number}.',
+            code='container_number_mismatch',
+        )
+
+
 def _event_time(value=None):
     return value or timezone.now()
 
@@ -381,6 +412,7 @@ def apply_execution_event(
 
     occurred_at = _event_time(occurred_at)
     order = Order.objects.select_for_update().get(pk=order_id)
+    _check_container_identity(order, details)
     terminal_id = order.work_queue.location_id
     leg = None
     if leg_id is not None:
@@ -438,14 +470,22 @@ def apply_execution_event(
     elif event == 'handoff_exception':
         if not order.container_number_id:
             raise ValidationError('handoff_exception requires an order container.')
-        reason = details.get('reason') or 'HANDOFF_EXCEPTION'
+        reason = details.get('reason')
+        if not reason:
+            # The schema requires reason on handoff_exception; no silent default.
+            raise ValidationError('handoff_exception requires reason.', code='reason_required')
         relocate_container_after_exception(
             order.container_number_id, reason, details.get('destination_position_id'),
         )
         if order.status not in {Order.COMPLETE, Order.CANCELLED}:
-            order.status = Order.CANCELLED
-            order.completed_at = occurred_at
-            order.save(update_fields=['status', 'completed_at'])
+            # A-1 (pending Yael): completed by exception; N-6: event time.
+            order.status = NO_SHOW_ORDER_STATUS
+            order.completed_at = _event_time(occurred_at)
+            update_fields = ['status', 'completed_at']
+            if order.status == Order.COMPLETE:
+                order.atc = order.completed_at
+                update_fields.append('atc')
+            order.save(update_fields=update_fields)
         _active_legs(order).exclude(
             status__in=[OrderLeg.COMPLETE, OrderLeg.CANCELLED],
         ).update(status=OrderLeg.CANCELLED, actual_end=occurred_at)
