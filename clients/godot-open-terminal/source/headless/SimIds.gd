@@ -3,14 +3,14 @@ extends RefCounted
 ## Single place that maps CHE records to Sparkplug device ids and to the stable
 ## keys used for seeded draws.
 ##
-## Agreed contract: the device id is the MiniTOS Che.name (e.g. QC01). Current
-## OES still addresses `CHE_{MiniTOS id}`, so the legacy form stays the default
-## until OES switches; `use_che_name = true` (SIMULATOR_DEVICE_ID_MODE=name)
-## selects the name form. An explicit `device_id` on a CHE record always wins.
+## Agreed contract: the device id is the MiniTOS Che.name (e.g. QC01), the
+## default (SIMULATOR_DEVICE_ID_MODE=name). OES binds whatever id DBIRTH
+## registers. `use_che_name = false` (SIMULATOR_DEVICE_ID_MODE=legacy) selects
+## the old `CHE_{MiniTOS id}` form. An explicit `device_id` always wins.
 
 const LEGACY_DEVICE_PREFIX := "CHE_"
 
-static var use_che_name := false
+static var use_che_name := true
 
 
 static func device_id(che: Dictionary) -> String:

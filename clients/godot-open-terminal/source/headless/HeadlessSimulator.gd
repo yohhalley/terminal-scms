@@ -92,7 +92,7 @@ func _configure_simulation():
 	var time_scale = float(_env_any(["SIMULATOR_TIME_SCALE", "SIM_TIME_SCALE"], "1.0"))
 	_clock = SimClock.new(step_ms, time_scale)
 	_start_epoch_ms = int(_env_any(["SIMULATOR_START_EPOCH_MS", "SIM_START_EPOCH_MS"], "0"))
-	SimIds.use_che_name = _env_any(["SIMULATOR_DEVICE_ID_MODE", "SIM_DEVICE_ID_MODE"], "legacy") == "name"
+	SimIds.use_che_name = _env_any(["SIMULATOR_DEVICE_ID_MODE", "SIM_DEVICE_ID_MODE"], "name") != "legacy"
 	_mqtt.session_id = _session_id
 	var default_min = _env_any(["SIMULATOR_QC_WAIT_MIN_S", "SIM_QC_WAIT_MIN_S"], str(DEFAULT_QC_WAIT_MIN_S))
 	var default_max = _env_any(["SIMULATOR_QC_WAIT_MAX_S", "SIM_QC_WAIT_MAX_S"], str(DEFAULT_QC_WAIT_MAX_S))
@@ -413,15 +413,18 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 
 
 ## OES cancel DCMD (Command/Type = cancel). Command/CancelCommandId names the
-## command to cancel; when it is absent the CHE's active command is cancelled.
+## command to cancel and is required (OES always sets it; "cancel whatever is
+## active" is unsafe after a re-dispatch).
 ## The active command stops, the CHE goes idle with no container, `cancelled`
 ## is published for the cancelled command, and the CHE accepts a new command.
 func _handle_cancel(che_id: int, cancel_id: String, metrics: Dictionary):
 	var target_id = str(metrics.get("Command/CancelCommandId", "")).strip_edges()
+	if target_id.is_empty():
+		_publish_command_result(che_id, cancel_id, "failed", 0, "Cancel requires Command/CancelCommandId")
+		return
 	if not _active_commands.has(che_id):
 		if (
-			not target_id.is_empty()
-			and _command_outcomes.has(target_id)
+			_command_outcomes.has(target_id)
 			and str(_command_outcomes[target_id].get("event", "")) == "cancelled"
 		):
 			_command_outcomes[cancel_id] = _command_outcomes[target_id]
@@ -431,7 +434,7 @@ func _handle_cancel(che_id: int, cancel_id: String, metrics: Dictionary):
 		_publish_command_result(che_id, cancel_id, "failed", 0, "No active command to cancel")
 		return
 	var command: Dictionary = _active_commands[che_id]
-	if not target_id.is_empty() and target_id != str(command.command_id):
+	if target_id != str(command.command_id):
 		_publish_command_result(che_id, cancel_id, "failed", 0, "Cancel target is not the active command")
 		return
 	var events: Array
@@ -509,11 +512,11 @@ func _draw_qc_wait_s(che: Dictionary, command_key: String, wait_index: int, step
 	return _random.draw_wait_s(SimIds.seed_key(che), command_key, wait_index, int(bounds[0]), int(bounds[1]))
 
 
-## Light ISO 6346 shape check (owner code + category + 6 digits + check digit).
+## Light ISO 6346 shape check (owner code + category U/J/Z + 6 digits + check digit).
 ## The check digit itself is validated by MiniTOS.
 static func is_container_number_format(container_number: String) -> bool:
 	var pattern = RegEx.new()
-	pattern.compile("^[A-Z]{3}[UJZR][0-9]{7}$")
+	pattern.compile("^[A-Z]{3}[UJZ][0-9]{7}$")
 	return pattern.search(container_number) != null
 
 
@@ -576,8 +579,8 @@ func _complete_tt_handoff(tt_id: int, qc_id: int):
 	var position_id = int(command.get("source_inventory_position_id", 0))
 	if position_id <= 0:
 		position_id = int(command.get("source_position_id", 0))
+	# The receiver's pick is the hand-off itself: handoff_completed only.
 	_publish_events(tt_id, command, [
-		{"event": "container_picked_up", "position_id": position_id, "counterpart_che_id": qc_id},
 		{"event": "handoff_completed", "position_id": position_id, "counterpart_che_id": qc_id, "handoff_role": "receiver"},
 	])
 

@@ -10,6 +10,7 @@ extends RefCounted
 ## without changing this state machine.
 ##
 ## idle -> commanded -> holding -> [waiting_for_tt] -> done   (decision D-012)
+## - The deposit is a hand-off: handoff_completed (giver) + completed.
 ## - On command receipt the container appears on the QC at once (no pick phase):
 ##   container_picked_up is emitted and the seeded hold wait starts.
 ## - Deposit on the TT happens at max(hold wait end, TT ready); if the hold wait
@@ -109,8 +110,9 @@ static func _deposit(command: Dictionary, counterpart_id: int) -> Array:
 	command["wait_until_ms"] = 0
 	command["load_container_visit_id"] = 0
 	command["counterpart_che_id_actual"] = counterpart_id
+	# A hand-off is not a drop: the giver reports handoff_completed only, never
+	# container_dropped (Q8-R5; OES rejects a giver drop).
 	return [
-		_event("container_dropped", position_id, counterpart_id),
 		_handoff_event(position_id, counterpart_id),
 		_event("completed", position_id, counterpart_id),
 	]

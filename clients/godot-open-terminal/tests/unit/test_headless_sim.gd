@@ -89,17 +89,17 @@ func _test_seed_determinism():
 	var seq_c: Array = []
 	for leg in range(20):
 		for index in range(2):
-			seq_a.append(a.draw_wait_s("CHE_1", "leg:%d" % leg, index, 10, 30))
-			seq_b.append(b.draw_wait_s("CHE_1", "leg:%d" % leg, index, 10, 30))
-			seq_c.append(c.draw_wait_s("CHE_1", "leg:%d" % leg, index, 10, 30))
+			seq_a.append(a.draw_wait_s("QC01", "leg:%d" % leg, index, 10, 30))
+			seq_b.append(b.draw_wait_s("QC01", "leg:%d" % leg, index, 10, 30))
+			seq_c.append(c.draw_wait_s("QC01", "leg:%d" % leg, index, 10, 30))
 	_assert(seq_a == seq_b, "Same seed must give the same wait sequence")
 	_assert(seq_a != seq_c, "A different seed must change the wait sequence")
 	for value in seq_a:
 		_assert(typeof(value) == TYPE_INT and value >= 10 and value <= 30, "Waits must be whole seconds in 10..30")
 	# Per-draw derivation: a draw does not depend on draws made before it.
 	var fresh = SimRandom.new(42)
-	_assert(fresh.draw_wait_s("CHE_1", "leg:7", 1, 10, 30) == seq_a[15], "A draw must not depend on earlier draws")
-	_assert(fresh.draw_wait_s("CHE_1", "leg:7", 1, 10, 30) == seq_a[15], "Repeating a draw must give the same value")
+	_assert(fresh.draw_wait_s("QC01", "leg:7", 1, 10, 30) == seq_a[15], "A draw must not depend on earlier draws")
+	_assert(fresh.draw_wait_s("QC01", "leg:7", 1, 10, 30) == seq_a[15], "Repeating a draw must give the same value")
 	# Both bounds are reachable (uniform inclusive) over many keys.
 	var seen := {}
 	for leg in range(400):
@@ -168,9 +168,9 @@ func _test_qc_state_machine_tt_early():
 	_assert(int(command.wait_until_ms) == 16000, "Hold wait starts as soon as the QC has the container")
 	_assert(QcDischarge.step(command, 15900, 7).is_empty(), "A ready TT must not shorten the hold wait")
 	events = QcDischarge.step(command, 16000, 7)
-	_assert(_names(events) == ["container_dropped", "handoff_completed", "completed"], "Deposit at hold end when TT is ready")
+	_assert(_names(events) == ["handoff_completed", "completed"], "Deposit at hold end when TT is ready (no giver drop)")
 	_assert(int(events[0].position_id) == 112 and int(events[1].counterpart_che_id) == 7, "Deposit reports position and TT")
-	_assert(str(events[1].get("handoff_role", "")) == "giver", "QC is the giver in discharge")
+	_assert(str(events[0].get("handoff_role", "")) == "giver", "QC is the giver in discharge")
 	_assert(QcDischarge.is_finished(command) and int(command.load_container_visit_id) == 0, "QC ends empty in done")
 	_assert(not QcDischarge.new().has_method("picking"), "No picking phase exists")
 
@@ -184,7 +184,7 @@ func _test_qc_state_machine_tt_late():
 	_assert(command.work_state == QcDischarge.WAITING_FOR_TT and int(command.wait_until_ms) == 0, "QC enters waiting_for_tt")
 	_assert(QcDischarge.step(command, 45000, 0).is_empty(), "QC keeps waiting while no TT is ready")
 	events = QcDischarge.step(command, 45100, 9)
-	_assert(_names(events) == ["container_dropped", "handoff_completed", "completed"], "Deposit as soon as the late TT is ready")
+	_assert(_names(events) == ["handoff_completed", "completed"], "Deposit as soon as the late TT is ready")
 	_assert(int(events[2].counterpart_che_id) == 9, "Completion names the TT")
 
 
@@ -335,42 +335,43 @@ func _test_sim_qc_tt_late_end_to_end():
 	_run_steps(simulator, 3000)
 	_assert(simulator._active_commands.is_empty(), "QC and TT must both finish")
 	var results = _results(simulator)
-	var qc_events = _events_of(results, "CHE_1")
+	var qc_events = _events_of(results, "QC01")
 	_assert(qc_events == [
 		"acknowledged", "started", "container_picked_up", "waiting_for_handoff",
-		"container_dropped", "handoff_completed", "completed",
+		"handoff_completed", "completed",
 	], "Late TT: QC event order: %s" % [qc_events])
-	var tt_events = _events_of(results, "CHE_2")
+	var tt_events = _events_of(results, "TT01")
 	_assert(tt_events == [
 		"acknowledged", "started", "arrived_at_source", "waiting_for_handoff",
-		"container_picked_up", "handoff_completed", "container_dropped", "completed",
+		"handoff_completed", "container_dropped", "completed",
 	], "Late TT: TT event order: %s" % [tt_events])
-	var picked = _find(results, "CHE_1", "container_picked_up")
-	var waiting = _find(results, "CHE_1", "waiting_for_handoff")
-	var arrived = _find(results, "CHE_2", "arrived_at_source")
-	var dropped = _find(results, "CHE_1", "container_dropped")
+	var picked = _find(results, "QC01", "container_picked_up")
+	var waiting = _find(results, "QC01", "waiting_for_handoff")
+	var arrived = _find(results, "TT01", "arrived_at_source")
+	_assert(not _events_of(results, "QC01").has("container_dropped"), "A hand-off giver never publishes container_dropped")
+	var dropped = _find(results, "QC01", "handoff_completed")
 	var pick_ms = int(picked["Sim/TimeMs"])
-	var hold_s = SimRandom.new(42).draw_wait_s("CHE_1", "leg:4101", 0, 10, 30)
+	var hold_s = SimRandom.new(42).draw_wait_s("QC01", "leg:4101", 0, 10, 30)
 	_assert(pick_ms == 0, "D-012: the container appears when the command arrives (%s ms)" % pick_ms)
 	_assert(str(picked.get("Command/Result/Source", "")) == "VESSEL", "T-007: the container appears from source VESSEL")
 	_assert(int(waiting["Sim/TimeMs"]) == pick_ms + hold_s * 1000, "QC waits for the TT exactly at the seeded hold-wait end")
 	_assert(int(dropped["Sim/TimeMs"]) == int(arrived["Sim/TimeMs"]), "Deposit must happen when the late TT is ready")
-	_assert(int(dropped["Command/Result/PositionId"]) == 112, "container_dropped must carry the transfer PositionId")
+	_assert(int(dropped["Command/Result/PositionId"]) == 112, "handoff_completed must carry the transfer PositionId")
 	_assert(int(dropped["Command/Result/ContainerVisitId"]) == 101, "Results must carry ContainerVisitId")
 	_assert(int(dropped["Command/Result/CounterpartCheId"]) == TT_ID, "QC deposit must name the TT")
 	_assert(str(dropped["Command/Result/ContainerNumber"]) == "MSCU1234565", "Results echo the container number")
 	_assert(str(dropped["Command/Result/MoveKind"]) == "discharge", "MoveKind is echoed back unchanged")
 	_assert(str(dropped["Session/Id"]) == SESSION_ID, "Session/Id must be on every result")
 	_assert(int(dropped["Event/TimeMs"]) == 1764583200000 + int(dropped["Sim/TimeMs"]), "Event/TimeMs = StartEpochMs + Sim/TimeMs")
-	var qc_handoff = _find(results, "CHE_1", "handoff_completed")
-	var tt_handoff = _find(results, "CHE_2", "handoff_completed")
+	var qc_handoff = _find(results, "QC01", "handoff_completed")
+	var tt_handoff = _find(results, "TT01", "handoff_completed")
 	_assert(str(qc_handoff["Command/Result/HandoffId"]) == HANDOFF_ID and str(tt_handoff["Command/Result/HandoffId"]) == HANDOFF_ID, "Both sides report the HandoffId")
 	_assert(str(qc_handoff["Command/Result/HandoffRole"]) == "giver", "QC handoff role is giver")
 	_assert(str(tt_handoff["Command/Result/HandoffRole"]) == "receiver", "TT handoff role is receiver")
 	_assert(int(tt_handoff["Command/Result/CounterpartCheId"]) == QC_ID, "TT handoff names the QC")
-	_assert(str(_find(results, "CHE_1", "acknowledged")["Work/State"]) == "commanded", "Acknowledged is published in commanded")
+	_assert(str(_find(results, "QC01", "acknowledged")["Work/State"]) == "commanded", "Acknowledged is published in commanded")
 	_assert(str(waiting["Work/State"]) == "waiting_for_tt", "QC Work/State waiting_for_tt")
-	_assert(str(_find(results, "CHE_1", "completed")["Work/State"]) == "done", "QC Work/State done on completion")
+	_assert(str(_find(results, "QC01", "completed")["Work/State"]) == "done", "QC Work/State done on completion")
 	var seqs: Array = []
 	for item in results:
 		seqs.append(int(item.m["Sim/EventSeq"]))
@@ -388,10 +389,10 @@ func _test_sim_qc_tt_early_end_to_end():
 	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
 	_run_steps(simulator, 3000)
 	var results = _results(simulator)
-	_assert(not _events_of(results, "CHE_1").has("waiting_for_handoff"), "Early TT: QC must not wait")
-	var picked = _find(results, "CHE_1", "container_picked_up")
-	var dropped = _find(results, "CHE_1", "container_dropped")
-	var hold_s = SimRandom.new(7).draw_wait_s("CHE_1", "leg:4101", 0, 10, 30)
+	_assert(not _events_of(results, "QC01").has("waiting_for_handoff"), "Early TT: QC must not wait")
+	var picked = _find(results, "QC01", "container_picked_up")
+	var dropped = _find(results, "QC01", "handoff_completed")
+	var hold_s = SimRandom.new(7).draw_wait_s("QC01", "leg:4101", 0, 10, 30)
 	_assert(int(dropped["Sim/TimeMs"]) == int(picked["Sim/TimeMs"]) + hold_s * 1000, "Early TT: deposit at hold-wait end")
 	_assert(simulator._active_commands.is_empty(), "Early TT: both commands finish")
 	_free_simulator(simulator)
@@ -445,6 +446,9 @@ func _test_command_type_routing():
 	_send(simulator, QC_ID, _command(QC_ID, bad_number))
 	_assert(str(_last_result(simulator)["Command/Result/Reason"]).contains("Container number"), "Malformed container numbers are rejected")
 	_assert(HeadlessSimulator.is_container_number_format("MSCU1234565"), "A well-formed container number passes")
+	for category in ["J", "Z"]:
+		_assert(HeadlessSimulator.is_container_number_format("MSC%s1234565" % category), "ISO 6346 category %s passes" % category)
+	_assert(not HeadlessSimulator.is_container_number_format("MSCR1234565"), "Category R is rejected (contract [UJZ])")
 	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
 	_assert(simulator._active_commands.has(QC_ID), "A valid qc_discharge is accepted")
 	_free_simulator(simulator)
@@ -511,8 +515,11 @@ func _test_cancel_releases_che():
 	_assert(str(_last_result(simulator)["Command/Result/Id"]) == str(last["Command/Result/Id"]), "A redelivered cancel replays the same cancelled result")
 	_assert(_results(simulator).size() == before + 1 and simulator._active_commands.has(TT_ID), "A redelivered cancel does not cancel the next command")
 	_send(simulator, TT_ID, _cancel(TT_ID))
-	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "cancelled" and not simulator._active_commands.has(TT_ID), "A cancel without a target cancels the active command")
-	_send(simulator, TT_ID, _cancel(TT_ID))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Cancel requires Command/CancelCommandId", "A cancel without a target is rejected")
+	_assert(simulator._active_commands.has(TT_ID), "A rejected cancel leaves the next command running")
+	_send(simulator, TT_ID, _cancel(TT_ID, str(next_leg["Command/Id"])))
+	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "cancelled" and not simulator._active_commands.has(TT_ID), "A cancel naming the active command cancels it")
+	_send(simulator, TT_ID, _cancel(TT_ID, "99999999-9999-4999-8999-999999999999"))
 	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "No active command to cancel", "Cancel on an idle CHE fails cleanly")
 	# A TT that already holds the container is emptied by the cancel.
 	var simulator2 = _new_simulator(3, QC_LAT)
@@ -594,15 +601,15 @@ func _test_sim_tt_no_show_then_cancel():
 	_assert(simulator._tt_no_show_timeout_s == 300, "Default Sim/Timing/TtNoShowTimeoutS is 300")
 	var qc = _command(QC_ID, _qc_metrics())
 	_send(simulator, QC_ID, qc)
-	var hold_s = SimRandom.new(11).draw_wait_s("CHE_1", "leg:4101", 0, 10, 30)
+	var hold_s = SimRandom.new(11).draw_wait_s("QC01", "leg:4101", 0, 10, 30)
 	for _i in range(3500):
 		simulator._clock.step()
 		simulator._simulation_step(simulator._clock.step_seconds())
 	var results = _results(simulator)
-	_assert(_events_of(results, "CHE_1") == [
+	_assert(_events_of(results, "QC01") == [
 		"acknowledged", "started", "container_picked_up", "waiting_for_handoff", "handoff_timed_out",
-	], "No-show: QC event order: %s" % [_events_of(results, "CHE_1")])
-	var timed_out = _find(results, "CHE_1", "handoff_timed_out")
+	], "No-show: QC event order: %s" % [_events_of(results, "QC01")])
+	var timed_out = _find(results, "QC01", "handoff_timed_out")
 	_assert(int(timed_out["Sim/TimeMs"]) == hold_s * 1000 + 300000, "Time-out fires 300 s sim time after the hold end")
 	_assert(str(timed_out["Command/Result/HandoffId"]) == HANDOFF_ID, "handoff_timed_out carries the HandoffId")
 	_assert(str(timed_out["Work/State"]) == "waiting_for_tt" and int(timed_out["Load/ContainerVisitId"]) == 101, "QC still holds the container until OES cancels")
@@ -613,10 +620,10 @@ func _test_sim_tt_no_show_then_cancel():
 	for _i in range(50):
 		simulator._clock.step()
 		simulator._simulation_step(simulator._clock.step_seconds())
-	_assert(_find(_results(simulator), "CHE_1", "handoff_completed").is_empty(), "No transfer after handoff_timed_out")
+	_assert(_find(_results(simulator), "QC01", "handoff_completed").is_empty(), "No transfer after handoff_timed_out")
 	_send(simulator, QC_ID, _cancel(QC_ID, str(qc["Command/Id"])))
 	_send(simulator, TT_ID, _cancel(TT_ID, str(tt["Command/Id"])))
-	var qc_cancel = _find(_results(simulator), "CHE_1", "cancelled")
+	var qc_cancel = _find(_results(simulator), "QC01", "cancelled")
 	_assert(str(qc_cancel.get("Work/State", "")) == "idle" and int(qc_cancel.get("Load/ContainerVisitId", -1)) == 0, "OES cancel clears the QC")
 	_assert(simulator._active_commands.is_empty(), "Both legs are cancelled")
 	var retry = _qc_metrics()
@@ -686,13 +693,14 @@ func _test_result_outbox_replays_in_order():
 
 func _test_device_id_mapping():
 	var che = {"pk": 12, "name": "QC01"}
-	_assert(SimIds.device_id(che) == "CHE_12", "Legacy device id is CHE_{id}")
-	SimIds.use_che_name = true
+	_assert(SimIds.use_che_name, "Name mode (MiniTOS Che.name) is the default")
 	_assert(SimIds.device_id(che) == "QC01", "Name mode uses MiniTOS Che.name")
 	_assert(SimIds.device_id({"pk": 3, "name": ""}) == "CHE_3", "Name mode falls back when the name is empty")
 	_assert(SimIds.device_id({"pk": 3, "name": "TT/1"}) == "TT_1", "Device ids are sanitised for Sparkplug")
 	SimIds.use_che_name = false
+	_assert(SimIds.device_id(che) == "CHE_12", "Legacy mode device id is CHE_{id}")
 	_assert(SimIds.device_id({"pk": 3, "device_id": "RTG01"}) == "RTG01", "An explicit device_id wins")
+	SimIds.use_che_name = true
 
 
 func _test_mqtt_packet_id_wraps():
