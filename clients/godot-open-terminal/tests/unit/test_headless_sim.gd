@@ -20,6 +20,8 @@ const TT_ID := 2
 const QC_LAT := 41.35
 const QC_LON := 2.17
 const HANDOFF_ID := "55555555-5555-4555-8555-555555555555"
+## Sim-time deadline (Sim/TimeMs units) far beyond every test run.
+const COMMAND_EXPIRES_AT_SIM_MS := 86400000
 
 var _failed := false
 var _command_counter := 0
@@ -63,6 +65,7 @@ func _initialize():
 	_test_command_type_routing()
 	_test_handoff_id_rules()
 	_test_cancel_releases_che()
+	_test_command_expiry_uses_sim_time()
 	_test_sim_tt_no_show_then_cancel()
 	_test_configurable_qc_waits()
 	_test_result_outbox_replays_in_order()
@@ -254,7 +257,7 @@ func _command(che_id: int, extra: Dictionary) -> Dictionary:
 		"Command/SessionId": SESSION_ID,
 		"Command/SiteId": SITE_ID,
 		"Command/ConfigurationRevision": 7,
-		"Command/ExpiresAtMs": int(Time.get_unix_time_from_system() * 1000.0) + 60000,
+		"Command/ExpiresAtMs": COMMAND_EXPIRES_AT_SIM_MS,
 		"Command/AssignmentId": "44444444-4444-4444-8444-444444444444",
 	}
 	for key in extra:
@@ -524,6 +527,37 @@ func _test_cancel_releases_che():
 	_send(simulator2, TT_ID, _cancel(TT_ID, str(tt["Command/Id"])))
 	_assert(int(_last_result(simulator2)["Load/ContainerVisitId"]) == 0 and simulator2._active_commands.is_empty(), "Cancel clears the TT's container")
 	_free_simulator(simulator2)
+	_free_simulator(simulator)
+
+
+func _leg(che_id: int, expires_at) -> Dictionary:
+	var metrics = _command(che_id, {"Command/DestinationLatitude": QC_LAT + 0.001, "Command/DestinationLongitude": QC_LON})
+	if expires_at == null:
+		metrics.erase("Command/ExpiresAtMs")
+	else:
+		metrics["Command/ExpiresAtMs"] = expires_at
+	return metrics
+
+
+func _test_command_expiry_uses_sim_time():
+	var simulator = _new_simulator(1, QC_LAT)
+	simulator._clock.restore(120000)
+	_send(simulator, TT_ID, _leg(TT_ID, 120000))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Command expired", "ExpiresAtMs at the current Sim/TimeMs is expired")
+	_send(simulator, TT_ID, _leg(TT_ID, 60000))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Command expired", "ExpiresAtMs in the sim past is expired")
+	_assert(not simulator._active_commands.has(TT_ID), "Expired commands create no action")
+	var wall_now = int(Time.get_unix_time_from_system() * 1000.0)
+	_assert(not simulator.is_command_expired({"Command/ExpiresAtMs": 120001}), "A deadline 1 ms after Sim/TimeMs is valid even though it is long past in wall time")
+	_assert(wall_now > 120001, "Sanity: the sim deadline is far behind the wall clock")
+	_send(simulator, TT_ID, _leg(TT_ID, 120100))
+	_assert(simulator._active_commands.has(TT_ID), "A command within its sim-time deadline is accepted")
+	_assert(simulator._command_ttl_s == 600, "Default sim command TTL is 600 s")
+	_assert(simulator.command_deadline_sim_ms({}) == 120000 + 600000, "Without ExpiresAtMs the deadline is receipt + Sim/Timing/CommandTtlS")
+	_assert(simulator.configure_command_ttl("30") and simulator.command_deadline_sim_ms({}) == 150000, "Command TTL is configurable")
+	_assert(not simulator.configure_command_ttl("0") and not simulator.configure_command_ttl("x") and simulator._command_ttl_s == 30, "Invalid TTLs are rejected")
+	_send(simulator, QC_ID, _leg(QC_ID, null))
+	_assert(simulator._active_commands.has(QC_ID), "A DCMD without ExpiresAtMs gets the default sim TTL and is accepted")
 	_free_simulator(simulator)
 
 

@@ -16,6 +16,8 @@ const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
 const DEFAULT_QC_WAIT_MIN_S := 10
 const DEFAULT_QC_WAIT_MAX_S := 30
 const DEFAULT_TT_NO_SHOW_TIMEOUT_S := 300
+## Sim-time command TTL (seconds) applied when a DCMD carries no ExpiresAtMs.
+const DEFAULT_COMMAND_TTL_S := 600
 ## Sim time is checkpointed at least this often, so a restart loses at most this much.
 const SIM_TIME_CHECKPOINT_MS := 1000
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
@@ -54,6 +56,7 @@ var _qc_wait_s := {
 }
 ## D-013: whole seconds of sim time a QC waits for its TT before handoff_timed_out.
 var _tt_no_show_timeout_s := DEFAULT_TT_NO_SHOW_TIMEOUT_S
+var _command_ttl_s := DEFAULT_COMMAND_TTL_S
 
 
 func _ready():
@@ -105,6 +108,35 @@ func _configure_simulation():
 			["SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "SIM_TT_NO_SHOW_TIMEOUT_S"], str(DEFAULT_TT_NO_SHOW_TIMEOUT_S)
 		)
 	)
+
+	configure_command_ttl(
+		_env_any(["SIMULATOR_COMMAND_TTL_S", "SIM_COMMAND_TTL_S"], str(DEFAULT_COMMAND_TTL_S))
+	)
+
+
+## Sets Sim/Timing/CommandTtlS (whole seconds, > 0). Invalid values keep the
+## previous value. Returns true when applied.
+func configure_command_ttl(text: String) -> bool:
+	var value_text = text.strip_edges()
+	if value_text.is_valid_int() and int(value_text) > 0:
+		_command_ttl_s = int(value_text)
+		return true
+	push_warning("Invalid command TTL %s; keeping %s s" % [text, _command_ttl_s])
+	return false
+
+
+## Sim-time deadline for a DCMD. Command/ExpiresAtMs is in Sim/TimeMs units
+## (OES sets it to Sim/TimeMs at dispatch + TTL). Without it, the deadline is
+## receipt time + Sim/Timing/CommandTtlS.
+func command_deadline_sim_ms(metrics: Dictionary) -> int:
+	var expires_at = int(metrics.get("Command/ExpiresAtMs", 0))
+	if expires_at > 0:
+		return expires_at
+	return _clock.now_ms + _command_ttl_s * 1000
+
+
+func is_command_expired(metrics: Dictionary) -> bool:
+	return command_deadline_sim_ms(metrics) <= _clock.now_ms
 
 
 ## Sets Sim/Timing/TtNoShowTimeoutS (whole seconds, > 0). Invalid values keep the
@@ -216,6 +248,7 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		{"name": "Sim/Timing/QcHoldMinS", "type": "Int64", "value": int(_qc_wait_s.hold[0])},
 		{"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": int(_qc_wait_s.hold[1])},
 		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
+		{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": _command_ttl_s},
 	])
 	_connect_mqtt()
 	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
@@ -311,10 +344,9 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	if int(metrics.get("Command/ConfigurationRevision", -1)) != _configuration_revision:
 		_publish_command_result(che_id, command_id, "failed", 0, "Configuration revision mismatch")
 		return
-	# ExpiresAtMs is an OES wall-clock delivery deadline, so it is checked once on
-	# receipt against the wall clock. It is not re-evaluated against sim time
-	# while a command runs (sim waits can outlast a 30 s TTL at low time scales).
-	if int(metrics.get("Command/ExpiresAtMs", 0)) <= int(Time.get_unix_time_from_system() * 1000.0):
+	# ExpiresAtMs is a sim-time deadline (Sim/TimeMs units), checked on receipt
+	# against the sim clock, never the wall clock.
+	if is_command_expired(metrics):
 		_publish_command_result(che_id, command_id, "failed", 0, "Command expired")
 		return
 	if str(metrics.get("Command/AssignmentId", "")).is_empty():

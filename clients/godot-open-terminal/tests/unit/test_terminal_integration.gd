@@ -221,7 +221,7 @@ func _test_headless_command_idempotency_and_restart_recovery():
 		"Command/SessionId": simulator._session_id,
 		"Command/SiteId": simulator._site_id,
 		"Command/ConfigurationRevision": 7,
-		"Command/ExpiresAtMs": int(Time.get_unix_time_from_system() * 1000.0) + 60000,
+		"Command/ExpiresAtMs": 600000,
 		"Command/AssignmentId": "44444444-4444-4444-8444-444444444444",
 		"Command/DestinationLatitude": 41.351,
 		"Command/DestinationLongitude": 2.171,
