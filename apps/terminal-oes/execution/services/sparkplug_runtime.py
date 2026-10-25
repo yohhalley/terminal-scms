@@ -224,6 +224,11 @@ def _apply_command_result(metrics, session=None):
     if command is None:
         logger.warning("Result %s names unknown command %s.", result_id, command_id)
         return None
+    # N-2: a concurrent delivery may have stored the receipt while we waited
+    # for the command row lock.
+    existing = CommandResultReceipt.objects.filter(pk=result_id).first()
+    if existing:
+        return existing
     status = CommandResultReceipt.APPLIED
     reason = ""
     try:
