@@ -3,6 +3,8 @@ extends Node
 const OESBootstrapClient = preload("res://source/headless/OESBootstrapClient.gd")
 const MQTTNodeClient = preload("res://source/terminal-sandbox/MQTTNodeClient.gd")
 const SimIds = preload("res://source/headless/SimIds.gd")
+const SimClock = preload("res://source/headless/SimClock.gd")
+const SimRandom = preload("res://source/headless/SimRandom.gd")
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 
 var _bootstrap := OESBootstrapClient.new()
@@ -25,11 +27,12 @@ var _command_outcomes := {}
 var _persisted_runtime_state := {}
 var _last_publish_ms := {}
 var _default_speed_mps := 4.0
-var _time_scale := 1.0
+var _clock := SimClock.new()
+var _random := SimRandom.new()
+var _event_seq := 0
 
 
 func _ready():
-	randomize()
 	_oes_url = OS.get_environment("OES_URL").strip_edges()
 	_site_id = OS.get_environment("SIMULATOR_SITE_ID").strip_edges()
 	_session_id = OS.get_environment("SIMULATOR_SESSION_ID").strip_edges()
@@ -39,7 +42,7 @@ func _ready():
 		get_tree().quit(2)
 		return
 	_default_speed_mps = max(float(_env("SIMULATOR_DEFAULT_SPEED_MPS", "4.0")), 0.1)
-	_time_scale = max(float(_env("SIMULATOR_TIME_SCALE", "1.0")), 0.01)
+	_configure_simulation()
 	_load_runtime_state()
 	add_child(_bootstrap)
 	add_child(_mqtt)
@@ -51,16 +54,35 @@ func _ready():
 	print("HEADLESS simulator requesting OES session %s for Site %s" % [_session_id, _site_id])
 
 
+func _configure_simulation():
+	var seed_text = _env_any(["SIMULATOR_SEED", "SIM_SEED"], str(SimRandom.DEFAULT_SEED))
+	var run_seed = SimRandom.parse_seed(seed_text, SimRandom.DEFAULT_SEED)
+	if str(run_seed) != seed_text.strip_edges():
+		push_warning("Invalid simulator seed %s; using %s" % [seed_text, run_seed])
+	var run_id = _env_any(["SIMULATOR_RUN_ID", "SIM_RUN_ID"], _session_id)
+	_random = SimRandom.new(run_seed, run_id)
+	var step_ms = int(_env_any(["SIMULATOR_FIXED_STEP_MS", "SIM_FIXED_STEP_MS"], str(SimClock.DEFAULT_STEP_MS)))
+	var time_scale = float(_env_any(["SIMULATOR_TIME_SCALE", "SIM_TIME_SCALE"], "1.0"))
+	_clock = SimClock.new(step_ms, time_scale)
+
+
 func _process(delta: float):
 	if not _configuration_loaded:
 		return
-	var scaled_delta = delta * _time_scale
+	var steps = _clock.steps_for_real_delta(delta)
+	for _i in range(steps):
+		_clock.step()
+		_simulation_step(_clock.step_seconds())
+
+
+## One fixed simulation step. Only sim time enters here, never frame delta.
+func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		var che: Dictionary = _ches[che_id]
 		if _active_commands.has(che_id):
-			_step_command(int(che_id), che, _active_commands[che_id], scaled_delta)
+			_step_command(int(che_id), che, _active_commands[che_id], step_s)
 		else:
-			_consume_idle_energy(che, scaled_delta)
+			_consume_idle_energy(che, step_s)
 			_publish_when_due(che)
 
 
@@ -90,7 +112,9 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 	if _sparkplug_group_id.is_empty() or _sparkplug_node_id.is_empty():
 		_fail_bootstrap("OES bootstrap is missing the Sparkplug identity")
 		return
-	_time_scale = max(float(session.get("time_scale", _time_scale)), 0.01)
+	_clock.set_time_scale(float(session.get("time_scale", _clock.time_scale)))
+	if session.has("seed") and session.get("seed") != null:
+		_random.run_seed = SimRandom.parse_seed(str(session.get("seed")), _random.run_seed)
 	_load_equipment(document)
 	_restore_runtime_state()
 	_configuration_loaded = true
@@ -100,6 +124,10 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		{"name": "Site/Id", "type": "String", "value": _site_id},
 		{"name": "Configuration/Revision", "type": "Int64", "value": _configuration_revision},
 		{"name": "Configuration/Checksum", "type": "String", "value": _configuration_checksum},
+		{"name": "Sim/Seed", "type": "Int64", "value": _random.run_seed},
+		{"name": "Sim/RunId", "type": "String", "value": _random.run_id},
+		{"name": "Sim/TimeScale", "type": "Double", "value": _clock.time_scale},
+		{"name": "Sim/FixedStepMs", "type": "Int64", "value": _clock.step_ms},
 	])
 	_connect_mqtt()
 	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
@@ -193,6 +221,9 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	if int(metrics.get("Command/ConfigurationRevision", -1)) != _configuration_revision:
 		_publish_command_result(che_id, command_id, "failed", 0, "Configuration revision mismatch")
 		return
+	# ExpiresAtMs is an OES wall-clock delivery deadline, so it is checked once on
+	# receipt against the wall clock. It is not re-evaluated against sim time
+	# while a command runs (sim waits can outlast a 30 s TTL at low time scales).
 	if int(metrics.get("Command/ExpiresAtMs", 0)) <= int(Time.get_unix_time_from_system() * 1000.0):
 		_publish_command_result(che_id, command_id, "failed", 0, "Command expired")
 		return
@@ -285,7 +316,7 @@ func _publish_birth_and_state():
 		all_ches.append(che)
 	_mqtt.publish_powered_devices(all_ches)
 	for che in all_ches:
-		_last_publish_ms[int(che.pk)] = Time.get_ticks_msec()
+		_last_publish_ms[int(che.pk)] = _clock.now_ms
 
 
 func _publish_when_due(che: Dictionary):
@@ -293,7 +324,7 @@ func _publish_when_due(che: Dictionary):
 		return
 	var che_id = int(che.pk)
 	var interval_ms = 2000 if bool(che.get("working", false)) else 20000
-	var now_ms = Time.get_ticks_msec()
+	var now_ms = _clock.now_ms
 	if now_ms - int(_last_publish_ms.get(che_id, 0)) < interval_ms:
 		return
 	_publish_equipment_state(che)
@@ -301,15 +332,16 @@ func _publish_when_due(che: Dictionary):
 
 func _publish_equipment_state(che: Dictionary, _force := false):
 	if _mqtt_connected and _mqtt.publish_che_data(che):
-		_last_publish_ms[int(che.pk)] = Time.get_ticks_msec()
+		_last_publish_ms[int(che.pk)] = _clock.now_ms
 		_save_runtime_state()
 
 
 func _publish_command_result(che_id: int, command_id: String, event: String, position_id := 0, reason := "", result_id := ""):
 	if command_id.is_empty() or not _mqtt_connected:
 		return
+	_event_seq += 1
 	if result_id.is_empty():
-		result_id = _event_id()
+		result_id = _random.result_id(_session_id, command_id, event, _event_seq)
 	var metrics: Array = [
 		{"name": "Command/Result/Id", "type": "String", "value": result_id},
 		{"name": "Command/Result/CommandId", "type": "String", "value": command_id},
@@ -319,6 +351,8 @@ func _publish_command_result(che_id: int, command_id: String, event: String, pos
 		metrics.append({"name": "Command/Result/PositionId", "type": "Int64", "value": position_id})
 	if not reason.is_empty():
 		metrics.append({"name": "Command/Result/Reason", "type": "String", "value": reason})
+	metrics.append({"name": "Sim/TimeMs", "type": "Int64", "value": _clock.now_ms})
+	metrics.append({"name": "Sim/EventSeq", "type": "Int64", "value": _event_seq})
 	var che: Dictionary = _ches.get(che_id, {"pk": che_id})
 	if _mqtt.publish_command_result(che, metrics):
 		_command_outcomes[command_id] = {
@@ -373,6 +407,8 @@ func _restore_runtime_state():
 		var che_id = int(saved_id)
 		if _ches.has(che_id) and saved_commands[saved_id] is Dictionary:
 			_active_commands[che_id] = saved_commands[saved_id]
+	_clock.restore(int(_persisted_runtime_state.get("sim_time_ms", 0)))
+	_event_seq = maxi(_event_seq, int(_persisted_runtime_state.get("event_seq", 0)))
 	var saved_outcomes = _persisted_runtime_state.get("command_outcomes", {})
 	if saved_outcomes is Dictionary:
 		_command_outcomes = saved_outcomes
@@ -392,6 +428,9 @@ func _save_runtime_state():
 			"ches": _ches,
 			"active_commands": _active_commands,
 			"command_outcomes": _command_outcomes,
+			"sim_time_ms": _clock.now_ms,
+			"event_seq": _event_seq,
+			"run_seed": _random.run_seed,
 		}))
 
 
@@ -445,9 +484,9 @@ func _env(name: String, fallback: String) -> String:
 	return value if not value.is_empty() else fallback
 
 
-func _event_id() -> String:
-	return "%08x-%04x-4%03x-%04x-%012x" % [
-		randi(), randi() & 0xffff, randi() & 0xfff,
-		(randi() & 0x3fff) | 0x8000,
-		int(Time.get_ticks_usec()) & 0xffffffffffff,
-	]
+func _env_any(names: Array, fallback: String) -> String:
+	for name in names:
+		var value = OS.get_environment(str(name)).strip_edges()
+		if not value.is_empty():
+			return value
+	return fallback
