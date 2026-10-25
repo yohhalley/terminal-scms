@@ -18,7 +18,8 @@ here; anything not covered by an explicit decision is listed as open.
   `Event/TimeMs = Sim/StartEpochMs + Sim/TimeMs`, and `Sim/EventSeq`.
 - **QC discharge (D-012)**: `idle -> commanded -> holding -> [waiting_for_tt] -> done`.
   The container appears on the QC when the command arrives (`acknowledged`,
-  `started`, `container_picked_up` at the same Sim/TimeMs). Then comes a seeded
+  `started`, `container_picked_up` at the same Sim/TimeMs). The
+  `container_picked_up` result carries `Command/Result/Source = VESSEL` (T-007 Q24). Then comes a seeded
   whole-second hold wait (default 10..30 s). The deposit happens at
   max(hold end, TT ready): `container_dropped`, `handoff_completed`
   (HandoffRole=giver) and `completed`. The TT then emits `container_picked_up`
@@ -29,6 +30,25 @@ here; anything not covered by an explicit decision is listed as open.
   (aliases `SIM_QC_WAIT_*`). The step-specific
   `SIMULATOR_QC_HOLD_WAIT_MIN_S` / `_MAX_S` win over those. An invalid range
   logs a warning and keeps the previous range.
+- **Cancel (T-007, fixes the cancel bug)**: a DCMD with `Command/Type = cancel`
+  goes through the same envelope checks (session, site, revision, ExpiresAtMs,
+  AssignmentId). It cancels the command named in `Command/CancelCommandId`, or
+  the CHE's active command when that field is absent. The active command stops
+  and is cleared, and the CHE goes idle with no container. `cancelled` is
+  published for the **cancelled** command id, with `Work/State=idle` and
+  `Load/ContainerVisitId=0`. The CHE then accepts the next command.
+  - A redelivered cancel replays the same `cancelled` result and never cancels
+    a newer command.
+  - A cancel for another command fails with "Cancel target is not the active command".
+  - A cancel on an idle CHE fails with "No active command to cancel".
+- **TT no-show (D-013 / T-007)**: after `Sim/Timing/TtNoShowTimeoutS` (default
+  300 s sim time, env `SIMULATOR_TT_NO_SHOW_TIMEOUT_S` / `SIM_TT_NO_SHOW_TIMEOUT_S`,
+  whole seconds > 0) in `waiting_for_tt`, the QC publishes `handoff_timed_out`
+  once, with the HandoffId. It keeps the container and stays `waiting_for_tt`
+  until OES cancels. A TT that becomes ready after the time-out gets no
+  transfer. OES cancels both legs and Godot clears the QC through the cancel handler.
+  NBIRTH also publishes `Sim/Timing/QcHoldMinS`, `Sim/Timing/QcHoldMaxS` and
+  `Sim/Timing/TtNoShowTimeoutS`.
 - **Pairing**: by `Command/HandoffId` only, never by container. At most one
   active command per side per HandoffId; a second one fails with
   "HandoffId is already held by another active command". The TT waits at the
@@ -55,20 +75,24 @@ here; anything not covered by an explicit decision is listed as open.
 
 ## Open points (need a decision or an OES or backend change)
 
-1. **D-013 no-show (5 min sim time)**: Godot does not time out on its own.
-   The QC stays in `waiting_for_tt` with the container until OES acts. Still open:
-   - the exact message OES sends to make Godot clear the container from the QC
-     (a cancel DCMD? a new command type?)
-   - the result event Godot emits when it clears the container
-   - whether the 300 000 ms is measured by OES on Sim/TimeMs (needs Sim/TimeMs
-     on periodic DDATA, see 6)
+1. **Cancel DCMD shape is assumed.** OES `dispatch.py` sends no cancel DCMD
+   today; there is only `execute_order_leg`. Godot accepts `Command/Type = cancel`
+   with an optional `Command/CancelCommandId`. The type value, the target field
+   name, and whether a cancel needs its own AssignmentId or ExpiresAtMs must be
+   fixed in the contract and built in OES. The cancel DCMD's own id gets no
+   result of its own: only the cancelled command gets `cancelled`. A failed
+   cancel is reported on the cancel's id.
+   `Command/Result/Source` (value `VESSEL`) is an assumed metric name.
+   `handoff_timed_out` must also be accepted by OES `apply_command_event`.
 2. OES `apply_command_event` rejects `arrived_at_source`,
-   `waiting_for_handoff` and `handoff_completed` ("Unsupported command event").
+   `waiting_for_handoff`, `handoff_completed` and `handoff_timed_out` ("Unsupported command event").
    It does not know `qc_discharge` and has no CHE→CHE transfer. These are needed
    before end-to-end use.
 3. `apps/simulator-runner/runner.py` `ALLOWED_ENVIRONMENT` does not pass the new
    variables through (SIMULATOR_SEED, RUN_ID, FIXED_STEP_MS, TIME_SCALE if
-   absent, START_EPOCH_MS, DEVICE_ID_MODE, QC_*WAIT*). Not changed here.
+   absent, START_EPOCH_MS, DEVICE_ID_MODE, QC_*WAIT*, TT_NO_SHOW_TIMEOUT_S).
+   The timing values are env-only here; the proposal wants them from
+   scenario/bootstrap (§5.1). Not changed here.
 4. OES `EQUIPMENT_COMMAND_TTL_SECONDS` (30 s, wall clock) vs sim-time waits at
    high or low time scale.
 5. At high time scale, the 2 s sim-time cadence for a working CHE can flood the broker.
@@ -82,7 +106,7 @@ here; anything not covered by an explicit decision is listed as open.
 10. A bad container-number format (`^[A-Z]{3}[UJZR][0-9]{7}$`) is a hard
     reject. The check digit is left to MiniTOS.
 11. The default seed `1` is arbitrary.
-12. Out of scope: `qc_load` (S1 is discharge only) and the existing cancel bug.
+12. Out of scope: `qc_load` (S1 is discharge only).
 13. Known on main (not caused here): TT.tscn `craft_cargoA.glb` parse error and
     "Parameter m is null" in headless test output. gdlint/gdformat are not
     clean on main; the new files (SimIds, SimClock, SimRandom, QcDischarge)
