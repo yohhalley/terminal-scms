@@ -605,6 +605,10 @@ class ClaimEnvironmentTests(HandoffTestBase):
         from pathlib import Path
 
         path = Path(__file__).resolve().parents[2] / "simulator-runner" / "runner.py"
+        if not path.exists():
+            # TL review S-2: the OES Docker build context has no runner source;
+            # the runner side is covered by apps/simulator-runner/test_runner.py.
+            self.skipTest("simulator-runner source not available in this context")
         spec = importlib.util.spec_from_file_location("scms_simulator_runner", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -830,3 +834,30 @@ class HandoffAbortTests(HandoffTestBase):
         )
         self.assertTrue(_pending_handoff_for(self.qc, self.session))
         self.assertFalse(_pending_handoff_for(self.qc, other))
+
+
+
+class SimClockFallbackTests(HandoffTestBase):
+    """TL review S-3 / S-6."""
+
+    def test_result_without_event_time_uses_the_session_sim_clock(self):
+        from .services.dispatch import apply_command_event
+
+        SimulationSession.objects.filter(pk=self.session.pk).update(
+            start_epoch_ms=START_EPOCH_MS, last_sim_time_ms=42_000,
+        )
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        apply_command_event(tt_cmd.pk, "cancelled", reason="operator", notify_che=True)
+        for che in (tt, self.qc):
+            che.refresh_from_db()
+            self.assertEqual(che.idle_since_event_ms, START_EPOCH_MS + 42_000, che.name)
+
+    def test_missing_seed_is_an_error_when_a_tie_must_be_broken(self):
+        from django.core.exceptions import ValidationError
+
+        candidates = [EquipmentState(tos_che_id=i) for i in (11, 12)]
+        with self.assertRaises(ValidationError):
+            select_equipment(candidates, seed=None, order_id=41)
+        # No tie, no draw: a missing seed is harmless.
+        candidates[1].idle_since_event_ms = 5
+        self.assertEqual(select_equipment(candidates, seed=None, order_id=41).tos_che_id, 11)

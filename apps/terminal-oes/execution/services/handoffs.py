@@ -28,6 +28,7 @@ from execution.services.dispatch import (
     derived_id,
     event_time,
     queue_cancel_dcmd,
+    session_event_ms,
 )
 from execution.services.events import finalize_outbox_event, queue_execution_event
 
@@ -196,8 +197,10 @@ def _cancel_operation(operation, *, reason, event_ms, anchor_sim_ms):
         equipment.working = False
         equipment.is_dispatched = False
         equipment.is_available = equipment.powered_on and not equipment.is_in_maintenance
-        if event_ms is not None:
-            equipment.idle_since_event_ms = int(event_ms)
+        live = assignment.commands.exclude(simulation_session=None).first()
+        equipment.idle_since_event_ms = session_event_ms(
+            live.simulation_session if live is not None else None, event_ms,
+        )
         equipment.save(update_fields=[
             "working", "is_dispatched", "is_available", "idle_since_event_ms",
         ])

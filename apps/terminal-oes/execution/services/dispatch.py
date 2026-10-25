@@ -132,6 +132,21 @@ def _eligible_equipment(operation, session):
     return list(query)
 
 
+def session_event_ms(session, event_ms=None):
+    """Event time on the simulator clock (TL review S-3 / A-6).
+
+    ``event_ms`` when the result carried Event/TimeMs; otherwise the session's
+    current sim time (Sim/StartEpochMs + latest Sim/TimeMs), so idle-since never
+    mixes wall time with sim time. Wall time only when there is no simulator
+    clock at all (no session, or a session that never reported its epoch).
+    """
+    if event_ms is not None:
+        return int(event_ms)
+    if session is not None and session.start_epoch_ms is not None:
+        return int(session.start_epoch_ms) + int(session.last_sim_time_ms or 0)
+    return int(timezone.now().timestamp() * 1000)
+
+
 def select_equipment(candidates, *, seed, order_id):
     """D-014/T-007: the CHE idle longest on Event/TimeMs; ties by a PRNG seeded from Sim/Seed + OrderId.
 
@@ -146,7 +161,13 @@ def select_equipment(candidates, *, seed, order_id):
     tied = [item for item in ordered if (item.idle_since_event_ms or 0) == earliest]
     if len(tied) == 1:
         return tied[0]
-    rng = random.Random(f"{seed if seed is not None else 0}:{order_id}")
+    if seed is None:
+        # TL review S-6: never draw from an unseeded (silently 0) PRNG; a
+        # session without Sim/Seed cannot break a tie reproducibly (D-016).
+        raise ValidationError(
+            "D-016: Sim/Seed is missing for this session; cannot break the CHE tie.",
+        )
+    rng = random.Random(f"{seed}:{order_id}")
     return tied[rng.randrange(len(tied))]
 
 
@@ -734,10 +755,8 @@ def apply_command_event(
     equipment.is_dispatched = False
     equipment.is_available = equipment.powered_on and not equipment.is_in_maintenance
     # D-014/T-007: idle-since on Event/TimeMs. Results without it (REST or
-    # manual path, no simulator clock) fall back to wall time (assumption A-6).
-    equipment.idle_since_event_ms = (
-        int(event_ms) if event_ms is not None else int(now.timestamp() * 1000)
-    )
+    # manual path) fall back to the session's sim clock (A-6, TL review S-3).
+    equipment.idle_since_event_ms = session_event_ms(command.simulation_session, event_ms)
     equipment.save(update_fields=[
         "working", "is_dispatched", "is_available", "idle_since_event_ms",
     ])
