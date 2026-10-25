@@ -296,9 +296,13 @@ def transfer_container(container_visit_id, from_che_id, to_che_id):
 
 
 def _exception_slot(visit, preferred_position_id=None):
-    """A free ground slot in BLOCK01 (D-009 dummy slots); the planned slot first if free."""
+    """A free ground slot in BLOCK01 (D-009 dummy slots); the planned slot first if free.
+
+    N-5: only BLOCK01 slots qualify, also for the planned (preferred) slot.
+    """
     base = Position.objects.select_for_update().filter(
         pile__storage_grid__layout_asset__layout_version__location_id=visit.location_id,
+        pile__storage_grid__name=EXCEPTION_BLOCK_NAME,
         container_visit__isnull=True,
     )
     if preferred_position_id:

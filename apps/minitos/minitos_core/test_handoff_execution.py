@@ -15,10 +15,12 @@ from minitos_core.models import (
     EquipmentType,
     IntegrationOutbox,
     ISOType,
+    LayoutAsset,
     Order,
     OrderLeg,
     OrderRoutePlan,
     Position,
+    StorageGrid,
     WorkQueue,
 )
 from minitos_core.services import sync_yard_grid
@@ -141,6 +143,24 @@ class HandoffExecutionTests(LayoutTestCase):
         # Duplicate exception: no second move.
         self.event('handoff_exception', leg=self.legs[0], che=self.qc, **details)
         self.assertEqual(Position.objects.filter(container_visit=self.visit).count(), 1)
+
+    def test_exception_ignores_a_planned_slot_outside_block01(self):
+        """N-5: the exception move only ever lands in BLOCK01."""
+        other_block = StorageGrid.objects.create(
+            layout_asset=LayoutAsset.objects.create(
+                layout_version=self.layout, code='A02', name='BLOCK02',
+                asset_kind=LayoutAsset.YARD_BLOCK, geometry=self.block.layout_asset.geometry,
+            ),
+            name='BLOCK02', max_bays=2, max_rows=2, max_tier=2, latitude=40, longitude=-3,
+            bay_use_heading_axis=True, bay_naming=StorageGrid.LETTERS, initial_bay='C',
+        )
+        sync_yard_grid(other_block)
+        elsewhere = Position.objects.filter(pile__storage_grid=other_block, tier=1).first()
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        self.event('handoff_exception', leg=self.legs[0], che=self.qc, reason='NO_TT_TIMEOUT',
+                   destination_position_id=elsewhere.pk)
+        slot = Position.objects.get(container_visit=self.visit)
+        self.assertEqual(slot.pile.storage_grid.name, 'BLOCK01')
 
     def test_handoff_exception_without_reason_is_rejected(self):
         """QA/TL: the schema requires reason; no HANDOFF_EXCEPTION default."""
