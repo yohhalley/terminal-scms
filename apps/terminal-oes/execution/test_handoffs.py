@@ -350,7 +350,9 @@ class NoShowTests(HandoffTestBase):
             self.assertTrue(metrics["Command/AssignmentId"])
             self.assertEqual(metrics["Command/ExpiresAtMs"], 920_000)
         self.order.refresh_from_db()
-        self.assertEqual(self.order.status, ExecutionOrder.CANCELLED)
+        # A-1 (TL interim, pending Yael): completed by exception, not cancelled.
+        self.assertEqual(self.order.status, ExecutionOrder.COMPLETE)
+        self.assertEqual(self.order.failure_reason, "NO_TT_TIMEOUT")
         self.assertEqual(self.order.failure_reason, "NO_TT_TIMEOUT")
         self.assertEqual(
             set(self.order.operations.values_list("status", flat=True)),

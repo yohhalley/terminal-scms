@@ -34,6 +34,12 @@ from execution.services.events import finalize_outbox_event, queue_execution_eve
 
 logger = logging.getLogger(__name__)
 
+# Assumption A-1 (TL interim call, pending Yael): a TT no-show completes the
+# order *by exception* (failure_reason NO_TT_TIMEOUT); both legs stay cancelled
+# per T-007. Flip to ExecutionOrder.CANCELLED here (and NO_SHOW_ORDER_STATUS in
+# MiniTOS order_execution.py) if Yael decides no-show cancels the order.
+NO_SHOW_ORDER_STATUS = ExecutionOrder.COMPLETE
+
 
 class ResultRejected(ValidationError):
     """A command result that is stored with status ``rejected`` and a reason code."""
@@ -245,9 +251,9 @@ def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
             operation, reason=reason, event_ms=event_ms, anchor_sim_ms=sim_ms,
         ):
             cancelled_legs.append(operation.tos_leg_id)
-    order.status = ExecutionOrder.CANCELLED
+    order.status = NO_SHOW_ORDER_STATUS
     order.failure_reason = reason
-    order.completed_at = timezone.now()
+    order.completed_at = event_time(session_event_ms(handoff.simulation_session, event_ms))
     order.save(update_fields=["status", "failure_reason", "completed_at", "updated_at"])
     last_leg = order.operations.order_by("-sequence").first()
     outgoing = queue_execution_event(
