@@ -1,0 +1,28 @@
+{
+  "payload": {
+    "data": {
+      "che_id": 17,
+      "event": "leg_dispatched",
+      "leg_id": 4101,
+      "occurred_at": "2026-10-25T13:42:23.358308+00:00",
+      "order_id": 41
+    },
+    "enterprise": {
+      "code": "enterprise-a",
+      "id": "0a0a0a0a-0000-4000-8000-000000000001",
+      "name": "Enterprise A"
+    },
+    "event_id": "d2564e1f-3f77-4e44-a02b-9dcaaaa1c230",
+    "schema": "scms.execution.event.v1",
+    "site": {
+      "code": "site-a",
+      "configuration_revision": 1,
+      "id": "0b0b0b0b-0000-4000-8000-000000000002",
+      "name": "Site A",
+      "source_location_id": 1
+    }
+  },
+  "qos": 1,
+  "retain": false,
+  "topic": "scms/v2/enterprise-a/site-a/oes/orders/41/execution"
+}

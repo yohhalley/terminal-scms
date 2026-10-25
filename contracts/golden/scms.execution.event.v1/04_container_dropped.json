@@ -1,0 +1,29 @@
+{
+  "payload": {
+    "data": {
+      "che_id": 17,
+      "event": "container_dropped",
+      "leg_id": 4101,
+      "occurred_at": "2026-10-25T13:42:23.367739+00:00",
+      "order_id": 41,
+      "position_id": 112
+    },
+    "enterprise": {
+      "code": "enterprise-a",
+      "id": "0a0a0a0a-0000-4000-8000-000000000001",
+      "name": "Enterprise A"
+    },
+    "event_id": "cf0baddb-2b57-420b-ba7c-a343a7dc6fd0",
+    "schema": "scms.execution.event.v1",
+    "site": {
+      "code": "site-a",
+      "configuration_revision": 1,
+      "id": "0b0b0b0b-0000-4000-8000-000000000002",
+      "name": "Site A",
+      "source_location_id": 1
+    }
+  },
+  "qos": 1,
+  "retain": false,
+  "topic": "scms/v2/enterprise-a/site-a/oes/orders/41/execution"
+}

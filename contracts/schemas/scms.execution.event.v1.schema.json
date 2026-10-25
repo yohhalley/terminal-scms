@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yohhalley/terminal-scms/contracts/schemas/scms.execution.event.v1.schema.json",
+  "title": "scms.execution.event.v1 (OES -> MiniTOS business execution event)",
+  "description": "Envelope as decided in the TCL-002 backend review section 2.7 and vault decision T-006. Topic: scms/v2/{enterprise}/{site}/oes/orders/{order_id}/execution, QoS 1, not retained. 'terminal' is required because the MiniTOS consumer (minitos_core/services/integration_events.py apply_execution_message) reads payload['terminal']['id']. correlation_id, causation_id and source_sim_time_ms (review S7) are optional until agreed.",
+  "type": "object",
+  "required": ["schema", "event_id", "enterprise", "site", "terminal", "data"],
+  "properties": {
+    "schema": {"const": "scms.execution.event.v1"},
+    "event_id": {"type": "string", "format": "uuid"},
+    "enterprise": {
+      "type": "object",
+      "required": ["id", "code"],
+      "properties": {"id": {"type": "string"}, "code": {"type": "string"}}
+    },
+    "site": {
+      "type": "object",
+      "required": ["id", "code", "source_location_id"],
+      "properties": {
+        "id": {"type": "string"},
+        "code": {"type": "string"},
+        "source_location_id": {"type": "integer"},
+        "configuration_revision": {"type": "integer"}
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {"id": {"type": "integer"}, "code": {"type": "string"}}
+    },
+    "correlation_id": {"type": "string"},
+    "causation_id": {"type": "string"},
+    "data": {
+      "type": "object",
+      "required": ["event", "order_id", "occurred_at"],
+      "properties": {
+        "event": {
+          "enum": [
+            "order_started", "leg_dispatched", "leg_started", "container_picked_up",
+            "container_dropped", "leg_completed", "leg_failed", "leg_blocked",
+            "order_failed", "order_cancelled"
+          ]
+        },
+        "order_id": {"type": "integer"},
+        "leg_id": {"type": "integer"},
+        "che_id": {"type": "integer"},
+        "position_id": {"type": "integer"},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}
