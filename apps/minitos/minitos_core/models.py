@@ -216,6 +216,13 @@ class ContainerVisit(models.Model):
         on_delete=models.RESTRICT, blank=True, null=True,
         help_text='CHE temporarily carrying this container during an active move.',
     )
+    exception_reason = models.CharField(
+        max_length=40, blank=True, default='',
+        help_text=(
+            'Set when execution moved the container by exception, e.g. NO_TT_TIMEOUT '
+            '(D-013/T-007 relocation to a dummy block slot). Blank for a normal move.'
+        ),
+    )
     last_updated = models.DateTimeField(auto_now=True)
 
     def __str__(self):

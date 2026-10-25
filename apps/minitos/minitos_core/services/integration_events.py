@@ -60,6 +60,7 @@ def apply_execution_message(topic, raw_payload):
                 che_id=data.get('che_id'),
                 position_id=data.get('position_id'),
                 occurred_at=occurred_at,
+                details=data,
             )
             inbox.status = IntegrationInbox.PROCESSED
             inbox.error = ''

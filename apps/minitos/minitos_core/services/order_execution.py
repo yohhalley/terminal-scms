@@ -8,6 +8,7 @@ from django.utils import timezone
 from minitos_core.models import (
     Che,
     ContainerVisit,
+    EquipmentType,
     IntegrationOutbox,
     Order,
     OrderLeg,
@@ -29,7 +30,13 @@ EXECUTION_EVENTS = {
     'leg_blocked',
     'order_failed',
     'order_cancelled',
+    'container_transferred',
+    'handoff_exception',
 }
+
+QUAY_CRANE_TYPES = {'STS', 'QC'}
+VESSEL_SOURCE = 'VESSEL'
+EXCEPTION_BLOCK_NAME = 'BLOCK01'
 
 
 def _event_time(value=None):
@@ -122,6 +129,11 @@ def _queue_released_order(order):
                 'status': order.status,
                 'priority': order.priority,
                 'container_number': order.container_number_id,
+                # D-010: the ISO 6346 number itself ('container_number' is the visit pk).
+                'container_unit_number': (
+                    order.container_number.container_number_id
+                    if order.container_number_id else None
+                ),
                 'from_position': order.from_position_id,
                 'to_position': order.to_position_id,
                 'released_at': order.released_at.isoformat(),
@@ -199,6 +211,112 @@ def pickup_container(container_visit_id, che_id):
     return visit
 
 
+def _is_quay_crane(che):
+    equipment_type = che.equipment_type
+    return (
+        equipment_type.equipment_type == EquipmentType.STS
+        or equipment_type.name.upper() in QUAY_CRANE_TYPES
+    )
+
+
+@transaction.atomic
+def place_container_on_quay_crane(container_visit_id, che_id):
+    """D-012/T-007 (B2): the container appears on the QC; custody On Equipment / QC (D-015).
+
+    There is no lift from the vessel to model. Idempotent for the same QC.
+    """
+    visit = ContainerVisit.objects.select_for_update().get(pk=container_visit_id)
+    che = _locked_che(che_id, visit.location_id)
+    if visit.status == ContainerVisit.ON_EQUIPMENT and visit.current_che_id == che.pk:
+        return visit
+    if not _is_quay_crane(che):
+        raise ValidationError('Only a quay crane can take a container from the vessel.')
+    if visit.current_che_id:
+        raise ValidationError('The container is already carried by another CHE.')
+    if Position.objects.filter(container_visit=visit).exists():
+        raise ValidationError('The container is in the yard, not on the vessel.')
+    if visit.status in {ContainerVisit.DEPARTED, ContainerVisit.COMPLETED}:
+        raise ValidationError('The container visit is closed.')
+    visit.current_che = che
+    visit.status = ContainerVisit.ON_EQUIPMENT
+    visit.latitude = che.latitude
+    visit.longitude = che.longitude
+    visit.save(update_fields=[
+        'current_che', 'status', 'latitude', 'longitude', 'last_updated',
+    ])
+    return visit
+
+
+@transaction.atomic
+def transfer_container(container_visit_id, from_che_id, to_che_id):
+    """T-006: one CHE-to-CHE hand-off recorded as one custody event. Idempotent."""
+    visit = ContainerVisit.objects.select_for_update().get(pk=container_visit_id)
+    from_che = _locked_che(from_che_id, visit.location_id)
+    to_che = _locked_che(to_che_id, visit.location_id)
+    if visit.status == ContainerVisit.ON_EQUIPMENT and visit.current_che_id == to_che.pk:
+        return visit
+    if visit.status != ContainerVisit.ON_EQUIPMENT or visit.current_che_id != from_che.pk:
+        raise ValidationError('The container is not carried by the giving CHE.')
+    visit.current_che = to_che
+    visit.latitude = to_che.latitude
+    visit.longitude = to_che.longitude
+    visit.save(update_fields=['current_che', 'latitude', 'longitude', 'last_updated'])
+    return visit
+
+
+def _exception_slot(visit, preferred_position_id=None):
+    """A free ground slot in BLOCK01 (D-009 dummy slots); the planned slot first if free."""
+    base = Position.objects.select_for_update().filter(
+        pile__storage_grid__layout_asset__layout_version__location_id=visit.location_id,
+        container_visit__isnull=True,
+    )
+    if preferred_position_id:
+        preferred = base.filter(pk=preferred_position_id).first()
+        if preferred is not None and (
+            preferred.tier == 1
+            or not preferred.pile.positions.filter(
+                tier__lt=preferred.tier, container_visit__isnull=True,
+            ).exists()
+        ):
+            return preferred
+    slot = base.filter(
+        pile__storage_grid__name=EXCEPTION_BLOCK_NAME, tier=1,
+    ).order_by('pile_id', 'pk').first()
+    if slot is None:
+        raise ValidationError(f'No free slot in {EXCEPTION_BLOCK_NAME} for the exception move.')
+    return slot
+
+
+@transaction.atomic
+def relocate_container_after_exception(container_visit_id, reason, preferred_position_id=None):
+    """D-013/T-007: put the container straight into BLOCK01, flagged as an exception move.
+
+    Idempotent: a visit already relocated for an exception is returned as is.
+    """
+    visit = ContainerVisit.objects.select_for_update().get(pk=container_visit_id)
+    current = Position.objects.filter(container_visit=visit).first()
+    if current is not None and visit.exception_reason:
+        return visit
+    if current is not None:
+        raise ValidationError('The container is already in the yard.')
+    target = _exception_slot(visit, preferred_position_id)
+    target.container_visit = visit
+    target.save(update_fields=['container_visit', 'is_occupied'])
+    visit.current_che = None
+    visit.status = ContainerVisit.AT_YARD
+    visit.exception_reason = str(reason)[:40]
+    if hasattr(target, 'operational_position'):
+        visit.latitude = target.operational_position.latitude
+        visit.longitude = target.operational_position.longitude
+    visit.save(update_fields=[
+        'current_che', 'status', 'exception_reason', 'latitude', 'longitude', 'last_updated',
+    ])
+    if visit.container_number_id and not visit.container_number.is_in_terminal:
+        visit.container_number.is_in_terminal = True
+        visit.container_number.save(update_fields=['is_in_terminal'])
+    return visit
+
+
 @transaction.atomic
 def drop_container(container_visit_id, che_id, position_id):
     visit = ContainerVisit.objects.select_for_update().get(pk=container_visit_id)
@@ -255,7 +373,9 @@ def apply_execution_event(
     che_id=None,
     position_id=None,
     occurred_at=None,
+    details=None,
 ):
+    details = details or {}
     if event not in EXECUTION_EVENTS:
         raise ValidationError(f'Unsupported execution event: {event}.')
 
@@ -299,11 +419,42 @@ def apply_execution_event(
     elif event == 'container_picked_up':
         if not order.container_number_id or not che:
             raise ValidationError('container_picked_up requires an order container and CHE.')
-        pickup_container(order.container_number_id, che.pk)
+        if str(details.get('source') or '').upper() == VESSEL_SOURCE:
+            place_container_on_quay_crane(order.container_number_id, che.pk)
+        else:
+            pickup_container(order.container_number_id, che.pk)
     elif event == 'container_dropped':
         if not order.container_number_id or not che or position_id is None:
             raise ValidationError('container_dropped requires a container, CHE, and position_id.')
         drop_container(order.container_number_id, che.pk, position_id)
+    elif event == 'container_transferred':
+        from_che_id = details.get('from_che_id')
+        to_che_id = details.get('to_che_id')
+        if not order.container_number_id or not from_che_id or not to_che_id:
+            raise ValidationError(
+                'container_transferred requires a container, from_che_id and to_che_id.'
+            )
+        transfer_container(order.container_number_id, int(from_che_id), int(to_che_id))
+    elif event == 'handoff_exception':
+        if not order.container_number_id:
+            raise ValidationError('handoff_exception requires an order container.')
+        reason = details.get('reason') or 'HANDOFF_EXCEPTION'
+        relocate_container_after_exception(
+            order.container_number_id, reason, details.get('destination_position_id'),
+        )
+        if order.status not in {Order.COMPLETE, Order.CANCELLED}:
+            order.status = Order.CANCELLED
+            order.completed_at = occurred_at
+            order.save(update_fields=['status', 'completed_at'])
+        _active_legs(order).exclude(
+            status__in=[OrderLeg.COMPLETE, OrderLeg.CANCELLED],
+        ).update(status=OrderLeg.CANCELLED, actual_end=occurred_at)
+        for released_che_id in (details.get('from_che_id'), details.get('to_che_id')):
+            if released_che_id:
+                released = _locked_che(int(released_che_id), terminal_id)
+                _set_che_execution_state(
+                    released, dispatched=False, working=False, available=True,
+                )
     elif event == 'leg_completed':
         if not leg:
             raise ValidationError('leg_completed requires leg_id.')
