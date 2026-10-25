@@ -164,6 +164,9 @@ class HandoffExecutionTests(LayoutTestCase):
         self.order.released_at = timezone.now()
         self.order.save()
         _queue_released_order(self.order)
-        payload = IntegrationOutbox.objects.latest('pk').payload
+        # TL review S-1: filter by schema and order, not the newest outbox row.
+        payload = IntegrationOutbox.objects.filter(
+            schema='scms.order.released.v1',
+        ).filter(payload__data__order__id=self.order.pk).latest('pk').payload
         self.assertEqual(payload['data']['order']['container_unit_number'], 'MSCU1234565')
         self.assertEqual(payload['data']['order']['container_number'], self.visit.pk)
