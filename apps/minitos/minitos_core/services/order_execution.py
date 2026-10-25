@@ -129,6 +129,11 @@ def _queue_released_order(order):
             'destination_inventory_position_id': (
                 leg.end_position.stack_position_id if leg.end_position_id else None
             ),
+            # Contract rev 9.3 / O6: readable destination code for Godot's
+            # Command/DestinationPositionCode.
+            'destination_position_code': (
+                leg.end_position.code if leg.end_position_id else None
+            ),
             'source_latitude': source_latitude,
             'source_longitude': source_longitude,
             'destination_latitude': destination_latitude,

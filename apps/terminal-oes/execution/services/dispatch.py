@@ -313,6 +313,9 @@ def _issue_leg_command(
         "destination_position_id": operation.destination_position_id,
         "source_inventory_position_id": operation.source_inventory_position_id,
         "destination_inventory_position_id": operation.destination_inventory_position_id,
+        "destination_position_code": (
+            (operation.source_payload or {}).get("destination_position_code") or None
+        ),
         "source_latitude": operation.source_latitude,
         "source_longitude": operation.source_longitude,
         "destination_latitude": operation.destination_latitude,
@@ -345,7 +348,9 @@ def _issue_leg_command(
         ("Command/ContainerVisitId", "Int64", data.get("container_visit_id")),
         ("Command/ContainerNumber", "String", data.get("container_number")),
         ("Command/SourcePositionId", "Int64", data.get("source_position_id")),
+        # Destination names as read by Godot TCL-014b (contract rev 9.3).
         ("Command/DestinationPositionId", "Int64", data.get("destination_position_id")),
+        ("Command/DestinationPositionCode", "String", data.get("destination_position_code")),
         (
             "Command/SourceInventoryPositionId",
             "Int64",

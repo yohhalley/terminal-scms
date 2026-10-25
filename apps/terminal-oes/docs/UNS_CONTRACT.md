@@ -113,6 +113,14 @@ file preserves active commands and recent CHE state across process restart.
   and `Command/TransferPositionId`. A QC giver gets `Command/Type=qc_discharge`.
   The TT->RTG hand-off (H2) is dispatched only after H1 has transferred (Q18):
   the TT gets `assign_handoff` (giver) and the RTG `execute_order_leg` (receiver).
+- **Destination.** Every leg DCMD with a destination carries
+  `Command/DestinationPositionId` (Int64, MiniTOS operational position),
+  `Command/DestinationPositionCode` (String, its readable code, e.g. a block
+  lane or slot) and, for a yard slot, `Command/DestinationInventoryPositionId`
+  (Int64, the MiniTOS stack position chosen by MiniTOS), plus
+  `Command/DestinationLatitude`/`Longitude`. These are the names Godot
+  TCL-014b reads (contract rev 9.3); Godot prefers the inventory id, then the
+  position id, and uses a seeded dummy slot only when none is sent (O6).
 - **Cancel.** `Command/Type=cancel`, `Command/CancelCommandId` = the command to
   cancel, `Command/Reason`, plus the normal envelope (`Command/AssignmentId` of
   the target, `Command/ExpiresAtMs`). The cancel's own `Command/Id` is derived

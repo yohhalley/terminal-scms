@@ -214,6 +214,24 @@ class HandoffExecutionTests(LayoutTestCase):
         self.assertNotEqual(slot, self.planned)
         self.assertEqual((slot.pile.storage_grid.name, slot.tier), ('BLOCK01', 1))
 
+    def test_released_payload_carries_the_destination_position_code(self):
+        """Contract rev 9.3/O6: OES forwards it as Command/DestinationPositionCode."""
+        self.legs[2].end_position = self.planned.operational_position
+        self.legs[2].save(update_fields=['end_position'])
+        self.order.status = Order.RELEASED
+        self.order.released_at = timezone.now()
+        self.order.save()
+        _queue_released_order(self.order)
+        payload = IntegrationOutbox.objects.filter(
+            schema='scms.order.released.v1',
+        ).filter(payload__data__order__id=self.order.pk).latest('pk').payload
+        legs = {leg['sequence']: leg for leg in payload['data']['legs']}
+        self.assertEqual(
+            legs[3]['destination_position_code'], self.planned.operational_position.code,
+        )
+        self.assertTrue(legs[3]['destination_position_code'])
+        self.assertIsNone(legs[1]['destination_position_code'])
+
     def test_released_payload_carries_the_iso_container_number(self):
         """D-010: OES needs the ISO 6346 number, not only the visit pk."""
         self.order.status = Order.RELEASED

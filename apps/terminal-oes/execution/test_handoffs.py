@@ -89,6 +89,7 @@ class HandoffTestBase(TestCase):
             {"id": order_id * 100 + 3, "sequence": 3, "equipment_type": RTG_TYPE,
              "start_position": 7, "end_position": 12,
              "destination_inventory_position_id": 112,
+             "destination_position_code": "BLOCK01-C-1-1",
              "destination_latitude": 17.9408, "destination_longitude": -102.1494},
         ]
         for leg in legs:
@@ -902,3 +903,20 @@ class CheNameTests(HandoffTestBase):
         transfer = next(d for d in datas if d["event"] == "container_transferred")
         self.assertEqual(transfer["from_che_name"], self.qc.name)
         self.assertEqual(transfer["to_che_name"], tt.name)
+
+
+
+class DestinationMetricTests(HandoffTestBase):
+    """Contract rev 9.3: OES sends the destination names Godot TCL-014b reads."""
+
+    def test_rtg_leg_carries_destination_id_code_and_inventory_id(self):
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        self.transfer_h1(qc_cmd, tt_cmd)
+        dispatch_next_operation(self.order.pk)
+        metrics = self.dcmd_metrics(self.command_for(self.rtg))
+        self.assertEqual(metrics["Command/DestinationPositionId"], 12)
+        self.assertEqual(metrics["Command/DestinationPositionCode"], "BLOCK01-C-1-1")
+        self.assertEqual(metrics["Command/DestinationInventoryPositionId"], 112)
+        # A leg without a code sends no empty code metric.
+        self.assertNotIn("Command/DestinationPositionCode", self.dcmd_metrics(tt_cmd))
+        self.assertEqual(self.dcmd_metrics(tt_cmd)["Command/DestinationPositionId"], 7)
