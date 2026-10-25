@@ -33,7 +33,7 @@ COMMAND_EXECUTE_ORDER_LEG = "execute_order_leg"
 COMMAND_QC_DISCHARGE = "qc_discharge"
 COMMAND_QC_LOAD = "qc_load"
 COMMAND_ASSIGN_HANDOFF = "assign_handoff"
-COMMAND_CANCEL = "cancel"  # TCL-014a HeadlessSimulator.gd:11
+COMMAND_CANCEL = "cancel"  # TCL-014a HeadlessSimulator.gd COMMAND_CANCEL
 QC_EQUIPMENT_TYPE_CODES = {"STS", "QC"}
 TERMINAL_COMMAND_STATES = {
     EquipmentCommand.COMPLETE,

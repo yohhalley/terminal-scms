@@ -166,7 +166,7 @@ def _route_result(command, event, metrics, result_id):
     operation = command.assignment.operation
     if command.command_type == COMMAND_CANCEL:
         # TCL-014a: only a failed cancel is reported on the cancel's own id;
-        # the cancelled command gets ``cancelled`` (HeadlessSimulator.gd:399-403).
+        # the cancelled command gets ``cancelled`` (HeadlessSimulator.gd `_handle_cancel`).
         logger.warning("Cancel DCMD %s reported %s: %s", command.pk, event,
                        metrics.get("Command/Result/Reason", ""))
         return CommandResultReceipt.INFORMATIONAL
