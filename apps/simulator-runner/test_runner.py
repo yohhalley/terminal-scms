@@ -25,6 +25,51 @@ class DockerLauncherTests(unittest.TestCase):
         self.assertNotIn("/var/run/docker.sock", " ".join(command))
         self.assertEqual(command.count("--env"), len(ALLOWED_ENVIRONMENT))
 
+    def test_simulation_settings_are_passed_to_the_container(self):
+        settings = {
+            "SIMULATOR_SEED": "42",
+            "SIMULATOR_RUN_ID": "run-42",
+            "SIMULATOR_TIME_SCALE": "4.0",
+            "SIMULATOR_FIXED_STEP_MS": "100",
+            "SIMULATOR_START_EPOCH_MS": "1764583200000",
+            "SIMULATOR_DEVICE_ID_MODE": "name",
+            "SIMULATOR_QC_WAIT_MIN_S": "10",
+            "SIMULATOR_QC_WAIT_MAX_S": "30",
+            "SIMULATOR_QC_HOLD_WAIT_MIN_S": "12",
+            "SIMULATOR_QC_HOLD_WAIT_MAX_S": "28",
+            "SIMULATOR_TT_NO_SHOW_TIMEOUT_S": "300",
+            "SIMULATOR_COMMAND_TTL_S": "600",
+        }
+        environment = {
+            key: value for key, value in launch_environment().items()
+            if not key.startswith("SIMULATOR_") or key in {
+                "SIMULATOR_SITE_ID", "SIMULATOR_SESSION_ID", "SIMULATOR_TOKEN",
+                "SIMULATOR_CONFIG_REVISION", "SIMULATOR_CONFIG_CHECKSUM",
+            }
+        }
+        environment.update(settings)
+        _, command = DockerLauncher("allowed").command(environment)
+        for key, value in settings.items():
+            self.assertIn(f"{key}={value}", command)
+
+    def test_simulation_settings_are_optional(self):
+        environment = {
+            key: value for key, value in launch_environment().items()
+            if key in {
+                "OES_URL", "SIMULATOR_SITE_ID", "SIMULATOR_SESSION_ID", "SIMULATOR_TOKEN",
+                "SIMULATOR_CONFIG_REVISION", "SIMULATOR_CONFIG_CHECKSUM",
+                "MQTT_HOST", "MQTT_PORT", "SPARKPLUG_GROUP_ID", "SPARKPLUG_NODE_ID",
+            }
+        }
+        _, command = DockerLauncher("allowed").command(environment)
+        self.assertFalse(any(part.startswith("SIMULATOR_SEED=") for part in command))
+
+    def test_local_sim_aliases_are_not_passed_through(self):
+        environment = launch_environment()
+        environment["SIM_SEED"] = "42"
+        with self.assertRaisesRegex(ValueError, "SIM_SEED"):
+            DockerLauncher("allowed").command(environment)
+
     def test_unknown_environment_is_rejected(self):
         environment = launch_environment()
         environment["UNTRUSTED_DOCKER_ARGUMENT"] = "--privileged"
