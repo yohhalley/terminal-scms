@@ -251,11 +251,19 @@ def _apply_command_result(metrics, session=None):
     )
 
 
+SESSION_SCOPED_MESSAGE_TYPES = frozenset({"NDATA", "DDATA", "DBIRTH"})
+
+
 def _is_stale(session, metrics):
-    """B5: a DDATA from another session (late replay after a restart) is dropped."""
+    """B5/Q14: NDATA, DDATA and DBIRTH must carry this session's Session/Id.
+
+    A message from another session (late replay after a restart) or one with
+    no Session/Id at all is dropped (assumption A-7, aligned with Q14 in TL
+    review). DDEATH carries only ``seq`` in Sparkplug and is not checked.
+    """
     reported = metrics.get("Session/Id")
     if reported in {None, ""}:
-        return False  # assumption A-7: older publishers omit Session/Id
+        return True
     try:
         return uuid.UUID(str(reported)) != session.pk
     except ValueError:
@@ -354,16 +362,18 @@ def process_sparkplug_message(topic, raw_payload):
     if not session.node_connected:
         raise ValidationError("Device data is invalid until a matching NBIRTH is received.")
 
+    # TL review S-4: drop a stale message before it can touch seq tracking,
+    # heartbeat or any CHE state, DBIRTH included.
+    if message_type in SESSION_SCOPED_MESSAGE_TYPES and _is_stale(session, metrics):
+        session.stale_message_count += 1
+        session.save(update_fields=["stale_message_count", "updated_at"])
+        logger.warning("Dropped %s without this session's Session/Id on %s.", message_type, topic)
+        return session
     _track_sequence(session, document.get("seq"))
     session.heartbeat_at = timezone.now()
     session.save(update_fields=[
         "sparkplug_last_sequence", "sequence_gap_count", "heartbeat_at", "updated_at",
     ])
-    if message_type in {"NDATA", "DDATA"} and _is_stale(session, metrics):
-        session.stale_message_count += 1
-        session.save(update_fields=["stale_message_count", "updated_at"])
-        logger.warning("Dropped %s from another session on %s.", message_type, topic)
-        return session
     _advance_sim_clock(session, metrics)
     if message_type == "NDATA":
         return _apply_command_result(metrics, session) or session

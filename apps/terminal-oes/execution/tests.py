@@ -827,6 +827,7 @@ class SparkplugRuntimeTests(TestCase):
             encode_payload([
                 {"name": "Identity/Id", "type": "Int64", "value": 17},
                 {"name": "Identity/Name", "type": "String", "value": "SC01"},
+                {"name": "Session/Id", "type": "String", "value": str(self.session.pk)},
                 {"name": "State/PoweredOn", "type": "Boolean", "value": True},
                 {"name": "State/Working", "type": "Boolean", "value": False},
                 {"name": "State/IsAvailable", "type": "Boolean", "value": True},
@@ -890,6 +891,7 @@ class SparkplugRuntimeTests(TestCase):
         process_sparkplug_message(
             self.device_topic_prefix.format("DDATA"),
             encode_payload([
+                {"name": "Session/Id", "type": "String", "value": str(self.session.pk)},
                 {"name": "State/PoweredOn", "type": "Boolean", "value": False},
                 {"name": "State/Working", "type": "Boolean", "value": False},
                 {"name": "State/IsAvailable", "type": "Boolean", "value": False},
@@ -909,6 +911,7 @@ class SparkplugRuntimeTests(TestCase):
         command = assignment.commands.get()
         result_id = uuid.uuid4()
         result_metrics = [
+            {"name": "Session/Id", "type": "String", "value": str(self.session.pk)},
             {"name": "State/PoweredOn", "type": "Boolean", "value": True},
             {"name": "State/Working", "type": "Boolean", "value": False},
             {"name": "State/IsAvailable", "type": "Boolean", "value": True},

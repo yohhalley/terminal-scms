@@ -446,11 +446,32 @@ class TtSelectionTests(HandoffTestBase):
             "spBv1.0/ENTERPRISE_A/DBIRTH/SCMS_ENTERPRISE_A_SITE_A/TT04",
             encode_payload([
                 {"name": "Identity/Id", "type": "Int64", "value": 14},
+                {"name": "Session/Id", "type": "String", "value": str(self.session.pk)},
                 {"name": "State/PoweredOn", "type": "Boolean", "value": True},
             ], sequence=1),
         )
         che.refresh_from_db()
         self.assertEqual(che.idle_since_event_ms, START_EPOCH_MS)
+
+    def test_messages_without_session_id_are_dropped_before_seq_tracking(self):
+        """TL review S-4 + A-7 (Q14): DBIRTH/DDATA/NDATA need this Session/Id."""
+        che = self.che(14, "TT04", TT_TYPE, "TT")
+        before = SimulationSession.objects.get(pk=self.session.pk)
+        for message_type, topic_suffix in (("DBIRTH", "/TT04"), ("DDATA", "/TT04"), ("NDATA", "")):
+            process_sparkplug_message(
+                f"spBv1.0/ENTERPRISE_A/{message_type}/SCMS_ENTERPRISE_A_SITE_A{topic_suffix}",
+                encode_payload([
+                    {"name": "Identity/Id", "type": "Int64", "value": 14},
+                    {"name": "State/PoweredOn", "type": "Boolean", "value": False},
+                ], sequence=200),
+            )
+        after = SimulationSession.objects.get(pk=self.session.pk)
+        self.assertEqual(after.stale_message_count, before.stale_message_count + 3)
+        self.assertEqual(after.sparkplug_last_sequence, before.sparkplug_last_sequence)
+        self.assertEqual(after.sequence_gap_count, before.sequence_gap_count)
+        che.refresh_from_db()
+        self.assertIsNone(che.idle_since_event_ms)
+        self.assertTrue(che.powered_on)
 
 
 class SessionAndDedupeTests(HandoffTestBase):
