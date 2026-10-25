@@ -21,9 +21,11 @@ here; anything not covered by an explicit decision is listed as open.
   `started`, `container_picked_up` at the same Sim/TimeMs). The
   `container_picked_up` result carries `Command/Result/Source = VESSEL` (T-007 Q24). Then comes a seeded
   whole-second hold wait (default 10..30 s). The deposit happens at
-  max(hold end, TT ready): `container_dropped`, `handoff_completed`
-  (HandoffRole=giver) and `completed`. The TT then emits `container_picked_up`
-  and `handoff_completed` (HandoffRole=receiver) and drives to its destination.
+  max(hold end, TT ready). A hand-off is not a drop or a pick: the QC emits
+  `handoff_completed` (HandoffRole=giver) and `completed`, and the TT emits
+  `handoff_completed` (HandoffRole=receiver) and drives to its destination.
+  Neither side emits `container_dropped` / `container_picked_up` for the
+  transfer (Q8-R5: OES rejects a giver drop; BE review item 2).
   There is no pick phase and no timed lift, and no `SIM_QC_TIMED_PICK` flag
   (one never existed in the code).
 - **Hold wait config**: `SIMULATOR_QC_WAIT_MIN_S` / `SIMULATOR_QC_WAIT_MAX_S`
@@ -32,8 +34,10 @@ here; anything not covered by an explicit decision is listed as open.
   logs a warning and keeps the previous range.
 - **Cancel (T-007, fixes the cancel bug)**: a DCMD with `Command/Type = cancel`
   goes through the same envelope checks (session, site, revision, ExpiresAtMs,
-  AssignmentId). It cancels the command named in `Command/CancelCommandId`, or
-  the CHE's active command when that field is absent. The active command stops
+  AssignmentId). It cancels the command named in `Command/CancelCommandId`,
+  which is **required**: OES always sets it (BE interface review, TCL-003a), so
+  the old "cancel the active command" fallback was removed. A cancel without it
+  fails with "Cancel requires Command/CancelCommandId". The active command stops
   and is cleared, and the CHE goes idle with no container. `cancelled` is
   published for the **cancelled** command id, with `Work/State=idle` and
   `Load/ContainerVisitId=0`. The CHE then accepts the next command.
@@ -66,7 +70,9 @@ here; anything not covered by an explicit decision is listed as open.
   reconnect or rebirth. Result ids are derived from run id, session, command,
   event and event seq. The outbox and journal are pruned only on session
   end or reset; there is no ack protocol.
-- **Device id**: legacy `CHE_{id}` by default (current OES addresses that).
+- **Device id**: MiniTOS `Che.name` (e.g. `QC01`) by default
+  (`SIMULATOR_DEVICE_ID_MODE=name`); OES binds whatever id DBIRTH registers.
+  `SIMULATOR_DEVICE_ID_MODE=legacy` keeps the old `CHE_{id}`.
   `SIMULATOR_DEVICE_ID_MODE=name` uses MiniTOS `Che.name` (e.g. `QC01`). The
   mapping lives only in `source/headless/SimIds.gd`.
 - **mqtt.gd**: the packet id wraps 65535 -> 1 and is never 0 (approved by the Tech Lead).
@@ -81,11 +87,10 @@ here; anything not covered by an explicit decision is listed as open.
 
 ## Open points (need a decision or an OES or backend change)
 
-1. **Cancel DCMD shape is assumed.** OES `dispatch.py` sends no cancel DCMD
-   today; there is only `execute_order_leg`. Godot accepts `Command/Type = cancel`
-   with an optional `Command/CancelCommandId`. The type value, the target field
-   name, and whether a cancel needs its own AssignmentId or ExpiresAtMs must be
-   fixed in the contract and built in OES. The cancel DCMD's own id gets no
+1. **Cancel DCMD shape**: confirmed against the BE branch TCL-003a
+   (`queue_cancel_dcmd`): `Command/Type = cancel`, required
+   `Command/CancelCommandId`, `Command/Reason`, the target's AssignmentId and a
+   sim-time ExpiresAtMs. Still to land in the contract text. The cancel DCMD's own id gets no
    result of its own: only the cancelled command gets `cancelled`. A failed
    cancel is reported on the cancel's id.
    `Command/Result/Source` (value `VESSEL`) is an assumed metric name.
@@ -126,7 +131,8 @@ here; anything not covered by an explicit decision is listed as open.
    bootstrap fields `session.seed` and `session.start_epoch_ms`.
    `Sim/ScenarioId` is not published.
 9. There is no check that the target CHE of `qc_discharge` is a QC.
-10. A bad container-number format (`^[A-Z]{3}[UJZR][0-9]{7}$`) is a hard
+10. A bad container-number format (`^[A-Z]{3}[UJZ][0-9]{7}$`, contract/OES/
+    MiniTOS categories; `R` is no longer accepted) is a hard
     reject. The check digit is left to MiniTOS.
 11. The default seed `1` is arbitrary.
 12. Out of scope: `qc_load` (S1 is discharge only).

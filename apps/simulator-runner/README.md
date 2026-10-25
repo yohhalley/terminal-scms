@@ -29,6 +29,10 @@ environment are allowlisted explicitly (see `ALLOWED_ENVIRONMENT`):
 `SIMULATOR_QC_HOLD_WAIT_MAX_S`, `SIMULATOR_TT_NO_SHOW_TIMEOUT_S` and
 `SIMULATOR_COMMAND_TTL_S`.
 
+`SIMULATOR_DEVICE_ID_MODE` defaults to `name` in the simulator (device id =
+MiniTOS `Che.name`, e.g. `QC01`, as the contract and OES expect); set it to
+`legacy` only for the old `CHE_{id}` ids.
+
 Run the tests (unittest or pytest):
 
 ```bash
