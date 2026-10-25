@@ -99,6 +99,35 @@ the command ID before starting motion. Duplicate delivery replays the original
 result ID and never creates a second physical action. A session-specific runtime
 file preserves active commands and recent CHE state across process restart.
 
+### Hand-offs, cancel and sim-time expiry (TCL-003a / TCL-028)
+
+- **Expiry is sim time.** `Command/ExpiresAtMs` (Int64) is a `Sim/TimeMs`
+  value: the anchor `Sim/TimeMs` + TTL. The anchor is the `Sim/TimeMs` of the
+  result that caused the command (H1 transfer for H2, the time-out for cancels),
+  else the highest `Sim/TimeMs` OES has seen on any NDATA/DDATA/DBIRTH of the
+  session. The TTL is NBIRTH `Sim/Timing/CommandTtlS`, else
+  `EQUIPMENT_COMMAND_TTL_SIM_SECONDS` (default 600). OES also sends it to the
+  simulator as `SIMULATOR_COMMAND_TTL_S` in the claim environment.
+- **Paired dispatch (T-006).** A hand-off pair shares `Command/HandoffId` and
+  carries `Command/HandoffRole` (`giver`/`receiver`), `Command/CounterpartCheId`
+  and `Command/TransferPositionId`. A QC giver gets `Command/Type=qc_discharge`.
+  The TT->RTG hand-off (H2) is dispatched only after H1 has transferred (Q18):
+  the TT gets `assign_handoff` (giver) and the RTG `execute_order_leg` (receiver).
+- **Cancel.** `Command/Type=cancel`, `Command/CancelCommandId` = the command to
+  cancel, `Command/Reason`, plus the normal envelope (`Command/AssignmentId` of
+  the target, `Command/ExpiresAtMs`). The cancel's own `Command/Id` is derived
+  from the target, so a re-issued cancel is the same command.
+- **Results.** Every result carries `Command/Result/Id` (applied once),
+  `Session/Id` (another session's DDATA is dropped), `Sim/TimeMs`,
+  `Event/TimeMs` and `Sim/EventSeq`. `arrived_at_source`,
+  `arrived_at_destination` and `waiting_for_handoff` are informational. One
+  `handoff_completed` per side; the first emits `container_transferred`.
+  `handoff_timed_out` (QC giver) raises `handoff_exception` with
+  `NO_TT_TIMEOUT` and cancels the remaining legs. A rejected result is stored
+  with a reason and logged, never rolled back into the DDATA.
+- **MQTT.** The OES consumer uses MQTT 3.1.1 with clean session false and a
+  fixed client id, so QoS 1 results queue while it is down (MQTT 5 is backlog).
+
 Order release and execution lifecycle events are business messages and intentionally do not pretend to be Sparkplug device telemetry.
 
 The OES equipment projection includes the independent power, work,
