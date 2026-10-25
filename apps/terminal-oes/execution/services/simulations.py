@@ -10,6 +10,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from execution.models import EquipmentState, SimulationSession, SiteProjection
+from execution.services.handoffs import close_session_handoffs
 
 
 def _mqtt_identifier(value):
@@ -112,6 +113,8 @@ def stop_simulation(session_id):
     else:
         session.actual_state = SimulationSession.STOPPING
     session.save()
+    # TL review B-2: an aborted session can never finish its hand-offs.
+    close_session_handoffs(session, reason="SESSION_STOPPED")
     return session
 
 
@@ -241,6 +244,8 @@ def report_runner_status(session_id, runner_identity, runner_status, failure_rea
         session.failure_reason = failure_reason or "Simulator runner failed."
         session.stopped_at = now
     session.save()
+    if session.actual_state in {SimulationSession.STOPPED, SimulationSession.FAILED}:
+        close_session_handoffs(session, reason=f"SESSION_{session.actual_state}".upper())
     return session
 
 

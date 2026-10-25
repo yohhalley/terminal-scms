@@ -16,6 +16,7 @@ from execution.services.handoffs import (
     ResultRejected,
     apply_handoff_completed,
     apply_handoff_timed_out,
+    close_session_handoffs,
     record_conflict,
 )
 from execution.sparkplug import decode_payload, metrics_by_name, parse_topic
@@ -291,6 +292,12 @@ def _handle_nbirth(session, document, metrics):
     command_ttl_s = _optional_int(metrics, "Sim/Timing/CommandTtlS")
     session.command_ttl_s = command_ttl_s if command_ttl_s and command_ttl_s > 0 else None
     session.save()
+    # TL review B-2: hand-offs left pending by an abandoned earlier session of
+    # this site are closed, so they never lock a CHE out of this run.
+    close_session_handoffs(
+        SimulationSession.objects.filter(site=session.site).exclude(pk=session.pk),
+        reason="SESSION_ABANDONED",
+    )
     # D-014/D-016 (TL review B-1): idle time is per session. CHE rows are reused
     # across sessions of a site, so a CHE first bound to this session restarts
     # idle at Sim/StartEpochMs (None when unknown; DBIRTH seeds it then). A
@@ -316,6 +323,7 @@ def _handle_ndeath(session, metrics):
     if session.desired_state == SimulationSession.STOPPED_DESIRED:
         session.actual_state = SimulationSession.STOPPED
         session.stopped_at = now
+        close_session_handoffs(session, reason="SESSION_STOPPED")
     else:
         session.actual_state = SimulationSession.STARTING
         session.failure_reason = "Sparkplug Edge Node is offline; awaiting a new NBIRTH."

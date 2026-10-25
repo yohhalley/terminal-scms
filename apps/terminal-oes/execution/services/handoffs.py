@@ -10,7 +10,7 @@ caller stores a rejected receipt instead of rolling back the DDATA.
 import logging
 
 from django.core.exceptions import ValidationError
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 from execution.models import (
@@ -19,6 +19,7 @@ from execution.models import (
     ExecutionOperation,
     ExecutionOrder,
     Handoff,
+    SimulationSession,
 )
 from execution.services.dispatch import (
     COMMAND_ASSIGN_HANDOFF,
@@ -270,3 +271,48 @@ def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
     )
     finalize_outbox_event(outgoing)
     return True
+
+
+def abort_handoffs_for_operation(operation, *, reason, event_ms=None, sim_ms=None):
+    """TL review B-2: a leg of a pending hand-off ended without a transfer.
+
+    The hand-off goes ``cancelled`` and the counterpart leg is cancelled with a
+    cancel DCMD, so neither CHE stays locked out or keeps a live command.
+    Returns the cancelled hand-offs.
+    """
+    closed = []
+    pending = Handoff.objects.select_for_update().filter(
+        Q(giver_operation=operation) | Q(receiver_operation=operation),
+        status=Handoff.PENDING,
+    ).select_related("giver_operation", "receiver_operation")
+    for handoff in pending.order_by("created_at", "handoff_id"):
+        handoff.status = Handoff.CANCELLED
+        handoff.exception_reason = reason[:40]
+        handoff.exception_event_ms = int(event_ms) if event_ms is not None else None
+        handoff.save(update_fields=[
+            "status", "exception_reason", "exception_event_ms", "updated_at",
+        ])
+        counterpart = (
+            handoff.receiver_operation
+            if handoff.giver_operation_id == operation.pk
+            else handoff.giver_operation
+        )
+        _cancel_operation(counterpart, reason=reason, event_ms=event_ms, anchor_sim_ms=sim_ms)
+        logger.warning(
+            "Hand-off %s cancelled (%s); counterpart leg %s cancelled.",
+            handoff.handoff_id, reason, counterpart.tos_leg_id,
+        )
+        closed.append(handoff)
+    return closed
+
+
+def close_session_handoffs(sessions, *, reason):
+    """TL review B-2: a stopped, failed or abandoned session leaves no pending hand-off.
+
+    No DCMD is sent: the session's simulator is gone or going. Returns the count.
+    """
+    if isinstance(sessions, SimulationSession):
+        sessions = [sessions]
+    return Handoff.objects.filter(
+        simulation_session__in=list(sessions), status=Handoff.PENDING,
+    ).update(status=Handoff.CANCELLED, exception_reason=reason[:40], updated_at=timezone.now())

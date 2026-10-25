@@ -401,10 +401,13 @@ class NoShowTests(HandoffTestBase):
                 HTTP_X_OES_TOKEN="t",
             )
         self.assertEqual(response.status_code, 200, response.content)
-        cancel = EquipmentCommand.objects.get(command_type="cancel")
-        self.assertEqual(
-            self.dcmd_metrics(cancel)["Command/CancelCommandId"], str(qc_cmd.command_id),
-        )
+        targets = {
+            self.dcmd_metrics(cancel)["Command/CancelCommandId"]
+            for cancel in EquipmentCommand.objects.filter(command_type="cancel")
+        }
+        # The QC gets its cancel and, per TL review B-2, so does the paired TT.
+        tt_cmd = self.command_for(self.chosen_tt())
+        self.assertEqual(targets, {str(qc_cmd.command_id), str(tt_cmd.command_id)})
 
 
 class TtSelectionTests(HandoffTestBase):
@@ -706,3 +709,124 @@ class RerunAcrossSessionsTests(HandoffTestBase):
         self.assertEqual(second_tt, first_tt)
         second_states = self.business_events()[before:]
         self.assertEqual(second_states, first_states)
+
+
+
+class HandoffAbortTests(HandoffTestBase):
+    """TL review B-2: a pending hand-off never outlives a failed/cancelled leg or its session."""
+
+    def cancel_targets(self):
+        return sorted(
+            self.dcmd_metrics(cancel)["Command/CancelCommandId"]
+            for cancel in EquipmentCommand.objects.filter(command_type="cancel")
+        )
+
+    def assert_free(self, *ches):
+        for che in ches:
+            che.refresh_from_db()
+            self.assertTrue(che.is_available, che.name)
+            self.assertFalse(che.is_dispatched, che.name)
+
+    def test_qc_failed_cancels_handoff_and_tt_leg(self):
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        receipt = self.result(qc_cmd, "failed", 15_000,
+                              **{"Command/Result/Reason": "spreader fault"})
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.status, Handoff.CANCELLED)
+        self.assertEqual(handoff.exception_reason, "LEG_FAILED")
+        self.assertEqual(self.cancel_targets(), [str(tt_cmd.command_id)])
+        tt_cmd.refresh_from_db()
+        self.assertEqual(tt_cmd.status, EquipmentCommand.CANCELLED)
+        self.assertEqual(
+            self.order.operations.get(sequence=2).status, ExecutionOperation.CANCELLED,
+        )
+        self.assert_free(self.qc, tt)
+        # Both CHEs are dispatchable again for the next order.
+        self.assertIsNotNone(dispatch_next_operation(self.release(42).pk))
+
+    def test_operator_cancel_of_tt_leg_cancels_the_qc(self):
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        from .services.dispatch import apply_command_event
+
+        apply_command_event(tt_cmd.pk, "cancelled", reason="operator", notify_che=True)
+        self.assertEqual(Handoff.objects.get().status, Handoff.CANCELLED)
+        self.assertEqual(
+            self.cancel_targets(), sorted([str(qc_cmd.command_id), str(tt_cmd.command_id)]),
+        )
+        self.assert_free(self.qc, tt)
+
+    def test_rejected_assign_handoff_cancels_tt_leg_and_rtg(self):
+        """Godot TCL-014a rejects assign_handoff: nothing may stay live or locked."""
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        self.transfer_h1(qc_cmd, tt_cmd)
+        dispatch_next_operation(self.order.pk)
+        h2_cmd = self.command_for(tt, "assign_handoff")
+        rtg_cmd = self.command_for(self.rtg)
+        self.result(h2_cmd, "failed", 20_000,
+                    **{"Command/Result/Reason": "Unsupported command type: assign_handoff"})
+        h2 = Handoff.objects.order_by("created_at").last()
+        self.assertEqual(h2.status, Handoff.CANCELLED)
+        # The TT's still-running leg command and the RTG leg both get a cancel DCMD.
+        self.assertEqual(
+            self.cancel_targets(), sorted([str(tt_cmd.command_id), str(rtg_cmd.command_id)]),
+        )
+        self.assertEqual(
+            self.order.operations.get(sequence=3).status, ExecutionOperation.CANCELLED,
+        )
+        self.assert_free(tt, self.rtg)
+
+    def test_new_session_closes_handoffs_of_an_abandoned_one(self):
+        self.run_h1()
+        old_session = self.session
+        SimulationSession.objects.filter(pk=old_session.pk).update(
+            actual_state=SimulationSession.FAILED,
+        )
+        self.session = SimulationSession.objects.create(
+            site=self.site, configuration_revision=1, configuration_checksum="a" * 64,
+            sparkplug_group_id="ENTERPRISE_A", sparkplug_node_id="SCMS_ENTERPRISE_A_SITE_A",
+            actual_state=SimulationSession.RUNNING, node_connected=True,
+        )
+        process_sparkplug_message(
+            "spBv1.0/ENTERPRISE_A/NBIRTH/SCMS_ENTERPRISE_A_SITE_A",
+            encode_payload([
+                {"name": "bdSeq", "type": "Int64", "value": 1},
+                {"name": "Session/Id", "type": "String", "value": str(self.session.pk)},
+                {"name": "Site/Id", "type": "String", "value": str(self.site.source_id)},
+                {"name": "Configuration/Revision", "type": "Int64", "value": 1},
+                {"name": "Configuration/Checksum", "type": "String", "value": "a" * 64},
+                {"name": "Sim/Seed", "type": "Int64", "value": SEED},
+            ], sequence=0),
+        )
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.status, Handoff.CANCELLED)
+        self.assertEqual(handoff.exception_reason, "SESSION_ABANDONED")
+        EquipmentState.objects.filter(site=self.site).update(
+            device_connected=True, data_valid=True, is_available=True, is_dispatched=False,
+            working=False,
+        )
+        self.assertIsNotNone(dispatch_next_operation(self.release(42).pk))
+
+    def test_stop_and_runner_failure_close_pending_handoffs(self):
+        from .services.dispatch import _pending_handoff_for
+        from .services.simulations import stop_simulation
+
+        self.run_h1()
+        self.assertTrue(_pending_handoff_for(self.qc, self.session))
+        stop_simulation(self.session.pk)
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.status, Handoff.CANCELLED)
+        self.assertEqual(handoff.exception_reason, "SESSION_STOPPED")
+        self.assertFalse(_pending_handoff_for(self.qc, self.session))
+
+    def test_busy_check_is_scoped_to_the_session(self):
+        from .services.dispatch import _pending_handoff_for
+
+        self.run_h1()
+        other = SimulationSession.objects.create(
+            site=self.site, configuration_revision=1, configuration_checksum="a" * 64,
+            sparkplug_group_id="ENTERPRISE_A", sparkplug_node_id="OTHER",
+            actual_state=SimulationSession.STOPPED,
+        )
+        self.assertTrue(_pending_handoff_for(self.qc, self.session))
+        self.assertFalse(_pending_handoff_for(self.qc, other))

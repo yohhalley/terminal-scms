@@ -65,10 +65,12 @@ def _is_qc(equipment):
     return (equipment.equipment_type_code or "").upper() in QC_EQUIPMENT_TYPE_CODES
 
 
-def _pending_handoff_for(equipment):
+def _pending_handoff_for(equipment, session):
+    """A CHE is busy while it has a pending hand-off *in this session* (TL review B-2)."""
     return Handoff.objects.filter(
         Q(giver_equipment=equipment) | Q(receiver_equipment=equipment),
         status=Handoff.PENDING,
+        simulation_session=session,
     ).exists()
 
 
@@ -170,7 +172,7 @@ def _explicit_equipment(equipment_id, order, operation, session):
 def _choose(operation, session, order, *, exclude=()):
     candidates = [
         item for item in _eligible_equipment(operation, session)
-        if item.pk not in exclude and not _pending_handoff_for(item)
+        if item.pk not in exclude and not _pending_handoff_for(item, session)
     ]
     equipment = select_equipment(candidates, seed=session.seed, order_id=order.tos_order_id)
     if equipment is None:
@@ -534,7 +536,7 @@ def dispatch_next_operation(order_id, *, equipment_id=None):
 
     if chained:
         giver = first.assignment.equipment
-        if _pending_handoff_for(giver):
+        if _pending_handoff_for(giver, session):
             raise ValidationError("Q18: the CHE already has an active hand-off.")
         receiver = (
             _explicit_equipment(equipment_id, order, receiver_operation, session)
@@ -696,10 +698,22 @@ def apply_command_event(
     command.completed_at = now
     command.save(update_fields=["status", "completed_at"])
     # An assignment can hold a leg DCMD plus an ``assign_handoff`` DCMD (H2);
-    # the leg ends for all of them together.
-    assignment.commands.exclude(status__in=TERMINAL_COMMAND_STATES).update(
-        status=command.status, completed_at=now,
-    )
+    # the leg ends for all of them together. When one of them fails or is
+    # cancelled while the leg DCMD is still live in Godot (e.g. Godot rejects
+    # ``assign_handoff``), the leg DCMD gets a cancel DCMD (TL review B-2).
+    from execution.services.handoffs import abort_handoffs_for_operation, cancel_command
+
+    for other in assignment.commands.exclude(status__in=TERMINAL_COMMAND_STATES).exclude(
+        pk=command.pk,
+    ).order_by("created_at", "command_id"):
+        if (failed or cancelled) and other.command_type not in {
+            COMMAND_ASSIGN_HANDOFF, COMMAND_CANCEL,
+        }:
+            cancel_command(other, reason=reason or event)
+        else:
+            other.status = command.status
+            other.completed_at = now
+            other.save(update_fields=["status", "completed_at"])
     assignment.status = (
         DispatchAssignment.FAILED if failed else
         DispatchAssignment.CANCELLED if cancelled else
@@ -727,6 +741,15 @@ def apply_command_event(
     equipment.save(update_fields=[
         "working", "is_dispatched", "is_available", "idle_since_event_ms",
     ])
+
+    if failed or cancelled:
+        # TL review B-2: the other side of a pending hand-off can never
+        # complete it; cancel the hand-off and the counterpart leg.
+        abort_handoffs_for_operation(
+            operation,
+            reason="LEG_FAILED" if failed else "LEG_CANCELLED",
+            event_ms=event_ms,
+        )
 
     tos_event = "leg_failed" if failed else "order_cancelled" if cancelled else "leg_completed"
     outgoing = queue_execution_event(
