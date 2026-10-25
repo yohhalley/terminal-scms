@@ -82,7 +82,7 @@ def normalise(document):
 
 
 def check_schema(instance, schema, path="$"):
-    """Minimal stdlib JSON-Schema subset: type, required, properties, const, enum."""
+    """Minimal stdlib JSON-Schema subset: type, required, properties, const, enum, allOf/if/then."""
     errors = []
     expected = schema.get("type")
     types = {
@@ -109,6 +109,12 @@ def check_schema(instance, schema, path="$"):
         for key, child in schema.get("properties", {}).items():
             if key in instance:
                 errors.extend(check_schema(instance[key], child, f"{path}.{key}"))
+    for branch in schema.get("allOf", []):
+        if "if" in branch:
+            if not check_schema(instance, branch["if"], path) and "then" in branch:
+                errors.extend(check_schema(instance, branch["then"], path))
+        else:
+            errors.extend(check_schema(instance, branch, path))
     return errors
 
 

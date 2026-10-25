@@ -1,0 +1,40 @@
+{
+  "payload": {
+    "data": {
+      "che_id": 12,
+      "container_number": "MSCU1234565",
+      "container_visit_id": 101,
+      "event": "container_transferred",
+      "from_che_id": 1,
+      "giver_leg_id": 4101,
+      "handoff_id": "aff7327d-892a-52d4-af8a-8cbe34e296e0",
+      "leg_id": 4102,
+      "occurred_at": "2026-09-21T14:13:40+00:00",
+      "order_id": 41,
+      "receiver_leg_id": 4102,
+      "to_che_id": 12,
+      "transfer_position_id": 6
+    },
+    "enterprise": {
+      "code": "enterprise-a",
+      "id": "0a0a0a0a-0000-4000-8000-000000000001",
+      "name": "Enterprise A"
+    },
+    "event_id": "d4205f15-af26-56c0-afc9-3f206d913fdd",
+    "schema": "scms.execution.event.v1",
+    "site": {
+      "code": "site-a",
+      "configuration_revision": 1,
+      "id": "0b0b0b0b-0000-4000-8000-000000000002",
+      "name": "Site A",
+      "source_location_id": 1
+    },
+    "terminal": {
+      "code": "site-a",
+      "id": 1
+    }
+  },
+  "qos": 1,
+  "retain": false,
+  "topic": "scms/v2/enterprise-a/site-a/oes/orders/41/execution"
+}

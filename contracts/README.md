@@ -22,10 +22,24 @@ the producer test ignores those two fields when comparing.
   (order, leg, CHE, position, site, terminal) to its own database and never adds
   or removes keys, so a missing field stays missing.
 
+## `golden/scms.execution.event.v1/handoff/*.json`
+TCL-003a hand-off events, written from the real OES producer driven through
+TCL-003a's own scenario (`execution/test_handoffs.py`): `container_transferred`
+QC->TT and TT->RTG (T-006) and `handoff_exception` with `NO_TT_TIMEOUT`
+(T-007/D-013). `data.handoff_id` is also ignored when comparing (derived from the
+session pk). Producer test `execution/test_contract_handoff_events.py`, consumer
+test `minitos_core/test_contract_handoff_events.py`; both skip until TCL-003a is
+merged. The schema requires `handoff_id`, `from_che_id`, `to_che_id` on
+`container_transferred` and `handoff_id`, `reason` on `handoff_exception`
+(`allOf`/`if`/`then`, supported by the stdlib validator in the OES test).
+
+The goldens were regenerated from TCL-003a (274054742a70): every envelope carries
+`terminal {id, code}` and `container_picked_up` carries `data.container_visit_id`.
+
 Regenerate after an intended producer change, then review the diff:
 
     cd apps/terminal-oes
-    SCMS_UPDATE_GOLDEN=1 python manage.py test execution.test_contract_execution_events
+    SCMS_UPDATE_GOLDEN=1 python manage.py test execution.test_contract_execution_events execution.test_contract_handoff_events
 
 Known-bug tests are marked `expectedFailure`; set `SCMS_CONTRACT_STRICT=1` to see
 the real failures. When a bug is fixed the test reports "unexpected success":

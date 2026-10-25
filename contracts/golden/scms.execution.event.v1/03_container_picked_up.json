@@ -2,9 +2,10 @@
   "payload": {
     "data": {
       "che_id": 17,
+      "container_visit_id": 101,
       "event": "container_picked_up",
       "leg_id": 4101,
-      "occurred_at": "2026-10-25T13:42:23.365755+00:00",
+      "occurred_at": "2026-10-25T14:14:54.720762+00:00",
       "order_id": 41
     },
     "enterprise": {
@@ -12,7 +13,7 @@
       "id": "0a0a0a0a-0000-4000-8000-000000000001",
       "name": "Enterprise A"
     },
-    "event_id": "5959b874-4cad-41e8-bff9-73c2cb211c36",
+    "event_id": "2c260fcf-623c-477e-bfbb-e11d28608e80",
     "schema": "scms.execution.event.v1",
     "site": {
       "code": "site-a",
@@ -20,6 +21,10 @@
       "id": "0b0b0b0b-0000-4000-8000-000000000002",
       "name": "Site A",
       "source_location_id": 1
+    },
+    "terminal": {
+      "code": "site-a",
+      "id": 1
     }
   },
   "qos": 1,

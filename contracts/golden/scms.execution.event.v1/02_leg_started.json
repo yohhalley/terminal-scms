@@ -4,7 +4,7 @@
       "che_id": 17,
       "event": "leg_started",
       "leg_id": 4101,
-      "occurred_at": "2026-10-25T13:42:23.363116+00:00",
+      "occurred_at": "2026-10-25T14:14:54.719150+00:00",
       "order_id": 41
     },
     "enterprise": {
@@ -12,7 +12,7 @@
       "id": "0a0a0a0a-0000-4000-8000-000000000001",
       "name": "Enterprise A"
     },
-    "event_id": "81ea2a2f-3073-4dd0-b84f-a8a26565ad01",
+    "event_id": "a29c3ab9-306f-46e2-aec9-87884e26a995",
     "schema": "scms.execution.event.v1",
     "site": {
       "code": "site-a",
@@ -20,6 +20,10 @@
       "id": "0b0b0b0b-0000-4000-8000-000000000002",
       "name": "Site A",
       "source_location_id": 1
+    },
+    "terminal": {
+      "code": "site-a",
+      "id": 1
     }
   },
   "qos": 1,
