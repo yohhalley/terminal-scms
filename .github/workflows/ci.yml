@@ -64,3 +64,63 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python manage.py makemigrations --check --dry-run
       - run: python manage.py test
+
+  simulator-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -v -s apps/simulator-runner -p 'test_*.py'
+
+  # Headless Godot unit suites (TCL-029). They use fakes for MQTT and OES, so no
+  # broker or credentials are needed. A non-zero exit or a hang (timeout) fails the job.
+  godot:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/godot-open-terminal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-godot
+      - name: Import project
+        run: timeout 300 "$GODOT_BIN" --headless --editor --path . --quit
+      - name: test_headless_sim.gd
+        run: timeout 600 "$GODOT_BIN" --headless --path . --script tests/unit/test_headless_sim.gd
+      - name: test_terminal_integration.gd
+        run: timeout 600 "$GODOT_BIN" --headless --path . --script tests/unit/test_terminal_integration.gd
+      - name: test_che_rails.gd
+        run: timeout 600 "$GODOT_BIN" --headless --path . --script tests/unit/test_che_rails.gd
+
+  # Optional: live MQTT lifecycle against HiveMQ CE (same image as compose.yaml).
+  # It does not block the workflow; promote it once it has proven stable.
+  godot-mqtt-broker:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      hivemq:
+        image: hivemq/hivemq-ce:2026.5
+        ports:
+          - 1883:1883
+    env:
+      MQTT_TEST_HOST: 127.0.0.1
+      MQTT_TEST_PORT: "1883"
+    defaults:
+      run:
+        working-directory: clients/godot-open-terminal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-godot
+      - name: Wait for the broker
+        run: |
+          for _ in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/127.0.0.1/1883) 2>/dev/null; then exit 0; fi
+            sleep 2
+          done
+          echo "HiveMQ did not open port 1883" >&2
+          exit 1
+      - name: Import project
+        run: timeout 300 "$GODOT_BIN" --headless --editor --path . --quit
+      - name: test_local_mqtt_broker.gd
+        run: timeout 120 "$GODOT_BIN" --headless --path . --script tests/integration/test_local_mqtt_broker.gd
