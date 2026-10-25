@@ -27,19 +27,34 @@ items marked **Yael** need a decision through the Tech Lead.
     `arrived_at_destination`, and waits there in `at_destination_waiting`.
   - It publishes `waiting_for_handoff` once it holds H2.
   - It no longer drops the container itself; this changes TCL-014a, see A3.
-- A new DCMD `Command/Type = assign_handoff` gives the active TT leg its H2
-  (giver, `Command/CounterpartCheId` = the RTG pk, optional
-  `Command/AssignCommandId` and `Command/TransferPositionCode`).
+- A new DCMD `Command/Type = assign_handoff` gives the active TT leg its H2.
+  It follows the BE TCL-003a interface (`queue_assign_handoff_dcmd`) exactly:
+  base envelope with `Command/AssignmentId` = the TT leg's own assignment,
+  plus `Command/LegId` (the giver leg), `Command/ContainerVisitId`,
+  `Command/ContainerNumber`, `Command/HandoffId`, `Command/HandoffRole = giver`
+  (required), `Command/CounterpartCheId` (the RTG pk) and
+  `Command/TransferPositionId`. There is no `AssignCommandId` and no
+  `TransferPositionCode`.
+  - The target is the TT's active leg with that AssignmentId; a different
+    AssignmentId, or a LegId / ContainerVisitId that differs from the leg's
+    (when both are set), is rejected on the assign id.
   - It is rejected with `handoff_already_active` while H1 is still running
     (Q18: TT→RTG is dispatched only after QC→TT completes), and also when the
     TT already holds an H2. A TT holds at most one active hand-off.
   - H1 cannot be reused as H2.
-  - On success it publishes `acknowledged` on the assign command id.
+  - On success nothing is published on the assign id (the BE test sequence has
+    no ack there, and OES would route an `acknowledged` into
+    `apply_command_event`). A silent outcome is recorded so a redelivered
+    assign is deduplicated without a reply.
+  - At H2 the TT's `handoff_completed` (giver, PositionId =
+    `TransferPositionId`) is published on the **assign_handoff command id**, and
+    `completed` on the TT leg id, as in the BE test.
 - The gate matches the RTG to a TT that holds the same HandoffId as giver, is
   in `at_destination_waiting`, and whose counterparts match where named. It
   pairs on HandoffId only, never by container (T-006).
 - The hand-off happens in one fixed step, giver first (the same order as QC→TT):
-  - TT: `handoff_completed` (giver) and `completed`, then `Work/State` idle with
+  - TT: `handoff_completed` (giver, on the assign id) and `completed` (on the
+    leg id), then `Work/State` idle with
     `Load` 0. The TT is empty and idle.
   - RTG: `handoff_completed` (receiver), with `Load` = the visit.
   - Both carry H2, counterpart ids and the same `Event/TimeMs`.
@@ -65,7 +80,7 @@ items marked **Yael** need a decision through the Tech Lead.
   - NBIRTH `Sim/Timing/RtgHoldMinS` and `RtgHoldMaxS`.
   - The four env keys are on the simulator-runner allowlist.
 - New result metrics: `Command/Result/PositionCode` (String, for the dummy slot)
-  and `Work/TransferPositionCode` (when the command names it).
+  and `Work/TransferPositionCode` (only when a command names it; BE sends none).
 
 ## Assumptions
 
@@ -81,13 +96,15 @@ items marked **Yael** need a decision through the Tech Lead.
     TCL-014a end-to-end tests were updated to match.
   - Plain legs without a HandoffId are unchanged.
   - The TT has no time-out while it waits for an RTG; only an OES cancel ends it.
-- A4: Following the contract (Q8-R5), the TT giver does not publish
-  `container_dropped` and the RTG receiver does not publish
-  `container_picked_up`. The QC giver and TT receiver from TCL-014a still do;
-  see O3.
-- A5: The `assign_handoff` name and fields are my assumption (the contract says
-  the TT's H2 DCMD is a TCL-028 backend detail). It passes the same session,
-  site, revision, expiry and AssignmentId checks as any DCMD.
+- A4: Following the contract (Q8-R5), a hand-off emits `handoff_completed`
+  only on both sides: no `container_dropped` from a giver (QC at H1, TT at H2)
+  and no `container_picked_up` from a receiver (TT at H1, RTG at H2). TCL-014a
+  was changed to match (BE review item 2). Removing the TT receiver's
+  `container_picked_up` at H1 is my reading of "handoff_completed only"; OES
+  treats it as informational, so either way is safe.
+- A5: The `assign_handoff` shape now comes from the BE branch TCL-003a (read
+  only). It passes the same session, site, revision, expiry and AssignmentId
+  checks as any DCMD. `ExpiresAtMs` on it is checked on receipt only.
 - A6: The RTG no-show clock starts when the RTG enters `waiting_for_tt`, that
   is, on the first step after its command when no TT is waiting. If OES commands
   the RTG long before the TT can arrive, 300 s may fire on a TT that is still
@@ -100,17 +117,18 @@ items marked **Yael** need a decision through the Tech Lead.
   a separate gantry/travel wait before the pick?
 - O2 (contract): should the RTG `Work/State` list be aligned with §3.4
   (`gantry_to_bay`, `depositing_to_stack`) or with what is built here (A2)?
-- O3 (contract / TCL-014a): the QC giver publishes `container_dropped` and the
-  TT receiver at H1 publishes `container_picked_up`. The §3.4 QC table and §4
-  step 7 list only `handoff_completed` (+ `completed`), and the contract rejects
-  `container_dropped` for hand-off-role commands. Either drop these from
-  TCL-014a or allow them in the contract. TCL-014b follows the contract.
+- O3: resolved. TCL-014a no longer emits `container_dropped` (QC giver) or
+  `container_picked_up` (TT receiver) for the hand-off (A4).
 - O4 (backend): D-011 cannot be enforced, because the OES bootstrap has no RTG
   block. MiniTOS has `Che.current_asset` (RTG01 → the first block). Adding
   `current_asset_name` (or `block_code`) to the bootstrap CHE switches the check
-  on with no Godot change.
-- O5 (contract, TCL-028): the shape of the TT's H2 DCMD (`assign_handoff`, A5).
-  OES also needs to accept the `acknowledged` result on that id.
+  on with no Godot change. The BE RTG leg also carries no
+  `TransferPositionCode`, so the lane-block side of the check (and the dummy
+  slot's block) falls back to the RTG's block, else `BLOCK01`. The field is
+  still read when present.
+- O5: resolved by the BE interface (A5). Still to land in the contract text:
+  `assign_handoff` fields, results on the assign id (`handoff_completed`
+  only, or `failed`), and no ack.
 - O6 (contract): dummy slots go out as a String `Command/Result/PositionCode`
   (`BLOCK01-DUMMY-07`), because `PositionId` is Int64. OES/MiniTOS need either
   to accept the code or to always send a destination position id for the RTG

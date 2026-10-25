@@ -790,10 +790,15 @@ func _rtg_metrics(handoff_id := HANDOFF_ID_2) -> Dictionary:
 	}
 
 
+## BE TCL-003a `queue_assign_handoff_dcmd` shape: base envelope (same
+## AssignmentId as the TT leg) + LegId of the giver leg, visit, number,
+## HandoffId, HandoffRole=giver, CounterpartCheId and TransferPositionId.
 func _assign_metrics(handoff_id := HANDOFF_ID_2) -> Dictionary:
 	return {
-		"Command/Type": "assign_handoff", "Command/HandoffId": handoff_id, "Command/HandoffRole": "giver",
-		"Command/CounterpartCheId": RTG_ID, "Command/TransferPositionCode": "BLOCK01-TL",
+		"Command/Type": "assign_handoff", "Command/OrderId": 41, "Command/LegId": 4102,
+		"Command/ContainerVisitId": 101, "Command/ContainerNumber": "MSCU1234565",
+		"Command/HandoffId": handoff_id, "Command/HandoffRole": "giver",
+		"Command/CounterpartCheId": RTG_ID, "Command/TransferPositionId": 900,
 	}
 
 
@@ -820,21 +825,23 @@ func _sequence(results: Array) -> Array:
 
 ## Drives the chain: QC + TT (H1), H2 to the TT once H1 is done, RTG command
 ## once the TT waits at BLOCK01-TL (or at once when `rtg_early`), run to the end.
-func _run_chain(simulator, rtg_early: bool):
+func _run_chain(simulator, rtg_early: bool) -> Dictionary:
 	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
 	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
 	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000), "H1 completes")
-	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	var assign = _command(TT_ID, _assign_metrics())
+	_send(simulator, TT_ID, assign)
 	if not rtg_early:
 		_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 3000), "TT reaches BLOCK01-TL")
 	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
 	_run_until(simulator, func(): return simulator._active_commands.is_empty(), 3000)
+	return assign
 
 
 func _test_chain_happy_path_d016():
 	var simulator = _new_chain_simulator(42, QC_LAT)
 	_command_counter = 200
-	_run_chain(simulator, false)
+	var assign = _run_chain(simulator, false)
 	_assert(simulator._active_commands.is_empty(), "QC, TT and RTG legs all finish")
 	var results = _results(simulator)
 	var sequence = _sequence(results)
@@ -844,7 +851,6 @@ func _test_chain_happy_path_d016():
 		"TT01 arrived_at_source at_source_waiting", "TT01 waiting_for_handoff at_source_waiting",
 		"QC01 handoff_completed done", "QC01 completed done",
 		"TT01 handoff_completed driving_to_destination",
-		"TT01 acknowledged driving_to_destination",
 		"TT01 arrived_at_destination at_destination_waiting", "TT01 waiting_for_handoff at_destination_waiting",
 		"RTG01 acknowledged commanded", "RTG01 started commanded",
 		"TT01 handoff_completed idle", "TT01 completed idle",
@@ -862,7 +868,12 @@ func _test_chain_happy_path_d016():
 	_assert(int(tt_give["Command/Result/CounterpartCheId"]) == RTG_ID and int(rtg_take["Command/Result/CounterpartCheId"]) == TT_ID, "Each side names the other")
 	_assert(int(tt_give["Event/TimeMs"]) == int(rtg_take["Event/TimeMs"]), "H2 is one instant on both sides")
 	_assert(int(tt_give["Load/ContainerVisitId"]) == 0 and int(rtg_take["Load/ContainerVisitId"]) == 101, "Custody moves from TT to RTG")
-	_assert(str(tt_give.get("Work/TransferPositionCode", "")) == "BLOCK01-TL", "TT reports the block lane")
+	_assert(str(tt_give["Command/Result/CommandId"]) == str(assign["Command/Id"]), "BE: the TT giver's handoff_completed answers the assign_handoff command")
+	_assert(int(tt_give["Command/Result/PositionId"]) == 900, "TT giver reports the assign TransferPositionId")
+	var tt_done = _find(results, "TT01", "completed")
+	_assert(str(tt_done["Command/Result/CommandId"]) == "33333333-3333-4333-8333-%012d" % 202, "TT completed closes the TT leg itself")
+	for item in results:
+		_assert(str(item.m["Command/Result/CommandId"]) != str(assign["Command/Id"]) or str(item.m["Command/Result/Event"]) == "handoff_completed", "Only handoff_completed is published on the assign id (no ack)")
 	var hold_s = SimRandom.new(42).draw_wait_s("RTG01", "rtg:leg:4103", 0, 10, 30)
 	_assert(int(rtg_drop["Sim/TimeMs"]) == int(rtg_take["Sim/TimeMs"]) + hold_s * 1000, "RTG drops at the seeded hold end (%s s)" % hold_s)
 	var slot = SimRandom.new(42).draw_wait_s("RTG01", "slot:leg:4103", 0, 1, 20)
@@ -966,8 +977,25 @@ func _test_chain_wrong_handoff_id():
 	_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000)
 	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics(HANDOFF_ID)))
 	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "failed", "Re-using H1 as H2 is rejected")
-	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
-	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "acknowledged", "H2 after H1 is accepted")
+	var mismatched = _command(TT_ID, _assign_metrics())
+	mismatched["Command/AssignmentId"] = "55555555-5555-4555-8555-555555555555"
+	_send(simulator, TT_ID, mismatched)
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Hand-off assignment does not match the active TT leg", "assign_handoff for another assignment is rejected")
+	var wrong_leg = _command(TT_ID, _assign_metrics())
+	wrong_leg["Command/LegId"] = 9999
+	_send(simulator, TT_ID, wrong_leg)
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Hand-off assignment LegId does not match the active TT leg", "assign_handoff for another leg is rejected")
+	var no_role = _command(TT_ID, _assign_metrics())
+	no_role.erase("Command/HandoffRole")
+	_send(simulator, TT_ID, no_role)
+	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "failed", "assign_handoff requires HandoffRole=giver")
+	var before = _results(simulator).size()
+	var assign = _command(TT_ID, _assign_metrics())
+	_send(simulator, TT_ID, assign)
+	_assert(_results(simulator).size() == before, "H2 after H1 is accepted silently (no ack on the assign id)")
+	_assert(str(simulator._active_commands[TT_ID].handoff_id) == HANDOFF_ID_2, "The TT leg now holds H2")
+	_send(simulator, TT_ID, assign)
+	_assert(_results(simulator).size() == before and str(simulator._active_commands[TT_ID].handoff_id) == HANDOFF_ID_2, "A redelivered assign_handoff is deduplicated without a reply")
 	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics(HANDOFF_ID_WRONG)))
 	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_already_active", "A TT holds at most one active hand-off")
 	_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 3000)

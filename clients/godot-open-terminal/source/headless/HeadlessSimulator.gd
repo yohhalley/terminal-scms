@@ -651,9 +651,17 @@ func _rtg_slot(che: Dictionary, command: Dictionary, command_key: String) -> Dic
 	return {"position_id": 0, "position_code": "%s-DUMMY-%02d" % [block, slot]}
 
 
-## OES gives an active TT leg its next hand-off (H2: TT giver, RTG receiver).
-## Allowed only once the TT's current hand-off (H1, receiver) has completed, so
-## a TT never holds two active hand-offs (Q18 / T-006).
+## OES gives an active TT leg its next hand-off (H2: TT giver, RTG receiver),
+## shaped as in BE TCL-003a `queue_assign_handoff_dcmd`: the base envelope with
+## AssignmentId = the TT leg's own assignment, plus Command/LegId (the giver
+## leg), ContainerVisitId, ContainerNumber, HandoffId, HandoffRole=giver,
+## CounterpartCheId (the RTG) and TransferPositionId. The target leg is the
+## TT's active leg with that AssignmentId (and LegId / ContainerVisitId when
+## both sides carry one). Allowed only once H1 (receiver) has completed, so a
+## TT never holds two active hand-offs (Q18 / T-006).
+## Success publishes nothing on the assign id (OES expects no ack there); the
+## TT's H2 handoff_completed (giver) is later reported on the assign id, and
+## completed on the leg id. Failures are reported on the assign id.
 func _handle_assign_handoff(che_id: int, assign_id: String, metrics: Dictionary):
 	var reason = _assign_handoff_rejection(che_id, metrics)
 	if not reason.is_empty():
@@ -666,14 +674,12 @@ func _handle_assign_handoff(che_id: int, assign_id: String, metrics: Dictionary)
 	command["handoff_id"] = str(metrics["Command/HandoffId"]).strip_edges()
 	command["handoff_side"] = "giver"
 	command["counterpart_che_id"] = int(metrics["Command/CounterpartCheId"])
-	var code = str(metrics.get("Command/TransferPositionCode", "")).strip_edges()
-	if not code.is_empty():
-		command["transfer_position_code"] = code
+	command["assign_command_id"] = assign_id
+	command["giver_transfer_position_id"] = int(metrics.get("Command/TransferPositionId", 0))
 	_active_commands[che_id] = command
+	# Silent outcome: a redelivered assign is deduplicated without a reply.
+	_command_outcomes[assign_id] = {"che_id": che_id, "event": "", "silent": true}
 	_save_runtime_state()
-	var context = command.duplicate()
-	context["handoff_role"] = "giver"
-	_publish_command_result(che_id, assign_id, "acknowledged", 0, "", "", context)
 	if str(command.get("tt_phase", "")) == TT_AT_DESTINATION_WAITING:
 		_publish_command_result(che_id, str(command.command_id), "waiting_for_handoff", 0, "", "", command)
 
@@ -682,17 +688,22 @@ func _assign_handoff_rejection(che_id: int, metrics: Dictionary) -> String:
 	if not _active_commands.has(che_id):
 		return "No active command for hand-off assignment"
 	var command: Dictionary = _active_commands[che_id]
-	var target_id = str(metrics.get("Command/AssignCommandId", "")).strip_edges()
-	if not target_id.is_empty() and target_id != str(command.command_id):
-		return "Hand-off assignment target is not the active command"
 	if _is_crane_command(command):
 		return "Hand-off assignment is only for a TT leg"
+	if str(metrics.get("Command/AssignmentId", "")) != str(command.get("assignment_id", "")):
+		return "Hand-off assignment does not match the active TT leg"
+	var leg_id = int(metrics.get("Command/LegId", 0))
+	if leg_id > 0 and int(command.get("leg_id", 0)) > 0 and leg_id != int(command.leg_id):
+		return "Hand-off assignment LegId does not match the active TT leg"
+	var visit_id = int(metrics.get("Command/ContainerVisitId", 0))
+	if visit_id > 0 and int(command.get("container_visit_id", 0)) > 0 and visit_id != int(command.container_visit_id):
+		return "Hand-off assignment ContainerVisitId does not match the TT leg"
 	var handoff_id = str(metrics.get("Command/HandoffId", "")).strip_edges()
 	if handoff_id.is_empty():
 		return "assign_handoff requires Command/HandoffId"
 	if int(metrics.get("Command/CounterpartCheId", 0)) <= 0:
 		return "assign_handoff requires Command/CounterpartCheId"
-	if str(metrics.get("Command/HandoffRole", "giver")).strip_edges() != "giver":
+	if str(metrics.get("Command/HandoffRole", "")).strip_edges() != "giver":
 		return "Only a giver hand-off can be assigned to a TT leg (import)"
 	var phase = str(command.get("tt_phase", ""))
 	if phase in [TT_DRIVING_TO_SOURCE, TT_AT_SOURCE_WAITING] or _handoff_side(command) == "giver":
@@ -859,9 +870,20 @@ func _complete_tt_giver(tt_id: int, rtg_id: int):
 	var position_id = int(command.get("destination_inventory_position_id", 0))
 	if position_id <= 0:
 		position_id = int(command.get("destination_position_id", 0))
-	_publish_events(tt_id, command, [
-		{"event": "handoff_completed", "position_id": position_id, "counterpart_che_id": rtg_id,
+	var handoff_position_id = int(command.get("giver_transfer_position_id", 0))
+	if handoff_position_id <= 0:
+		handoff_position_id = position_id
+	# BE interface: the giver's handoff_completed answers the assign_handoff
+	# command; completed closes the TT leg itself.
+	var handoff_command = command.duplicate()
+	var assign_id = str(command.get("assign_command_id", ""))
+	if not assign_id.is_empty():
+		handoff_command["command_id"] = assign_id
+	_publish_events(tt_id, handoff_command, [
+		{"event": "handoff_completed", "position_id": handoff_position_id, "counterpart_che_id": rtg_id,
 			"handoff_role": "giver", "work_state": "idle"},
+	])
+	_publish_events(tt_id, command, [
 		{"event": "completed", "position_id": position_id, "counterpart_che_id": rtg_id, "work_state": "idle"},
 	])
 	_publish_equipment_state(che, true)
@@ -1102,6 +1124,8 @@ func _flush_result_outbox():
 
 func _replay_command_result(command_id: String):
 	var outcome: Dictionary = _command_outcomes[command_id]
+	if bool(outcome.get("silent", false)):
+		return
 	if outcome.get("metrics") is Array:
 		_result_outbox.append({"che_id": int(outcome.get("che_id", 0)), "metrics": outcome.metrics})
 		_flush_result_outbox()

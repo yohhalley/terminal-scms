@@ -57,8 +57,9 @@ This covers:
     device/event/`Work/State` sequence (D-016)
   - a late TT at the RTG, RTG cancel while waiting and while holding
   - determinism across two runs, and a wrong HandoffId that never pairs
-  - `assign_handoff` rules (no H2 before H1 completes, one active hand-off per
-    TT), RTG receiver/visit/D-011 block checks, and the configurable RTG hold
+  - `assign_handoff` in the BE TCL-003a shape: matched by AssignmentId/LegId,
+    no ack, redelivery deduplicated, the TT giver's `handoff_completed` on the
+    assign id; no H2 before H1 completes, one active hand-off per TT; RTG receiver/visit/D-011 block checks, and the configurable RTG hold
 
 Environment: `SIMULATOR_SEED`, `SIMULATOR_RUN_ID`, `SIMULATOR_FIXED_STEP_MS`,
 `SIMULATOR_TIME_SCALE`, `SIMULATOR_START_EPOCH_MS`,
