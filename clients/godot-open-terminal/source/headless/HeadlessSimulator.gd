@@ -8,12 +8,14 @@ const SimRandom = preload("res://source/headless/SimRandom.gd")
 const QcDischarge = preload("res://source/headless/QcDischarge.gd")
 const COMMAND_EXECUTE_ORDER_LEG := "execute_order_leg"
 const COMMAND_QC_DISCHARGE := "qc_discharge"
-const SUPPORTED_COMMAND_TYPES := [COMMAND_EXECUTE_ORDER_LEG, COMMAND_QC_DISCHARGE]
+const COMMAND_CANCEL := "cancel"
+const SUPPORTED_COMMAND_TYPES := [COMMAND_EXECUTE_ORDER_LEG, COMMAND_QC_DISCHARGE, COMMAND_CANCEL]
 const TT_DRIVING_TO_SOURCE := "driving_to_source"
 const TT_AT_SOURCE_WAITING := "at_source_waiting"
 const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
 const DEFAULT_QC_WAIT_MIN_S := 10
 const DEFAULT_QC_WAIT_MAX_S := 30
+const DEFAULT_TT_NO_SHOW_TIMEOUT_S := 300
 ## Sim time is checkpointed at least this often, so a restart loses at most this much.
 const SIM_TIME_CHECKPOINT_MS := 1000
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
@@ -50,6 +52,8 @@ var _last_checkpoint_sim_ms := 0
 var _qc_wait_s := {
 	"hold": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
 }
+## D-013: whole seconds of sim time a QC waits for its TT before handoff_timed_out.
+var _tt_no_show_timeout_s := DEFAULT_TT_NO_SHOW_TIMEOUT_S
 
 
 func _ready():
@@ -96,6 +100,22 @@ func _configure_simulation():
 			_env_any(["SIMULATOR_QC_%s_WAIT_MIN_S" % upper, "SIM_QC_%s_WAIT_MIN_S" % upper], default_min),
 			_env_any(["SIMULATOR_QC_%s_WAIT_MAX_S" % upper, "SIM_QC_%s_WAIT_MAX_S" % upper], default_max)
 		)
+	configure_tt_no_show_timeout(
+		_env_any(
+			["SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "SIM_TT_NO_SHOW_TIMEOUT_S"], str(DEFAULT_TT_NO_SHOW_TIMEOUT_S)
+		)
+	)
+
+
+## Sets Sim/Timing/TtNoShowTimeoutS (whole seconds, > 0). Invalid values keep the
+## previous value. Returns true when applied.
+func configure_tt_no_show_timeout(text: String) -> bool:
+	var value_text = text.strip_edges()
+	if value_text.is_valid_int() and int(value_text) > 0:
+		_tt_no_show_timeout_s = int(value_text)
+		return true
+	push_warning("Invalid TT no-show timeout %s; keeping %s s" % [text, _tt_no_show_timeout_s])
+	return false
 
 
 ## Sets the inclusive whole-second range of one QC wait step. Invalid values keep
@@ -193,6 +213,9 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		{"name": "Sim/TimeScale", "type": "Double", "value": _clock.time_scale},
 		{"name": "Sim/FixedStepMs", "type": "Int64", "value": _clock.step_ms},
 		{"name": "Sim/StartEpochMs", "type": "DateTime", "value": _start_epoch_ms},
+		{"name": "Sim/Timing/QcHoldMinS", "type": "Int64", "value": int(_qc_wait_s.hold[0])},
+		{"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": int(_qc_wait_s.hold[1])},
+		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
 	])
 	_connect_mqtt()
 	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
@@ -297,14 +320,17 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	if str(metrics.get("Command/AssignmentId", "")).is_empty():
 		_publish_command_result(che_id, command_id, "failed", 0, "Assignment identity is missing")
 		return
-	if _active_commands.has(che_id):
-		_publish_command_result(che_id, command_id, "failed", 0, "CHE already has an active command")
-		return
 	var command_type = str(metrics.get("Command/Type", "")).strip_edges()
 	if command_type.is_empty():
 		command_type = COMMAND_EXECUTE_ORDER_LEG
 	if not command_type in SUPPORTED_COMMAND_TYPES:
 		_publish_command_result(che_id, command_id, "failed", 0, "Unsupported command type: %s" % command_type)
+		return
+	if command_type == COMMAND_CANCEL:
+		_handle_cancel(che_id, command_id, metrics)
+		return
+	if _active_commands.has(che_id):
+		_publish_command_result(che_id, command_id, "failed", 0, "CHE already has an active command")
 		return
 	var container_number = str(metrics.get("Command/ContainerNumber", "")).strip_edges().to_upper()
 	if not container_number.is_empty() and not is_container_number_format(container_number):
@@ -339,7 +365,7 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	if command_type == COMMAND_QC_DISCHARGE:
 		var command_key = _command_seed_key(command)
 		var hold_s = _draw_qc_wait_s(che, command_key, 0, "hold")
-		var events = QcDischarge.start(command, _clock.now_ms, hold_s * 1000)
+		var events = QcDischarge.start(command, _clock.now_ms, hold_s * 1000, _tt_no_show_timeout_s * 1000)
 		_active_commands[che_id] = command
 		_save_runtime_state()
 		_publish_events(che_id, command, events)
@@ -352,6 +378,49 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 		_publish_command_result(che_id, command_id, "started", 0, "", "", command)
 	_publish_equipment_state(che, true)
 	print("HEADLESS accepted %s %s for CHE %s from %s" % [command_type, command_id, che_id, topic])
+
+
+## OES cancel DCMD (Command/Type = cancel). Command/CancelCommandId names the
+## command to cancel; when it is absent the CHE's active command is cancelled.
+## The active command stops, the CHE goes idle with no container, `cancelled`
+## is published for the cancelled command, and the CHE accepts a new command.
+func _handle_cancel(che_id: int, cancel_id: String, metrics: Dictionary):
+	var target_id = str(metrics.get("Command/CancelCommandId", "")).strip_edges()
+	if not _active_commands.has(che_id):
+		if (
+			not target_id.is_empty()
+			and _command_outcomes.has(target_id)
+			and str(_command_outcomes[target_id].get("event", "")) == "cancelled"
+		):
+			_command_outcomes[cancel_id] = _command_outcomes[target_id]
+			_save_runtime_state()
+			_replay_command_result(target_id)
+			return
+		_publish_command_result(che_id, cancel_id, "failed", 0, "No active command to cancel")
+		return
+	var command: Dictionary = _active_commands[che_id]
+	if not target_id.is_empty() and target_id != str(command.command_id):
+		_publish_command_result(che_id, cancel_id, "failed", 0, "Cancel target is not the active command")
+		return
+	var events: Array
+	if _is_qc_command(command):
+		events = QcDischarge.cancel(command)
+	else:
+		command["load_container_visit_id"] = 0
+		command["wait_until_ms"] = 0
+		command["tt_phase"] = ""
+		events = [{"event": "cancelled", "position_id": 0, "counterpart_che_id": 0, "work_state": "idle"}]
+	var che: Dictionary = _ches[che_id]
+	_mark_che_idle(che)
+	_ches[che_id] = che
+	_active_commands.erase(che_id)
+	_publish_events(che_id, command, events)
+	# A redelivered cancel replays the same cancelled result instead of
+	# cancelling whatever command the CHE runs by then.
+	_command_outcomes[cancel_id] = _command_outcomes[str(command.command_id)]
+	_save_runtime_state()
+	_publish_equipment_state(che, true)
+	print("HEADLESS cancelled %s for CHE %s (cancel %s)" % [command.command_id, che_id, cancel_id])
 
 
 func _build_command(command_type: String, command_id: String, metrics: Dictionary, che: Dictionary) -> Dictionary:
@@ -490,6 +559,8 @@ func _publish_events(che_id: int, command: Dictionary, events: Array):
 			context["work_state"] = str(item.work_state)
 		if item.has("handoff_role"):
 			context["handoff_role"] = str(item.handoff_role)
+		if item.has("source"):
+			context["source"] = str(item.source)
 		_publish_command_result(
 			che_id, str(command.command_id), str(item.event), int(item.get("position_id", 0)), "", "", context
 		)
@@ -663,6 +734,8 @@ func _result_context_metrics(context: Dictionary) -> Array:
 		metrics.append({"name": "Command/Result/CounterpartCheId", "type": "Int64", "value": int(context.counterpart_che_id)})
 	if not str(context.get("handoff_role", "")).is_empty():
 		metrics.append({"name": "Command/Result/HandoffRole", "type": "String", "value": str(context.handoff_role)})
+	if not str(context.get("source", "")).is_empty():
+		metrics.append({"name": "Command/Result/Source", "type": "String", "value": str(context.source)})
 	if not str(context.get("move_kind", "")).is_empty():
 		metrics.append({"name": "Command/Result/MoveKind", "type": "String", "value": str(context.move_kind)})
 	var work_state = str(context.get("work_state", context.get("tt_phase", "")))
