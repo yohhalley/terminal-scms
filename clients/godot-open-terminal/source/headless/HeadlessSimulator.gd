@@ -5,6 +5,15 @@ const MQTTNodeClient = preload("res://source/terminal-sandbox/MQTTNodeClient.gd"
 const SimIds = preload("res://source/headless/SimIds.gd")
 const SimClock = preload("res://source/headless/SimClock.gd")
 const SimRandom = preload("res://source/headless/SimRandom.gd")
+const QcDischarge = preload("res://source/headless/QcDischarge.gd")
+const COMMAND_EXECUTE_ORDER_LEG := "execute_order_leg"
+const COMMAND_QC_DISCHARGE := "qc_discharge"
+const SUPPORTED_COMMAND_TYPES := [COMMAND_EXECUTE_ORDER_LEG, COMMAND_QC_DISCHARGE]
+const TT_DRIVING_TO_SOURCE := "driving_to_source"
+const TT_AT_SOURCE_WAITING := "at_source_waiting"
+const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
+const DEFAULT_QC_WAIT_MIN_S := 10
+const DEFAULT_QC_WAIT_MAX_S := 30
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 
 var _bootstrap := OESBootstrapClient.new()
@@ -33,6 +42,12 @@ var _default_speed_mps := 4.0
 var _clock := SimClock.new()
 var _random := SimRandom.new()
 var _event_seq := 0
+var _start_epoch_ms := 0
+## Seconds, inclusive, per QC wait step ("pick" = wait #1, "hold" = wait #2).
+var _qc_wait_s := {
+	"pick": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
+	"hold": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
+}
 
 
 func _ready():
@@ -67,6 +82,33 @@ func _configure_simulation():
 	var step_ms = int(_env_any(["SIMULATOR_FIXED_STEP_MS", "SIM_FIXED_STEP_MS"], str(SimClock.DEFAULT_STEP_MS)))
 	var time_scale = float(_env_any(["SIMULATOR_TIME_SCALE", "SIM_TIME_SCALE"], "1.0"))
 	_clock = SimClock.new(step_ms, time_scale)
+	_start_epoch_ms = int(_env_any(["SIMULATOR_START_EPOCH_MS", "SIM_START_EPOCH_MS"], "0"))
+	SimIds.use_che_name = _env_any(["SIMULATOR_DEVICE_ID_MODE", "SIM_DEVICE_ID_MODE"], "legacy") == "name"
+	_mqtt.session_id = _session_id
+	var default_min = _env_any(["SIMULATOR_QC_WAIT_MIN_S", "SIM_QC_WAIT_MIN_S"], str(DEFAULT_QC_WAIT_MIN_S))
+	var default_max = _env_any(["SIMULATOR_QC_WAIT_MAX_S", "SIM_QC_WAIT_MAX_S"], str(DEFAULT_QC_WAIT_MAX_S))
+	for step_name in ["pick", "hold"]:
+		var upper = step_name.to_upper()
+		configure_qc_wait(
+			step_name,
+			_env_any(["SIMULATOR_QC_%s_WAIT_MIN_S" % upper, "SIM_QC_%s_WAIT_MIN_S" % upper], default_min),
+			_env_any(["SIMULATOR_QC_%s_WAIT_MAX_S" % upper, "SIM_QC_%s_WAIT_MAX_S" % upper], default_max)
+		)
+
+
+## Sets the inclusive whole-second range of one QC wait step. Invalid values keep
+## the 10..30 s default. Returns true when the given range was applied.
+func configure_qc_wait(step_name: String, min_text: String, max_text: String) -> bool:
+	var low_text = min_text.strip_edges()
+	var high_text = max_text.strip_edges()
+	if low_text.is_valid_int() and high_text.is_valid_int():
+		var low = int(low_text)
+		var high = int(high_text)
+		if low >= 0 and high >= low:
+			_qc_wait_s[step_name] = [low, high]
+			return true
+	push_warning("Invalid QC %s wait range %s..%s; keeping %s" % [step_name, min_text, max_text, _qc_wait_s[step_name]])
+	return false
 
 
 func _process(delta: float):
@@ -79,14 +121,20 @@ func _process(delta: float):
 
 
 ## One fixed simulation step. Only sim time enters here, never frame delta.
+## Movement runs first and QC handlers second, so a TT that reaches the transfer
+## point in this step is seen by the QC in the same step, whatever the CHE order.
 func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		var che: Dictionary = _ches[che_id]
 		if _active_commands.has(che_id):
-			_step_command(int(che_id), che, _active_commands[che_id], step_s)
+			if not _is_qc_command(_active_commands[che_id]):
+				_step_command(int(che_id), che, _active_commands[che_id], step_s)
 		else:
 			_consume_idle_energy(che, step_s)
 			_publish_when_due(che)
+	for che_id in _ches.keys():
+		if _active_commands.has(che_id) and _is_qc_command(_active_commands[che_id]):
+			_step_qc(int(che_id), _ches[che_id], _active_commands[che_id])
 
 
 func _load_bootstrap():
@@ -116,10 +164,16 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		_fail_bootstrap("OES bootstrap is missing the Sparkplug identity")
 		return
 	_clock.set_time_scale(float(session.get("time_scale", _clock.time_scale)))
+	_mqtt.session_id = _session_id
+	if _start_epoch_ms <= 0:
+		_start_epoch_ms = int(session.get("start_epoch_ms", 0)) if session.get("start_epoch_ms") != null else 0
 	if session.has("seed") and session.get("seed") != null:
 		_random.run_seed = SimRandom.parse_seed(str(session.get("seed")), _random.run_seed)
 	_load_equipment(document)
 	_restore_runtime_state()
+	if _start_epoch_ms <= 0:
+		# Wall clock only anchors Event/TimeMs; it never enters simulated state.
+		_start_epoch_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	_configuration_loaded = true
 	_bootstrap_retry_pending = false
 	_mqtt.set_node_birth_metrics([
@@ -131,6 +185,7 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		{"name": "Sim/RunId", "type": "String", "value": _random.run_id},
 		{"name": "Sim/TimeScale", "type": "Double", "value": _clock.time_scale},
 		{"name": "Sim/FixedStepMs", "type": "Int64", "value": _clock.step_ms},
+		{"name": "Sim/StartEpochMs", "type": "DateTime", "value": _start_epoch_ms},
 	])
 	_connect_mqtt()
 	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
@@ -238,34 +293,203 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	if _active_commands.has(che_id):
 		_publish_command_result(che_id, command_id, "failed", 0, "CHE already has an active command")
 		return
-	if not metrics.has("Command/DestinationLatitude") or not metrics.has("Command/DestinationLongitude"):
-		_publish_command_result(che_id, command_id, "failed", 0, "Command has no destination coordinates")
+	var command_type = str(metrics.get("Command/Type", "")).strip_edges()
+	if command_type.is_empty():
+		command_type = COMMAND_EXECUTE_ORDER_LEG
+	if not command_type in SUPPORTED_COMMAND_TYPES:
+		_publish_command_result(che_id, command_id, "failed", 0, "Unsupported command type: %s" % command_type)
 		return
+	var container_number = str(metrics.get("Command/ContainerNumber", "")).strip_edges().to_upper()
+	if not container_number.is_empty() and not is_container_number_format(container_number):
+		_publish_command_result(che_id, command_id, "failed", 0, "Container number format is invalid")
+		return
+	if command_type == COMMAND_EXECUTE_ORDER_LEG:
+		if not metrics.has("Command/DestinationLatitude") or not metrics.has("Command/DestinationLongitude"):
+			_publish_command_result(che_id, command_id, "failed", 0, "Command has no destination coordinates")
+			return
+	elif command_type == COMMAND_QC_DISCHARGE:
+		if str(metrics.get("Command/HandoffId", "")).strip_edges().is_empty():
+			_publish_command_result(che_id, command_id, "failed", 0, "qc_discharge requires Command/HandoffId")
+			return
+		if int(metrics.get("Command/ContainerVisitId", 0)) <= 0:
+			_publish_command_result(che_id, command_id, "failed", 0, "qc_discharge requires Command/ContainerVisitId")
+			return
 	var che: Dictionary = _ches[che_id]
 	if not bool(che.get("powered_on", false)) or bool(che.get("is_in_maintenance", false)):
 		_publish_command_result(che_id, command_id, "failed", 0, "CHE is not executable")
 		return
-	_active_commands[che_id] = {
-		"command_id": command_id,
-		"assignment_id": str(metrics.get("Command/AssignmentId", "")),
-		"destination_latitude": float(metrics["Command/DestinationLatitude"]),
-		"destination_longitude": float(metrics["Command/DestinationLongitude"]),
-		"source_inventory_position_id": int(metrics.get("Command/SourceInventoryPositionId", 0)),
-		"destination_inventory_position_id": int(metrics.get("Command/DestinationInventoryPositionId", 0)),
-		"picked_up": false,
-	}
+	var command = _build_command(command_type, command_id, metrics, che)
+	command["container_number"] = container_number
 	che["working"] = true
 	che["is_dispatched"] = true
 	che["is_available"] = false
 	_ches[che_id] = che
-	_save_runtime_state()
-	_publish_command_result(che_id, command_id, "acknowledged")
-	_publish_command_result(che_id, command_id, "started")
+	_active_commands[che_id] = command
+	if command_type == COMMAND_QC_DISCHARGE:
+		var command_key = _command_seed_key(command)
+		var pick_s = _draw_qc_wait_s(che, command_key, 0, "pick")
+		var hold_s = _draw_qc_wait_s(che, command_key, 1, "hold")
+		var events = QcDischarge.start(command, _clock.now_ms, pick_s * 1000, hold_s * 1000)
+		_active_commands[che_id] = command
+		_save_runtime_state()
+		_publish_events(che_id, command, events)
+	else:
+		if not str(command.get("handoff_id", "")).is_empty() and command.has("source_latitude"):
+			command["tt_phase"] = TT_DRIVING_TO_SOURCE
+		_active_commands[che_id] = command
+		_save_runtime_state()
+		_publish_command_result(che_id, command_id, "acknowledged", 0, "", "", command)
+		_publish_command_result(che_id, command_id, "started", 0, "", "", command)
 	_publish_equipment_state(che, true)
-	print("HEADLESS accepted DCMD %s for CHE %s from %s" % [command_id, che_id, topic])
+	print("HEADLESS accepted %s %s for CHE %s from %s" % [command_type, command_id, che_id, topic])
+
+
+func _build_command(command_type: String, command_id: String, metrics: Dictionary, che: Dictionary) -> Dictionary:
+	var command := {
+		"command_id": command_id,
+		"command_type": command_type,
+		"assignment_id": str(metrics.get("Command/AssignmentId", "")),
+		"destination_latitude": float(metrics.get("Command/DestinationLatitude", che.get("latitude", 0.0))),
+		"destination_longitude": float(metrics.get("Command/DestinationLongitude", che.get("longitude", 0.0))),
+		"source_inventory_position_id": int(metrics.get("Command/SourceInventoryPositionId", 0)),
+		"destination_inventory_position_id": int(metrics.get("Command/DestinationInventoryPositionId", 0)),
+		"picked_up": false,
+		"order_id": int(metrics.get("Command/OrderId", 0)),
+		"leg_id": int(metrics.get("Command/LegId", 0)),
+		"container_visit_id": int(metrics.get("Command/ContainerVisitId", 0)),
+		"handoff_id": str(metrics.get("Command/HandoffId", "")).strip_edges(),
+		"counterpart_che_id": int(metrics.get("Command/CounterpartCheId", 0)),
+		"move_kind": str(metrics.get("Command/MoveKind", "")),
+		"source_position_id": int(metrics.get("Command/SourcePositionId", 0)),
+		"destination_position_id": int(metrics.get("Command/DestinationPositionId", 0)),
+	}
+	if metrics.has("Command/SourceLatitude") and metrics.has("Command/SourceLongitude"):
+		command["source_latitude"] = float(metrics["Command/SourceLatitude"])
+		command["source_longitude"] = float(metrics["Command/SourceLongitude"])
+	if command_type == COMMAND_QC_DISCHARGE:
+		# Discharge: the destination is the QC transfer point (TT lane) where the TT receives.
+		var transfer_id = int(command.destination_inventory_position_id)
+		command["transfer_position_id"] = transfer_id if transfer_id > 0 else int(command.destination_position_id)
+	return command
+
+
+func _is_qc_command(command: Dictionary) -> bool:
+	return str(command.get("command_type", COMMAND_EXECUTE_ORDER_LEG)) == COMMAND_QC_DISCHARGE
+
+
+## Leg id when OES sends one (stable for a seeded MiniTOS fixture), else the command id.
+func _command_seed_key(command: Dictionary) -> String:
+	var leg_id = int(command.get("leg_id", 0))
+	return "leg:%d" % leg_id if leg_id > 0 else "cmd:%s" % str(command.get("command_id", ""))
+
+
+func _draw_qc_wait_s(che: Dictionary, command_key: String, wait_index: int, step_name: String) -> int:
+	var bounds: Array = _qc_wait_s[step_name]
+	return _random.draw_wait_s(SimIds.seed_key(che), command_key, wait_index, int(bounds[0]), int(bounds[1]))
+
+
+## Light ISO 6346 shape check (owner code + category + 6 digits + check digit).
+## The check digit itself is validated by MiniTOS.
+static func is_container_number_format(container_number: String) -> bool:
+	var pattern = RegEx.new()
+	pattern.compile("^[A-Z]{3}[UJZR][0-9]{7}$")
+	return pattern.search(container_number) != null
+
+
+func _step_qc(che_id: int, che: Dictionary, command: Dictionary):
+	var ready_id = _ready_counterpart_for(che_id, command)
+	var events = QcDischarge.step(command, _clock.now_ms, ready_id)
+	_active_commands[che_id] = command
+	if events.is_empty():
+		_publish_when_due(che)
+		return
+	if QcDischarge.is_finished(command):
+		_mark_che_idle(che)
+		_ches[che_id] = che
+		_active_commands.erase(che_id)
+	_save_runtime_state()
+	_publish_events(che_id, command, events)
+	if QcDischarge.is_finished(command):
+		_complete_tt_handoff(int(command.get("counterpart_che_id_actual", 0)), che_id)
+		print("HEADLESS completed qc_discharge %s for CHE %s" % [command.command_id, che_id])
+	_publish_equipment_state(che, true)
+
+
+## Godot-side readiness gate: a TT is ready for this QC when its active command
+## carries the same HandoffId, it is waiting at its source (the transfer point)
+## and, where either side names a counterpart, the names match. Pairing is by
+## HandoffId only, never by container id.
+func _ready_counterpart_for(qc_id: int, qc_command: Dictionary) -> int:
+	var handoff_id = str(qc_command.get("handoff_id", ""))
+	if handoff_id.is_empty():
+		return 0
+	var expected_id = int(qc_command.get("counterpart_che_id", 0))
+	for other_key in _ches.keys():
+		var other_id = int(other_key)
+		if other_id == qc_id or (expected_id > 0 and other_id != expected_id):
+			continue
+		if not _active_commands.has(other_id):
+			continue
+		var other: Dictionary = _active_commands[other_id]
+		if str(other.get("handoff_id", "")) != handoff_id:
+			continue
+		if str(other.get("tt_phase", "")) != TT_AT_SOURCE_WAITING:
+			continue
+		var named_qc = int(other.get("counterpart_che_id", 0))
+		if named_qc > 0 and named_qc != qc_id:
+			continue
+		return other_id
+	return 0
+
+
+func _complete_tt_handoff(tt_id: int, qc_id: int):
+	if tt_id <= 0 or not _active_commands.has(tt_id):
+		return
+	var command: Dictionary = _active_commands[tt_id]
+	command["tt_phase"] = TT_DRIVING_TO_DESTINATION
+	command["picked_up"] = true
+	command["load_container_visit_id"] = int(command.get("container_visit_id", 0))
+	command["counterpart_che_id_actual"] = qc_id
+	_active_commands[tt_id] = command
+	_save_runtime_state()
+	var position_id = int(command.get("source_inventory_position_id", 0))
+	if position_id <= 0:
+		position_id = int(command.get("source_position_id", 0))
+	_publish_events(tt_id, command, [
+		{"event": "container_picked_up", "position_id": position_id, "counterpart_che_id": qc_id},
+		{"event": "handoff_completed", "position_id": position_id, "counterpart_che_id": qc_id},
+	])
+
+
+func _publish_events(che_id: int, command: Dictionary, events: Array):
+	for item in events:
+		var context = command.duplicate()
+		if int(item.get("counterpart_che_id", 0)) > 0:
+			context["counterpart_che_id"] = int(item.counterpart_che_id)
+		if item.has("work_state"):
+			context["work_state"] = str(item.work_state)
+		_publish_command_result(
+			che_id, str(command.command_id), str(item.event), int(item.get("position_id", 0)), "", "", context
+		)
 
 
 func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: float):
+	var phase = str(command.get("tt_phase", ""))
+	if phase == TT_DRIVING_TO_SOURCE:
+		if _drive_towards(che_id, che, float(command.source_latitude), float(command.source_longitude), delta):
+			command["tt_phase"] = TT_AT_SOURCE_WAITING
+			_active_commands[che_id] = command
+			_save_runtime_state()
+			_publish_command_result(che_id, str(command.command_id), "arrived_at_source", 0, "", "", command)
+			_publish_command_result(che_id, str(command.command_id), "waiting_for_handoff", 0, "", "", command)
+			_publish_equipment_state(che, true)
+		return
+	if phase == TT_AT_SOURCE_WAITING:
+		che["speed_mps"] = 0.0
+		_consume_idle_energy(che, delta)
+		_ches[che_id] = che
+		_publish_when_due(che)
+		return
 	var latitude = float(che.get("latitude", 0.0))
 	var longitude = float(che.get("longitude", 0.0))
 	var target_latitude = float(command.destination_latitude)
@@ -281,7 +505,7 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 		command["picked_up"] = true
 		_active_commands[che_id] = command
 		_save_runtime_state()
-		_publish_command_result(che_id, str(command.command_id), "container_picked_up")
+		_publish_command_result(che_id, str(command.command_id), "container_picked_up", 0, "", "", command)
 	var speed_mps = _che_speed_mps(che)
 	var travel_m = min(speed_mps * delta, distance_m)
 	var ratio = travel_m / distance_m
@@ -295,22 +519,52 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 	_publish_when_due(che)
 
 
-func _complete_command(che_id: int, che: Dictionary, command: Dictionary):
-	che["latitude"] = float(command.destination_latitude)
-	che["longitude"] = float(command.destination_longitude)
+## Moves straight towards a point. Returns true (snapped, stopped) on arrival.
+func _drive_towards(che_id: int, che: Dictionary, target_latitude: float, target_longitude: float, delta: float) -> bool:
+	var latitude = float(che.get("latitude", 0.0))
+	var longitude = float(che.get("longitude", 0.0))
+	var east_m = deg_to_rad(target_longitude - longitude) * 6378137.0 * cos(deg_to_rad(latitude))
+	var north_m = deg_to_rad(target_latitude - latitude) * 6378137.0
+	var distance_m = sqrt(east_m * east_m + north_m * north_m)
+	if distance_m <= 0.5:
+		che["latitude"] = target_latitude
+		che["longitude"] = target_longitude
+		che["speed_mps"] = 0.0
+		_ches[che_id] = che
+		return true
+	var speed_mps = _che_speed_mps(che)
+	var ratio = min(speed_mps * delta, distance_m) / distance_m
+	che["latitude"] = latitude + (target_latitude - latitude) * ratio
+	che["longitude"] = longitude + (target_longitude - longitude) * ratio
+	che["rotation"] = fposmod(rad_to_deg(atan2(east_m, north_m)), 360.0)
+	che["speed_mps"] = speed_mps
+	che["fuel_consumption_rate_lph"] = 18.0
+	_consume_fuel(che, 18.0, delta)
+	_ches[che_id] = che
+	_publish_when_due(che)
+	return false
+
+
+func _mark_che_idle(che: Dictionary):
 	che["working"] = false
 	che["is_dispatched"] = false
 	che["is_available"] = bool(che.get("powered_on", false)) and not bool(che.get("is_in_maintenance", false))
 	che["speed_mps"] = 0.0
 	che["fuel_consumption_rate_lph"] = 4.0 if bool(che.get("powered_on", false)) else 0.0
+
+
+func _complete_command(che_id: int, che: Dictionary, command: Dictionary):
+	che["latitude"] = float(command.destination_latitude)
+	che["longitude"] = float(command.destination_longitude)
+	_mark_che_idle(che)
 	_ches[che_id] = che
 	_active_commands.erase(che_id)
 	_save_runtime_state()
 	var command_id = str(command.command_id)
 	var destination_position_id = int(command.destination_inventory_position_id)
 	if destination_position_id > 0:
-		_publish_command_result(che_id, command_id, "container_dropped", destination_position_id)
-	_publish_command_result(che_id, command_id, "completed", destination_position_id)
+		_publish_command_result(che_id, command_id, "container_dropped", destination_position_id, "", "", command)
+	_publish_command_result(che_id, command_id, "completed", destination_position_id, "", "", command)
 	_publish_equipment_state(che, true)
 	print("HEADLESS completed command %s for CHE %s" % [command_id, che_id])
 
@@ -341,7 +595,9 @@ func _publish_equipment_state(che: Dictionary, _force := false):
 		_save_runtime_state()
 
 
-func _publish_command_result(che_id: int, command_id: String, event: String, position_id := 0, reason := "", result_id := ""):
+func _publish_command_result(
+	che_id: int, command_id: String, event: String, position_id := 0, reason := "", result_id := "", context := {}
+):
 	if command_id.is_empty():
 		return
 	_event_seq += 1
@@ -356,7 +612,10 @@ func _publish_command_result(che_id: int, command_id: String, event: String, pos
 		metrics.append({"name": "Command/Result/PositionId", "type": "Int64", "value": position_id})
 	if not reason.is_empty():
 		metrics.append({"name": "Command/Result/Reason", "type": "String", "value": reason})
+	metrics.append_array(_result_context_metrics(context))
+	metrics.append({"name": "Session/Id", "type": "String", "value": _session_id})
 	metrics.append({"name": "Sim/TimeMs", "type": "Int64", "value": _clock.now_ms})
+	metrics.append({"name": "Event/TimeMs", "type": "DateTime", "value": _start_epoch_ms + _clock.now_ms})
 	metrics.append({"name": "Sim/EventSeq", "type": "Int64", "value": _event_seq})
 	_command_outcomes[command_id] = {
 		"che_id": che_id, "event": event, "position_id": position_id,
@@ -365,6 +624,29 @@ func _publish_command_result(che_id: int, command_id: String, event: String, pos
 	_result_outbox.append({"che_id": che_id, "metrics": metrics})
 	_save_runtime_state()
 	_flush_result_outbox()
+
+
+## Optional result metrics taken from the command (absent fields are omitted).
+func _result_context_metrics(context: Dictionary) -> Array:
+	var metrics: Array = []
+	if context.is_empty():
+		return metrics
+	if int(context.get("container_visit_id", 0)) > 0:
+		metrics.append({"name": "Command/Result/ContainerVisitId", "type": "Int64", "value": int(context.container_visit_id)})
+	if not str(context.get("container_number", "")).is_empty():
+		metrics.append({"name": "Command/Result/ContainerNumber", "type": "String", "value": str(context.container_number)})
+	if not str(context.get("handoff_id", "")).is_empty():
+		metrics.append({"name": "Command/Result/HandoffId", "type": "String", "value": str(context.handoff_id)})
+	if int(context.get("counterpart_che_id", 0)) > 0:
+		metrics.append({"name": "Command/Result/CounterpartCheId", "type": "Int64", "value": int(context.counterpart_che_id)})
+	if not str(context.get("move_kind", "")).is_empty():
+		metrics.append({"name": "Command/Result/MoveKind", "type": "String", "value": str(context.move_kind)})
+	var work_state = str(context.get("work_state", context.get("tt_phase", "")))
+	if not work_state.is_empty():
+		metrics.append({"name": "Work/State", "type": "String", "value": work_state})
+		metrics.append({"name": "Work/WaitUntilSimMs", "type": "Int64", "value": int(context.get("wait_until_ms", 0))})
+		metrics.append({"name": "Load/ContainerVisitId", "type": "Int64", "value": int(context.get("load_container_visit_id", 0))})
+	return metrics
 
 
 func _flush_result_outbox():
@@ -432,6 +714,8 @@ func _restore_runtime_state():
 			_active_commands[che_id] = saved_commands[saved_id]
 	_clock.restore(int(_persisted_runtime_state.get("sim_time_ms", 0)))
 	_event_seq = maxi(_event_seq, int(_persisted_runtime_state.get("event_seq", 0)))
+	if int(_persisted_runtime_state.get("start_epoch_ms", 0)) > 0:
+		_start_epoch_ms = int(_persisted_runtime_state.get("start_epoch_ms", 0))
 	var saved_outcomes = _persisted_runtime_state.get("command_outcomes", {})
 	if saved_outcomes is Dictionary:
 		_command_outcomes = saved_outcomes
@@ -456,6 +740,7 @@ func _save_runtime_state():
 			"command_outcomes": _command_outcomes,
 			"result_outbox": _result_outbox,
 			"sim_time_ms": _clock.now_ms,
+			"start_epoch_ms": _start_epoch_ms,
 			"event_seq": _event_seq,
 			"run_seed": _random.run_seed,
 		}))
