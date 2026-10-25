@@ -49,6 +49,13 @@ here; anything not covered by an explicit decision is listed as open.
   transfer. OES cancels both legs and Godot clears the QC through the cancel handler.
   NBIRTH also publishes `Sim/Timing/QcHoldMinS`, `Sim/Timing/QcHoldMaxS` and
   `Sim/Timing/TtNoShowTimeoutS`.
+- **Command expiry in sim time (Tech Lead)**: `Command/ExpiresAtMs` is a
+  **Sim/TimeMs** value, not wall-clock epoch ms. A DCMD is rejected with
+  "Command expired" when `ExpiresAtMs <= Sim/TimeMs` on receipt. A DCMD with no
+  (or a non-positive) `ExpiresAtMs` gets the deadline receipt + `Sim/Timing/CommandTtlS`.
+  The TTL defaults to 600 s and is set via env `SIMULATOR_COMMAND_TTL_S` /
+  `SIM_COMMAND_TTL_S`, whole seconds > 0. NBIRTH publishes it. Expiry is only
+  checked on receipt; an accepted command does not expire mid-run.
 - **Pairing**: by `Command/HandoffId` only, never by container. At most one
   active command per side per HandoffId; a second one fails with
   "HandoffId is already held by another active command". The TT waits at the
@@ -68,8 +75,7 @@ here; anything not covered by an explicit decision is listed as open.
 
 - The QC pick wait was removed per D-012. This supersedes the earlier
   "receive, wait, take, wait, deposit" flow; the hold wait now uses wait index 0.
-- `Command/ExpiresAtMs` is still checked against the wall clock, only on
-  receipt. Sim-time waits after acceptance are not subject to it.
+- `Command/ExpiresAtMs` moved from the wall clock to sim time (Tech Lead).
 - The TT readiness gate checks HandoffId, the TT phase (`at_source_waiting`)
   and the counterpart ids. It has no geographic check.
 
@@ -88,13 +94,29 @@ here; anything not covered by an explicit decision is listed as open.
    `waiting_for_handoff`, `handoff_completed` and `handoff_timed_out` ("Unsupported command event").
    It does not know `qc_discharge` and has no CHE→CHE transfer. These are needed
    before end-to-end use.
-3. `apps/simulator-runner/runner.py` `ALLOWED_ENVIRONMENT` does not pass the new
-   variables through (SIMULATOR_SEED, RUN_ID, FIXED_STEP_MS, TIME_SCALE if
-   absent, START_EPOCH_MS, DEVICE_ID_MODE, QC_*WAIT*, TT_NO_SHOW_TIMEOUT_S).
-   The timing values are env-only here; the proposal wants them from
-   scenario/bootstrap (§5.1). Not changed here.
-4. OES `EQUIPMENT_COMMAND_TTL_SECONDS` (30 s, wall clock) vs sim-time waits at
-   high or low time scale.
+3. `apps/simulator-runner/runner.py` now allowlists the new `SIMULATOR_*`
+   settings explicitly (SEED, RUN_ID, FIXED_STEP_MS, START_EPOCH_MS,
+   DEVICE_ID_MODE, QC_WAIT_MIN_S/MAX_S, QC_HOLD_WAIT_MIN_S/MAX_S,
+   TT_NO_SHOW_TIMEOUT_S, COMMAND_TTL_S; TIME_SCALE was already there). It is a
+   closed list rather than a prefix, so unknown keys still fail the launch.
+   `SIM_*` aliases are local-only and are rejected by the runner.
+   - Open: the runner only forwards what OES puts in the claim `environment`;
+     OES does not set these yet.
+   - Open: the existing `SIMULATOR_DEFAULT_SPEED_MPS` (set in compose.yaml) is
+     also not in the allowlist. I did not add it, as it is not new here.
+   - The timing values are env-only; the proposal wants them from
+     scenario/bootstrap (§5.1). Not changed here.
+4. **OES must change ExpiresAtMs (Backend Engineer is being told):** OES must
+   set `Command/ExpiresAtMs = Sim/TimeMs at dispatch + TTL`, in sim-time ms,
+   e.g. 600 000 for the default, or the TTL Godot publishes as
+   `Sim/Timing/CommandTtlS`. Today `dispatch.py` sends wall-clock epoch ms +
+   `EQUIPMENT_COMMAND_TTL_SECONDS` (30 s). Read as sim time, that value lies
+   about 55 years ahead, so until OES changes, Godot effectively never expires
+   a command. OES needs the current Sim/TimeMs to do this: from result DDATA
+   today, and from periodic DDATA once open point 6 is done.
+   - Open: whether a DCMD without ExpiresAtMs should rather be rejected. Godot
+     now applies the default TTL; before, a missing value was rejected as expired.
+   - Open: whether a running command should also expire.
 5. At high time scale, the 2 s sim-time cadence for a working CHE can flood the broker.
 6. Periodic equipment DDATA has no `Sim/TimeMs`; only results do.
 7. PUBACK is not tracked: an outbox item counts as delivered once handed to
