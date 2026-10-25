@@ -56,11 +56,14 @@ func _initialize():
 	_test_sim_clock()
 	_test_qc_state_machine_tt_early()
 	_test_qc_state_machine_tt_late()
+	_test_qc_state_machine_no_show_and_cancel()
 	_test_sim_qc_tt_late_end_to_end()
 	_test_sim_qc_tt_early_end_to_end()
 	_test_sim_replay_same_seed()
 	_test_command_type_routing()
 	_test_handoff_id_rules()
+	_test_cancel_releases_che()
+	_test_sim_tt_no_show_then_cancel()
 	_test_configurable_qc_waits()
 	_test_result_outbox_replays_in_order()
 	_test_device_id_mapping()
@@ -179,6 +182,25 @@ func _test_qc_state_machine_tt_late():
 	events = QcDischarge.step(command, 45100, 9)
 	_assert(_names(events) == ["container_dropped", "handoff_completed", "completed"], "Deposit as soon as the late TT is ready")
 	_assert(int(events[2].counterpart_che_id) == 9, "Completion names the TT")
+
+
+func _test_qc_state_machine_no_show_and_cancel():
+	var command = _qc_command()
+	QcDischarge.start(command, 0, 10000, 300000)
+	_assert(_names(QcDischarge.step(command, 10000, 0)) == ["waiting_for_handoff"], "QC waits for the TT after the hold")
+	_assert(QcDischarge.step(command, 309900, 0).is_empty(), "No time-out before 300 s of waiting")
+	var events = QcDischarge.step(command, 310000, 0)
+	_assert(_names(events) == ["handoff_timed_out"], "D-013: handoff_timed_out after 300 s sim time in waiting_for_tt")
+	_assert(command.work_state == QcDischarge.WAITING_FOR_TT and int(command.load_container_visit_id) == 101, "QC keeps the container after the time-out")
+	_assert(QcDischarge.step(command, 400000, 0).is_empty(), "handoff_timed_out is published once")
+	_assert(QcDischarge.step(command, 410000, 9).is_empty(), "A TT arriving after the time-out gets no transfer")
+	events = QcDischarge.cancel(command)
+	_assert(_names(events) == ["cancelled"] and str(events[0].work_state) == QcDischarge.IDLE, "Cancel emits cancelled in idle")
+	_assert(command.work_state == QcDischarge.IDLE and int(command.load_container_visit_id) == 0, "Cancel clears the container from the QC")
+	var disabled = _qc_command()
+	QcDischarge.start(disabled, 0, 1000, 60000)
+	QcDischarge.step(disabled, 1000, 0)
+	_assert(_names(QcDischarge.step(disabled, 61000, 0)) == ["handoff_timed_out"], "The no-show timeout is configurable")
 
 
 # --- simulator end to end ------------------------------------------------------
@@ -326,6 +348,7 @@ func _test_sim_qc_tt_late_end_to_end():
 	var pick_ms = int(picked["Sim/TimeMs"])
 	var hold_s = SimRandom.new(42).draw_wait_s("CHE_1", "leg:4101", 0, 10, 30)
 	_assert(pick_ms == 0, "D-012: the container appears when the command arrives (%s ms)" % pick_ms)
+	_assert(str(picked.get("Command/Result/Source", "")) == "VESSEL", "T-007: the container appears from source VESSEL")
 	_assert(int(waiting["Sim/TimeMs"]) == pick_ms + hold_s * 1000, "QC waits for the TT exactly at the seeded hold-wait end")
 	_assert(int(dropped["Sim/TimeMs"]) == int(arrived["Sim/TimeMs"]), "Deposit must happen when the late TT is ready")
 	_assert(int(dropped["Command/Result/PositionId"]) == 112, "container_dropped must carry the transfer PositionId")
@@ -450,6 +473,96 @@ func _test_handoff_id_rules():
 	_assert(simulator2._active_commands.has(QC_ID), "QC must keep waiting when only a TT with another HandoffId is present")
 	_assert(str(simulator2._active_commands[QC_ID].work_state) == "waiting_for_tt", "QC waits for its own HandoffId")
 	_free_simulator(simulator2)
+	_free_simulator(simulator)
+
+
+func _cancel(che_id: int, target_id := "") -> Dictionary:
+	var extra = {"Command/Type": "cancel"}
+	if not target_id.is_empty():
+		extra["Command/CancelCommandId"] = target_id
+	return _command(che_id, extra)
+
+
+func _test_cancel_releases_che():
+	var simulator = _new_simulator(1, QC_LAT - 0.0036)
+	var leg = _command(TT_ID, {"Command/DestinationLatitude": QC_LAT + 0.001, "Command/DestinationLongitude": QC_LON})
+	_send(simulator, TT_ID, leg)
+	_run_steps(simulator, 10)
+	_send(simulator, TT_ID, _cancel(TT_ID, "99999999-9999-4999-8999-999999999999"))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Cancel target is not the active command", "A cancel for another command is rejected")
+	_assert(simulator._active_commands.has(TT_ID), "A rejected cancel leaves the command running")
+	var cancel = _cancel(TT_ID, str(leg["Command/Id"]))
+	_send(simulator, TT_ID, cancel)
+	var last = _last_result(simulator)
+	_assert(str(last["Command/Result/Event"]) == "cancelled", "Cancel publishes cancelled")
+	_assert(str(last["Command/Result/CommandId"]) == str(leg["Command/Id"]), "cancelled is reported for the cancelled command")
+	_assert(str(last["Work/State"]) == "idle" and int(last["Load/ContainerVisitId"]) == 0, "Cancelled CHE is idle and empty")
+	_assert(not simulator._active_commands.has(TT_ID), "Cancel clears the active command")
+	_assert(not bool(simulator._ches[TT_ID].working) and bool(simulator._ches[TT_ID].is_available), "Cancelled CHE is available")
+	var next_leg = _command(TT_ID, {"Command/DestinationLatitude": QC_LAT + 0.001, "Command/DestinationLongitude": QC_LON})
+	_send(simulator, TT_ID, next_leg)
+	_assert(simulator._active_commands.has(TT_ID) and str(simulator._active_commands[TT_ID].command_id) == str(next_leg["Command/Id"]), "The next command after a cancel is accepted")
+	var before = _results(simulator).size()
+	_send(simulator, TT_ID, cancel)
+	_assert(str(_last_result(simulator)["Command/Result/Id"]) == str(last["Command/Result/Id"]), "A redelivered cancel replays the same cancelled result")
+	_assert(_results(simulator).size() == before + 1 and simulator._active_commands.has(TT_ID), "A redelivered cancel does not cancel the next command")
+	_send(simulator, TT_ID, _cancel(TT_ID))
+	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "cancelled" and not simulator._active_commands.has(TT_ID), "A cancel without a target cancels the active command")
+	_send(simulator, TT_ID, _cancel(TT_ID))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "No active command to cancel", "Cancel on an idle CHE fails cleanly")
+	# A TT that already holds the container is emptied by the cancel.
+	var simulator2 = _new_simulator(3, QC_LAT)
+	_send(simulator2, QC_ID, _command(QC_ID, _qc_metrics()))
+	var tt = _command(TT_ID, _tt_metrics())
+	_send(simulator2, TT_ID, tt)
+	for _i in range(400):
+		simulator2._clock.step()
+		simulator2._simulation_step(simulator2._clock.step_seconds())
+		if not simulator2._active_commands.has(QC_ID):
+			break
+	_assert(int(simulator2._active_commands[TT_ID].get("load_container_visit_id", 0)) == 101, "TT holds the container after the handoff")
+	_send(simulator2, TT_ID, _cancel(TT_ID, str(tt["Command/Id"])))
+	_assert(int(_last_result(simulator2)["Load/ContainerVisitId"]) == 0 and simulator2._active_commands.is_empty(), "Cancel clears the TT's container")
+	_free_simulator(simulator2)
+	_free_simulator(simulator)
+
+
+func _test_sim_tt_no_show_then_cancel():
+	var simulator = _new_simulator(11, QC_LAT - 0.0036)
+	_assert(simulator.configure_tt_no_show_timeout("300"), "A whole-second timeout applies")
+	_assert(not simulator.configure_tt_no_show_timeout("0") and not simulator.configure_tt_no_show_timeout("x"), "Invalid timeouts are rejected")
+	_assert(simulator._tt_no_show_timeout_s == 300, "Default Sim/Timing/TtNoShowTimeoutS is 300")
+	var qc = _command(QC_ID, _qc_metrics())
+	_send(simulator, QC_ID, qc)
+	var hold_s = SimRandom.new(11).draw_wait_s("CHE_1", "leg:4101", 0, 10, 30)
+	for _i in range(3500):
+		simulator._clock.step()
+		simulator._simulation_step(simulator._clock.step_seconds())
+	var results = _results(simulator)
+	_assert(_events_of(results, "CHE_1") == [
+		"acknowledged", "started", "container_picked_up", "waiting_for_handoff", "handoff_timed_out",
+	], "No-show: QC event order: %s" % [_events_of(results, "CHE_1")])
+	var timed_out = _find(results, "CHE_1", "handoff_timed_out")
+	_assert(int(timed_out["Sim/TimeMs"]) == hold_s * 1000 + 300000, "Time-out fires 300 s sim time after the hold end")
+	_assert(str(timed_out["Command/Result/HandoffId"]) == HANDOFF_ID, "handoff_timed_out carries the HandoffId")
+	_assert(str(timed_out["Work/State"]) == "waiting_for_tt" and int(timed_out["Load/ContainerVisitId"]) == 101, "QC still holds the container until OES cancels")
+	# A TT that shows up after the time-out but before the cancel gets no transfer.
+	simulator._ches[TT_ID].latitude = QC_LAT
+	var tt = _command(TT_ID, _tt_metrics())
+	_send(simulator, TT_ID, tt)
+	for _i in range(50):
+		simulator._clock.step()
+		simulator._simulation_step(simulator._clock.step_seconds())
+	_assert(_find(_results(simulator), "CHE_1", "handoff_completed").is_empty(), "No transfer after handoff_timed_out")
+	_send(simulator, QC_ID, _cancel(QC_ID, str(qc["Command/Id"])))
+	_send(simulator, TT_ID, _cancel(TT_ID, str(tt["Command/Id"])))
+	var qc_cancel = _find(_results(simulator), "CHE_1", "cancelled")
+	_assert(str(qc_cancel.get("Work/State", "")) == "idle" and int(qc_cancel.get("Load/ContainerVisitId", -1)) == 0, "OES cancel clears the QC")
+	_assert(simulator._active_commands.is_empty(), "Both legs are cancelled")
+	var retry = _qc_metrics()
+	retry["Command/HandoffId"] = "77777777-7777-4777-8777-777777777777"
+	_send(simulator, QC_ID, _command(QC_ID, retry))
+	_assert(simulator._active_commands.has(QC_ID), "The QC accepts a new command after the cancel")
 	_free_simulator(simulator)
 
 
