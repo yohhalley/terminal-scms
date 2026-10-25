@@ -30,7 +30,7 @@ Run the TOS API contract from `minitos`:
 This validates that Godot CHE snapshots survive the REST API round trip and that
 the TOS rejects contradictory power, activity, availability, and maintenance facts.
 
-## Headless simulation checks (TCL-014a)
+## Headless simulation checks (TCL-014a, TCL-014b)
 
 ```sh
 godot --headless --path . --script tests/unit/test_headless_sim.gd
@@ -49,6 +49,16 @@ This covers:
 - ordered outbox replay after a restart
 - device id mapping
 - MQTT packet-id wrap
+- sim-time command expiry and `Sim/TimeMs` + `Session/Id` on periodic DDATA
+- TCL-014b, TT to RTG at `BLOCK01-TL`:
+  - the RTG stack state machine (pick, seeded hold, drop into a dummy slot, late
+    TT, no-show, cancel)
+  - the full QC to TT to RTG chain with a fixed seed, asserting the ordered
+    device/event/`Work/State` sequence (D-016)
+  - a late TT at the RTG, RTG cancel while waiting and while holding
+  - determinism across two runs, and a wrong HandoffId that never pairs
+  - `assign_handoff` rules (no H2 before H1 completes, one active hand-off per
+    TT), RTG receiver/visit/D-011 block checks, and the configurable RTG hold
 
 Environment: `SIMULATOR_SEED`, `SIMULATOR_RUN_ID`, `SIMULATOR_FIXED_STEP_MS`,
 `SIMULATOR_TIME_SCALE`, `SIMULATOR_START_EPOCH_MS`,
@@ -56,8 +66,11 @@ Environment: `SIMULATOR_SEED`, `SIMULATOR_RUN_ID`, `SIMULATOR_FIXED_STEP_MS`,
 `QC01`; `legacy` uses `CHE_{id}`), and
 `SIMULATOR_QC_WAIT_MIN_S` / `SIMULATOR_QC_WAIT_MAX_S`. `SIMULATOR_QC_HOLD_WAIT_MIN_S`
 / `_MAX_S` override the general wait range. `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`
-sets the no-show time-out (default 300). Each variable also accepts a
-`SIM_*` alias. See `NOTES-TCL-014a.md` for open points.
+sets the no-show time-out (default 300; the RTG uses the same value).
+`SIMULATOR_RTG_WAIT_MIN_S` / `SIMULATOR_RTG_WAIT_MAX_S` (default 10..30) and
+`SIMULATOR_RTG_HOLD_WAIT_MIN_S` / `_MAX_S` set the RTG hold. Each variable also
+accepts a `SIM_*` alias. See `NOTES-TCL-014a.md` and `NOTES-TCL-014b.md` for open
+points.
 
 ## Rail movement checks
 
