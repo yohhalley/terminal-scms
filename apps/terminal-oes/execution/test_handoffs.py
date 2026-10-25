@@ -641,3 +641,68 @@ class ClaimEnvironmentTests(HandoffTestBase):
         allowed = self.runner_allowlist()
         self.assertLessEqual(set(django_settings.SIMULATOR_SIM_SETTING_NAMES), allowed)
         self.assertLessEqual(set(environment), allowed)
+
+
+class RerunAcrossSessionsTests(HandoffTestBase):
+    """TL review B-1: two sessions back to back on the same CHE rows, no rollback."""
+
+    tt_ids = (11, 12, 13)
+
+    def birth(self, session):
+        process_sparkplug_message(
+            f"spBv1.0/{session.sparkplug_group_id}/NBIRTH/{session.sparkplug_node_id}",
+            encode_payload([
+                {"name": "bdSeq", "type": "Int64", "value": 1},
+                {"name": "Session/Id", "type": "String", "value": str(session.pk)},
+                {"name": "Site/Id", "type": "String", "value": str(self.site.source_id)},
+                {"name": "Configuration/Revision", "type": "Int64", "value": 1},
+                {"name": "Configuration/Checksum", "type": "String", "value": "a" * 64},
+                {"name": "Sim/Seed", "type": "Int64", "value": SEED},
+                {"name": "Sim/StartEpochMs", "type": "Int64", "value": START_EPOCH_MS},
+            ], sequence=0),
+        )
+        EquipmentState.objects.filter(site=self.site).update(
+            device_connected=True, data_valid=True,
+        )
+        session.refresh_from_db()
+        return session
+
+    def test_second_session_starts_with_every_che_idle_since_its_start(self):
+        self.birth(self.session)
+        first_tt = self.run_happy_path().tos_che_id
+        first_states = self.business_events()
+        tts = list(EquipmentState.objects.filter(equipment_type_id=TT_TYPE))
+        self.assertGreater(
+            EquipmentState.objects.get(tos_che_id=first_tt).idle_since_event_ms, START_EPOCH_MS,
+        )
+        # An order id whose fresh-run draw is the TT run 1 used: without the
+        # per-session reset that TT looks "least idle" and cannot be picked.
+        order_id = next(
+            candidate for candidate in range(42, 200)
+            if select_equipment(
+                [EquipmentState(tos_che_id=t.tos_che_id) for t in tts],
+                seed=SEED, order_id=candidate,
+            ).tos_che_id == first_tt
+        )
+
+        SimulationSession.objects.filter(pk=self.session.pk).update(
+            actual_state=SimulationSession.STOPPED,
+        )
+        self.session = SimulationSession.objects.create(
+            site=self.site, configuration_revision=1, configuration_checksum="a" * 64,
+            sparkplug_group_id="ENTERPRISE_A", sparkplug_node_id="SCMS_ENTERPRISE_A_SITE_A",
+            actual_state=SimulationSession.RUNNING, node_connected=True,
+        )
+        self.birth(self.session)
+        self.assertEqual(
+            set(EquipmentState.objects.filter(site=self.site).values_list(
+                "idle_since_event_ms", flat=True,
+            )),
+            {START_EPOCH_MS},
+        )
+        self.order = self.release(order_id)
+        before = OutboxEvent.objects.filter(schema="scms.execution.event.v1").count()
+        second_tt = self.run_happy_path().tos_che_id
+        self.assertEqual(second_tt, first_tt)
+        second_states = self.business_events()[before:]
+        self.assertEqual(second_states, first_states)

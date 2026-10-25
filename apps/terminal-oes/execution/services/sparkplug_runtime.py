@@ -291,6 +291,13 @@ def _handle_nbirth(session, document, metrics):
     command_ttl_s = _optional_int(metrics, "Sim/Timing/CommandTtlS")
     session.command_ttl_s = command_ttl_s if command_ttl_s and command_ttl_s > 0 else None
     session.save()
+    # D-014/D-016 (TL review B-1): idle time is per session. CHE rows are reused
+    # across sessions of a site, so a CHE first bound to this session restarts
+    # idle at Sim/StartEpochMs (None when unknown; DBIRTH seeds it then). A
+    # rebirth of the same session keeps the idle times it already has.
+    EquipmentState.objects.filter(site=session.site).exclude(
+        simulation_session=session,
+    ).update(idle_since_event_ms=session.start_epoch_ms)
     EquipmentState.objects.filter(site=session.site).update(
         simulation_session=session,
         device_connected=False,
