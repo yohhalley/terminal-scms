@@ -39,6 +39,7 @@ class DockerLauncherTests(unittest.TestCase):
             "SIMULATOR_QC_HOLD_WAIT_MAX_S": "28",
             "SIMULATOR_TT_NO_SHOW_TIMEOUT_S": "300",
             "SIMULATOR_COMMAND_TTL_S": "600",
+            "SIMULATOR_DEFAULT_SPEED_MPS": "4.0",
         }
         environment = {
             key: value for key, value in launch_environment().items()

@@ -21,6 +21,7 @@ ALLOWED_ENVIRONMENT = {
     "SIMULATOR_CONFIG_CHECKSUM",
     "SIMULATOR_VERSION",
     "SIMULATOR_TIME_SCALE",
+    "SIMULATOR_DEFAULT_SPEED_MPS",
     # Deterministic simulation settings read by the headless Godot simulator
     # (TCL-014a). Explicit names keep the allowlist closed; SIM_* aliases are
     # for local runs only and are not passed through.
