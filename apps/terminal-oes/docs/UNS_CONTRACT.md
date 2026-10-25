@@ -125,14 +125,35 @@ file preserves active commands and recent CHE state across process restart.
   cancel, `Command/Reason`, plus the normal envelope (`Command/AssignmentId` of
   the target, `Command/ExpiresAtMs`). The cancel's own `Command/Id` is derived
   from the target, so a re-issued cancel is the same command.
+- **Session scope (Q14).** Every NDATA, DDATA and DBIRTH must carry this
+  session's `Session/Id`; a message without it or from another session is
+  dropped and counted (`stale_message_count`) before sequence tracking or any
+  CHE update. DDEATH carries only `seq` and is not checked. At NBIRTH every CHE
+  of the site restarts idle at `Sim/StartEpochMs` (D-014/D-016).
 - **Results.** Every result carries `Command/Result/Id` (applied once),
-  `Session/Id` (another session's DDATA is dropped), `Sim/TimeMs`,
+  `Session/Id`, `Sim/TimeMs`,
   `Event/TimeMs` and `Sim/EventSeq`. `arrived_at_source`,
   `arrived_at_destination` and `waiting_for_handoff` are informational. One
   `handoff_completed` per side; the first emits `container_transferred`.
   `handoff_timed_out` (QC giver) raises `handoff_exception` with
-  `NO_TT_TIMEOUT` and cancels the remaining legs. A rejected result is stored
-  with a reason and logged, never rolled back into the DDATA.
+  `NO_TT_TIMEOUT` and cancels the remaining legs; the order ends complete
+  by exception (assumption A-1, pending Yael; one constant in OES and
+  MiniTOS). A rejected result is stored with a reason and logged, never rolled
+  back into the DDATA.
+- **Aborted hand-offs.** A failed or cancelled leg cancels its pending
+  hand-off and the counterpart leg (cancel DCMD). Stopping, a runner
+  stop/failure, NDEATH after stop, or NBIRTH of a new session closes the
+  session's pending hand-offs; a CHE is "busy" only for its own session.
+- **Known gap: `Sim/EventSeq` ordering.** OES stores `Sim/EventSeq` on each
+  result receipt but does not reorder or detect out-of-order results; it
+  relies on QoS 1 per-topic ordering from one publisher. Follow-up story
+  (TL review S-5).
+- **One consumer.** Exactly one OES process consumes the Sparkplug topics for
+  a site (fixed client id, persistent session). Two consumers would apply
+  results concurrently; receipts are idempotent but ordering is not.
+- **CHE name (D-015).** Execution events carry `che_name` (e.g. `QC01`) next
+  to the numeric `che_id` that MiniTOS resolves; hand-off events add
+  `from_che_name`/`to_che_name`.
 - **MQTT.** The OES consumer uses MQTT 3.1.1 with clean session false and a
   fixed client id, so QoS 1 results queue while it is down (MQTT 5 is backlog).
 
