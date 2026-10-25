@@ -24,6 +24,9 @@ var _mqtt_retry_pending := false
 var _ches := {}
 var _active_commands := {}
 var _command_outcomes := {}
+## Command results not yet handed to the MQTT client, in publish order. Buffered
+## while disconnected and replayed in order after reconnect and rebirth.
+var _result_outbox: Array = []
 var _persisted_runtime_state := {}
 var _last_publish_ms := {}
 var _default_speed_mps := 4.0
@@ -193,6 +196,7 @@ func _on_broker_checked(ok: bool, message: String):
 		push_error("Could not subscribe to Sparkplug NCMD/DCMD topics")
 		return
 	_publish_birth_and_state()
+	_flush_result_outbox()
 	print("HEADLESS Sparkplug Edge Node is online and subscribed to commands")
 
 
@@ -201,6 +205,7 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 		if bool(metrics.get("Node Control/Rebirth", false)):
 			if _mqtt.publish_rebirth():
 				_publish_birth_and_state()
+				_flush_result_outbox()
 		return
 	var command_id = str(metrics.get("Command/Id", ""))
 	if command_id.is_empty():
@@ -337,7 +342,7 @@ func _publish_equipment_state(che: Dictionary, _force := false):
 
 
 func _publish_command_result(che_id: int, command_id: String, event: String, position_id := 0, reason := "", result_id := ""):
-	if command_id.is_empty() or not _mqtt_connected:
+	if command_id.is_empty():
 		return
 	_event_seq += 1
 	if result_id.is_empty():
@@ -353,17 +358,35 @@ func _publish_command_result(che_id: int, command_id: String, event: String, pos
 		metrics.append({"name": "Command/Result/Reason", "type": "String", "value": reason})
 	metrics.append({"name": "Sim/TimeMs", "type": "Int64", "value": _clock.now_ms})
 	metrics.append({"name": "Sim/EventSeq", "type": "Int64", "value": _event_seq})
-	var che: Dictionary = _ches.get(che_id, {"pk": che_id})
-	if _mqtt.publish_command_result(che, metrics):
-		_command_outcomes[command_id] = {
-			"che_id": che_id, "event": event, "position_id": position_id,
-			"reason": reason, "result_id": result_id,
-		}
+	_command_outcomes[command_id] = {
+		"che_id": che_id, "event": event, "position_id": position_id,
+		"reason": reason, "result_id": result_id, "metrics": metrics,
+	}
+	_result_outbox.append({"che_id": che_id, "metrics": metrics})
+	_save_runtime_state()
+	_flush_result_outbox()
+
+
+func _flush_result_outbox():
+	var sent := 0
+	while not _result_outbox.is_empty() and _mqtt_connected:
+		var item: Dictionary = _result_outbox[0]
+		var che_id = int(item.get("che_id", 0))
+		var che: Dictionary = _ches.get(che_id, {"pk": che_id})
+		if not _mqtt.publish_command_result(che, item.get("metrics", [])):
+			break
+		_result_outbox.pop_front()
+		sent += 1
+	if sent > 0:
 		_save_runtime_state()
 
 
 func _replay_command_result(command_id: String):
 	var outcome: Dictionary = _command_outcomes[command_id]
+	if outcome.get("metrics") is Array:
+		_result_outbox.append({"che_id": int(outcome.get("che_id", 0)), "metrics": outcome.metrics})
+		_flush_result_outbox()
+		return
 	_publish_command_result(
 		int(outcome.get("che_id", 0)), command_id, str(outcome.get("event", "failed")),
 		int(outcome.get("position_id", 0)), str(outcome.get("reason", "")),
@@ -412,6 +435,9 @@ func _restore_runtime_state():
 	var saved_outcomes = _persisted_runtime_state.get("command_outcomes", {})
 	if saved_outcomes is Dictionary:
 		_command_outcomes = saved_outcomes
+	var saved_outbox = _persisted_runtime_state.get("result_outbox", [])
+	if saved_outbox is Array:
+		_result_outbox = saved_outbox
 	_persisted_runtime_state.clear()
 
 
@@ -428,6 +454,7 @@ func _save_runtime_state():
 			"ches": _ches,
 			"active_commands": _active_commands,
 			"command_outcomes": _command_outcomes,
+			"result_outbox": _result_outbox,
 			"sim_time_ms": _clock.now_ms,
 			"event_seq": _event_seq,
 			"run_seed": _random.run_seed,

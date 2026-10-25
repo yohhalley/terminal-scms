@@ -26,6 +26,10 @@ class FakeSparkplugManager:
 		calls.append(["DDATA", device_id, metrics])
 		return true
 
+	func publish_device_result(device_id: String, metrics: Array):
+		calls.append(["DDATA", device_id, metrics])
+		return true
+
 	func publish_device_death(device_id: String):
 		calls.append(["DDEATH", device_id, []])
 		return true

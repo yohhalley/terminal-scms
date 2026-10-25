@@ -151,7 +151,12 @@ func publish_command_result(che: Dictionary, metrics: Array) -> bool:
 		return false
 	if not _born_devices.has(device_id) and not publish_che_birth(che):
 		return false
-	if not _manager.publish_device_data(device_id, metrics):
+	var published = (
+		_manager.publish_device_result(device_id, metrics)
+		if _manager.has_method("publish_device_result")
+		else _manager.publish_device_data(device_id, metrics)
+	)
+	if not published:
 		return false
 	message_published.emit("DDATA", device_id)
 	return true

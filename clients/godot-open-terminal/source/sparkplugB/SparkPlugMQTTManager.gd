@@ -145,6 +145,11 @@ func publish_device_data(device_id: String, metrics: Array) -> bool:
 	return _publish("DDATA", _topic("DDATA", device_id), _payload(metrics), 0)
 
 
+## Command results are published at QoS 1 (contract: results must not be lost).
+func publish_device_result(device_id: String, metrics: Array) -> bool:
+	return _publish("DDATA", _topic("DDATA", device_id), _payload(metrics), 1)
+
+
 func publish_device_death(device_id: String) -> bool:
 	return _publish("DDEATH", _topic("DDEATH", device_id), _payload(), 0)
 
