@@ -884,3 +884,21 @@ class SimClockFallbackTests(HandoffTestBase):
         # No tie, no draw: a missing seed is harmless.
         candidates[1].idle_since_event_ms = 5
         self.assertEqual(select_equipment(candidates, seed=None, order_id=41).tos_che_id, 11)
+
+
+class CheNameTests(HandoffTestBase):
+    """D-015: events carry the CHE name (QC01) next to the numeric che_id."""
+
+    def test_events_carry_che_name_and_transfer_names(self):
+        tt = self.run_happy_path()
+        datas = [
+            event.payload["data"]
+            for event in OutboxEvent.objects.filter(schema="scms.execution.event.v1")
+        ]
+        names = {EquipmentState.objects.get(tos_che_id=d["che_id"]).name: d["che_name"]
+                 for d in datas if "che_id" in d}
+        self.assertTrue(names)
+        self.assertTrue(all(key == value for key, value in names.items()))
+        transfer = next(d for d in datas if d["event"] == "container_transferred")
+        self.assertEqual(transfer["from_che_name"], self.qc.name)
+        self.assertEqual(transfer["to_che_name"], tt.name)

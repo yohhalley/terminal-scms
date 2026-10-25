@@ -23,6 +23,10 @@ def queue_execution_event(
         data["leg_id"] = operation.tos_leg_id
     if equipment:
         data["che_id"] = equipment.tos_che_id
+        # D-015: the CHE id people see is its name (QC01); the numeric
+        # che_id stays for MiniTOS resolution.
+        if equipment.name:
+            data["che_name"] = equipment.name
     if extra:
         data.update(extra)
     identity = {"event_id": event_id} if event_id else {}
