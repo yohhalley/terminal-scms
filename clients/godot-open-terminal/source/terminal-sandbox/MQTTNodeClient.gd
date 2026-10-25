@@ -16,6 +16,8 @@ var _pending_connection := {}
 var _born_devices := {}
 var _connected := false
 var _disconnect_requested := false
+## When set (headless sessions), Session/Id is added to every DBIRTH and DDATA.
+var session_id := ""
 
 
 func _ready():
@@ -247,6 +249,13 @@ func _device_id(che: Dictionary) -> String:
 
 
 func _che_metrics(che: Dictionary) -> Array:
+	var metrics = _equipment_metrics(che)
+	if not session_id.is_empty():
+		metrics.append({"name": "Session/Id", "type": "String", "value": session_id})
+	return metrics
+
+
+func _equipment_metrics(che: Dictionary) -> Array:
 	var equipment: Dictionary = che.get("equipment_type_details", {})
 	return [
 		{"name": "Identity/Id", "type": "Int32", "value": int(che.get("pk", che.get("id", 0)))},
