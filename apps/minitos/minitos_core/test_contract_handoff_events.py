@@ -17,6 +17,7 @@ from pathlib import Path
 
 from minitos_core.models import ContainerVisit, IntegrationInbox, Order, OrderLeg, Position
 from minitos_core.services import apply_execution_message
+from minitos_core.services import order_execution
 
 try:
     from minitos_core import test_handoff_execution as handoff_tests
@@ -54,6 +55,8 @@ class GoldenHandoffEventConsumerTests(handoff_tests.HandoffExecutionTests):
                 data[key] = leg[data[key]]
         if 'cancelled_leg_ids' in data:
             data['cancelled_leg_ids'] = [leg[value] for value in data['cancelled_leg_ids']]
+        if 'container_visit_id' in data:  # consumer rejects a foreign visit (mismatch check)
+            data['container_visit_id'] = self.visit.pk
         if data.get('destination_position_id') == OES_DESTINATION_POSITION:
             data['destination_position_id'] = self.planned.pk
         self.assertEqual(data['order_id'], OES_ORDER)
@@ -82,7 +85,7 @@ class GoldenHandoffEventConsumerTests(handoff_tests.HandoffExecutionTests):
             IntegrationInbox.objects.filter(status=IntegrationInbox.PROCESSED).count(), 2,
         )
 
-    def test_golden_no_tt_timeout_relocates_to_block01_and_cancels(self):
+    def test_golden_no_tt_timeout_relocates_to_block01_and_closes_the_order(self):
         self.event('container_picked_up', che=self.qc, source='VESSEL')
         self.apply('03_handoff_exception_no_tt_timeout')
         self.visit.refresh_from_db()
@@ -90,7 +93,12 @@ class GoldenHandoffEventConsumerTests(handoff_tests.HandoffExecutionTests):
         self.assertEqual(self.visit.status, ContainerVisit.AT_YARD)
         self.assertEqual(self.visit.exception_reason, 'NO_TT_TIMEOUT')
         self.assertEqual(Position.objects.get(container_visit=self.visit), self.planned)
-        self.assertEqual(self.order.status, Order.CANCELLED)
+        # A-1 (TL interim call, pending Yael): no-show completes the order by
+        # exception; follows MiniTOS NO_SHOW_ORDER_STATUS if that decision flips.
+        self.assertEqual(
+            self.order.status,
+            getattr(order_execution, 'NO_SHOW_ORDER_STATUS', Order.CANCELLED),
+        )
         self.assertEqual(
             set(OrderLeg.objects.filter(order=self.order).values_list('status', flat=True)),
             {OrderLeg.CANCELLED},

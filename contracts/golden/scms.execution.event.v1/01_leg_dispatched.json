@@ -2,9 +2,10 @@
   "payload": {
     "data": {
       "che_id": 17,
+      "che_name": "SC01",
       "event": "leg_dispatched",
       "leg_id": 4101,
-      "occurred_at": "2026-10-25T14:14:54.715791+00:00",
+      "occurred_at": "2026-10-25T14:42:33.786691+00:00",
       "order_id": 41
     },
     "enterprise": {
@@ -12,7 +13,7 @@
       "id": "0a0a0a0a-0000-4000-8000-000000000001",
       "name": "Enterprise A"
     },
-    "event_id": "06ace538-8ee3-4c15-968e-cbf25d9a5747",
+    "event_id": "cc00d37c-3860-400d-86d8-8f27ebf0d859",
     "schema": "scms.execution.event.v1",
     "site": {
       "code": "site-a",

@@ -2,17 +2,20 @@
   "payload": {
     "data": {
       "che_id": 12,
+      "che_name": "TT02",
       "container_number": "MSCU1234565",
       "container_visit_id": 101,
       "event": "container_transferred",
       "from_che_id": 1,
+      "from_che_name": "QC01",
       "giver_leg_id": 4101,
-      "handoff_id": "aff7327d-892a-52d4-af8a-8cbe34e296e0",
+      "handoff_id": "5f3e6dc5-c3f5-5d37-ac72-c0dc5ccab362",
       "leg_id": 4102,
       "occurred_at": "2026-09-21T14:13:40+00:00",
       "order_id": 41,
       "receiver_leg_id": 4102,
       "to_che_id": 12,
+      "to_che_name": "TT02",
       "transfer_position_id": 6
     },
     "enterprise": {
@@ -20,7 +23,7 @@
       "id": "0a0a0a0a-0000-4000-8000-000000000001",
       "name": "Enterprise A"
     },
-    "event_id": "d4205f15-af26-56c0-afc9-3f206d913fdd",
+    "event_id": "d56960a8-b20c-57a9-80f9-20e41d234715",
     "schema": "scms.execution.event.v1",
     "site": {
       "code": "site-a",

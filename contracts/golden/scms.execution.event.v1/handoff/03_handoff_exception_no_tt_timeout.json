@@ -7,26 +7,29 @@
         4103
       ],
       "che_id": 1,
+      "che_name": "QC01",
       "container_number": "MSCU1234565",
       "container_visit_id": 101,
       "destination_position_id": 112,
       "event": "handoff_exception",
       "from_che_id": 1,
+      "from_che_name": "QC01",
       "giver_leg_id": 4101,
-      "handoff_id": "260bc666-b5df-50fe-93e9-47494e81bc90",
+      "handoff_id": "a43177f4-82ac-5ae3-8079-ef5c1602c966",
       "leg_id": 4101,
       "occurred_at": "2026-09-21T14:18:40+00:00",
       "order_id": 41,
       "reason": "NO_TT_TIMEOUT",
       "receiver_leg_id": 4102,
-      "to_che_id": 12
+      "to_che_id": 12,
+      "to_che_name": "TT02"
     },
     "enterprise": {
       "code": "enterprise-a",
       "id": "0a0a0a0a-0000-4000-8000-000000000001",
       "name": "Enterprise A"
     },
-    "event_id": "e31bef08-433a-5325-a433-771a32c91951",
+    "event_id": "2d87a466-826a-58ba-b9cf-8d0be973d162",
     "schema": "scms.execution.event.v1",
     "site": {
       "code": "site-a",

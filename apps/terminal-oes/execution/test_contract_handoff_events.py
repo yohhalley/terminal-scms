@@ -88,6 +88,7 @@ class HandoffEventContractTests(handoffs.HandoffTestBase):
             ("01_container_transferred_qc_to_tt", "from_che_id"),
             ("01_container_transferred_qc_to_tt", "to_che_id"),
             ("03_handoff_exception_no_tt_timeout", "reason"),
+            ("02_container_transferred_tt_to_rtg", "to_che_name"),
         ]:
             path = HANDOFF_GOLDEN_DIR / f"{name}.json"
             if not path.exists():

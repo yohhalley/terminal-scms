@@ -137,6 +137,9 @@ class GoldenExecutionEventConsumerTests(LayoutTestCase):
             'leg_id': self.leg.pk,
             'che_id': self.che.pk,
             'position_id': self.target.pk,
+            # TCL-003a 478a455 rejects events whose container_visit_id is not the
+            # order's own visit (container_number_mismatch).
+            'container_visit_id': self.visit.pk,
         }
         for key, value in mapping.items():
             if key in data:

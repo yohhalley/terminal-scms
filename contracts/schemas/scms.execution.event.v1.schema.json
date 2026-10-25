@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yohhalley/terminal-scms/contracts/schemas/scms.execution.event.v1.schema.json",
   "title": "scms.execution.event.v1 (OES -> MiniTOS business execution event)",
-  "description": "Envelope as decided in the TCL-002 backend review section 2.7 and vault decision T-006. Topic: scms/v2/{enterprise}/{site}/oes/orders/{order_id}/execution, QoS 1, not retained. 'terminal' is required because the MiniTOS consumer (minitos_core/services/integration_events.py apply_execution_message) reads payload['terminal']['id']. correlation_id, causation_id and source_sim_time_ms (review S7) are optional until agreed. TCL-003a: container_transferred (T-006 CHE-to-CHE custody change) requires data.handoff_id, from_che_id and to_che_id, because MiniTOS order_execution.apply_execution_event rejects it without from_che_id/to_che_id; handoff_exception (T-007/D-013, e.g. reason NO_TT_TIMEOUT) requires data.handoff_id and reason (MiniTOS falls back to HANDOFF_EXCEPTION, but the producer always sends one). Other hand-off fields are optional and nullable where the producer may send null.",
+  "description": "Envelope as decided in the TCL-002 backend review section 2.7 and vault decision T-006. Topic: scms/v2/{enterprise}/{site}/oes/orders/{order_id}/execution, QoS 1, not retained. 'terminal' is required because the MiniTOS consumer (minitos_core/services/integration_events.py apply_execution_message) reads payload['terminal']['id']. correlation_id, causation_id and source_sim_time_ms (review S7) are optional until agreed. TCL-003a: container_transferred (T-006 CHE-to-CHE custody change) requires data.handoff_id, from_che_id and to_che_id, because MiniTOS order_execution.apply_execution_event rejects it without from_che_id/to_che_id; handoff_exception (T-007/D-013, e.g. reason NO_TT_TIMEOUT) requires data.handoff_id and reason (MiniTOS rejects it without reason since TCL-003a 478a455). D-015 (TCL-003a 4fef656): both hand-off events always carry from_che_name/to_che_name, so they are required there; che_name is optional (sent next to che_id only when the CHE has a name). Other hand-off fields are optional and nullable where the producer may send null.",
   "type": "object",
   "required": [
     "schema",
@@ -165,6 +165,16 @@
             "integer",
             "null"
           ]
+        },
+        "che_name": {
+          "type": "string",
+          "description": "D-015: CHE name people see (e.g. QC01). Sent with che_id when the OES equipment has a name; optional because the producer omits it for events without equipment."
+        },
+        "from_che_name": {
+          "type": "string"
+        },
+        "to_che_name": {
+          "type": "string"
         }
       }
     }
@@ -188,7 +198,9 @@
             "required": [
               "handoff_id",
               "from_che_id",
-              "to_che_id"
+              "from_che_name",
+              "to_che_id",
+              "to_che_name"
             ]
           }
         }
@@ -211,7 +223,11 @@
           "data": {
             "required": [
               "handoff_id",
-              "reason"
+              "reason",
+              "from_che_id",
+              "from_che_name",
+              "to_che_id",
+              "to_che_name"
             ]
           }
         }

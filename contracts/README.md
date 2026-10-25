@@ -33,8 +33,11 @@ merged. The schema requires `handoff_id`, `from_che_id`, `to_che_id` on
 `container_transferred` and `handoff_id`, `reason` on `handoff_exception`
 (`allOf`/`if`/`then`, supported by the stdlib validator in the OES test).
 
-The goldens were regenerated from TCL-003a (274054742a70): every envelope carries
-`terminal {id, code}` and `container_picked_up` carries `data.container_visit_id`.
+The goldens were regenerated from TCL-003a (8070626faa0b): every envelope carries
+`terminal {id, code}`, `container_picked_up` carries `data.container_visit_id`, and
+events carry `che_name` (D-015); hand-off events also carry `from_che_name` and
+`to_che_name` (required there). The MiniTOS consumer rejects a `container_visit_id`
+that is not the order's own visit, so the consumer tests rebind it too.
 
 Regenerate after an intended producer change, then review the diff:
 
