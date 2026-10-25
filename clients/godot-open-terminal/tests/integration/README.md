@@ -30,6 +30,31 @@ Run the TOS API contract from `minitos`:
 This validates that Godot CHE snapshots survive the REST API round trip and that
 the TOS rejects contradictory power, activity, availability, and maintenance facts.
 
+## Headless simulation checks (TCL-014a)
+
+```sh
+godot --headless --path . --script tests/unit/test_headless_sim.gd
+```
+
+This covers:
+- seed determinism and result ids
+- the fixed-step sim clock
+- the QC discharge state machine, with the container on the QC at command
+  receipt, a seeded hold, and an early or late TT
+- HandoffId pairing rules
+- `Command/Type` routing
+- configurable hold waits
+- ordered outbox replay after a restart
+- device id mapping
+- MQTT packet-id wrap
+
+Environment: `SIMULATOR_SEED`, `SIMULATOR_RUN_ID`, `SIMULATOR_FIXED_STEP_MS`,
+`SIMULATOR_TIME_SCALE`, `SIMULATOR_START_EPOCH_MS`,
+`SIMULATOR_DEVICE_ID_MODE` (`legacy` or `name`), and
+`SIMULATOR_QC_WAIT_MIN_S` / `SIMULATOR_QC_WAIT_MAX_S`. `SIMULATOR_QC_HOLD_WAIT_MIN_S`
+/ `_MAX_S` override the general wait range. Each variable also accepts a
+`SIM_*` alias. See `NOTES-TCL-014a.md` for open points.
+
 ## Rail movement checks
 
 ```sh
