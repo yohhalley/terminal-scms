@@ -289,6 +289,15 @@ class ExecutionServiceTests(TestCase):
         self.assertTrue(OutboxEvent.objects.get(event_id=command.command_id).payload_bytes)
         self.assertEqual(OutboxEvent.objects.filter(event_id=command.command_id).count(), 1)
 
+    def test_execution_events_carry_terminal_id_for_minitos(self):
+        """B3 (TCL-005): MiniTOS rejects an execution event without terminal.id."""
+        dispatch_next_operation(self.order.pk)
+        event = OutboxEvent.objects.get(schema="scms.execution.event.v1")
+        self.assertEqual(
+            event.payload["terminal"],
+            {"id": self.site.source_location_id, "code": self.site.code},
+        )
+
     def test_command_events_complete_operation_and_release_equipment(self):
         assignment = dispatch_next_operation(self.order.pk)
         command = assignment.commands.get()

@@ -34,6 +34,11 @@ def queue_execution_event(order, event, *, operation=None, equipment=None, extra
                 "source_location_id": order.site.source_location_id,
                 "configuration_revision": order.site.source_revision,
             },
+            # B3: MiniTOS apply_execution_message reads terminal.id (its Location pk).
+            "terminal": {
+                "id": order.site.source_location_id,
+                "code": order.site.code,
+            },
             "data": data,
         },
         qos=1,
