@@ -103,10 +103,7 @@ class AcceptanceRuleTests(contract.ExecutionEventContractTests):
         self.assertNotEqual(first["event_ids"], second["event_ids"])
 
     # D-014 -------------------------------------------------------------
-    @contract.known_bug(
-        "D-014: OES picks equipment by oldest telemetry (last_seen_at, then tos_che_id; "
-        "dispatch.py:_eligible_equipment), not by the CHE that has been without orders longest."
-    )
+    # Formerly known bug D-014; fixed by TCL-003a (paired hand-off dispatch).
     def test_d014_dispatch_picks_the_longest_idle_che(self):
         """D-014: pick the TT that has been without orders the longest.
 

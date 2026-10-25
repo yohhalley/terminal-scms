@@ -251,11 +251,7 @@ class ExecutionEventContractTests(TestCase):
                 f"{path.name} drifted from the OES producer",
             )
 
-    @known_bug(
-        "B3/A1: OES execution events have no 'terminal' key, but MiniTOS "
-        "apply_execution_message requires payload['terminal']['id'] "
-        "(events.py:19-40 vs integration_events.py:27-36)."
-    )
+    # Formerly known bug B3/A1; fixed by TCL-003a (paired hand-off dispatch).
     def test_every_execution_event_carries_terminal_id(self):
         """Decided envelope (BE review 2.7, T-006): terminal.id is present on every event."""
         documents = self.produced_execution_events()
@@ -266,10 +262,7 @@ class ExecutionEventContractTests(TestCase):
             self.assertIn("terminal", payload, f"{event}: envelope has no 'terminal' key")
             self.assertIsInstance(payload["terminal"].get("id"), int, f"{event}: terminal.id")
 
-    @known_bug(
-        "B3/A1: produced envelope fails the agreed scms.execution.event.v1 "
-        "schema because 'terminal' is missing."
-    )
+    # Formerly known bug B3/A1; fixed by TCL-003a (paired hand-off dispatch).
     def test_produced_events_validate_against_contract_schema(self):
         if not SCHEMA_PATH.exists():
             self.skipTest(f"{SCHEMA_PATH} is not available (app-only Docker image)")
@@ -330,10 +323,7 @@ class CancelledCommandRegressionTests(ExecutionEventContractTests):
         # Godot still holds `command` (it was never told), so it will reject `second`
         # with "CHE already has an active command" (HeadlessSimulator.gd:201-202).
 
-    @known_bug(
-        "B4/B10: POST /api/commands/{id}/event/ 'cancelled' queues no DCMD to the "
-        "CHE (dispatch.py:276-321), so Godot keeps the command and rejects the next one."
-    )
+    # Formerly known bug B4/B10; fixed by TCL-003a (paired hand-off dispatch).
     def test_cancel_queues_abort_dcmd_to_the_che(self):
         """After an OES cancel, an outbox DCMD for that CHE must reference the cancelled
         command. The Command/Type value is not agreed yet (TBD with Able Archer), so it

@@ -163,20 +163,13 @@ class GoldenExecutionEventConsumerTests(LayoutTestCase):
             'container_dropped', 'leg_completed',
         ])
 
-    @known_bug(
-        "B3/A1: OES-produced envelopes have no 'terminal' key; "
-        "apply_execution_message requires payload['terminal']['id'] "
-        "(integration_events.py:27-36)."
-    )
+    # Formerly known bug B3/A1; fixed by TCL-003a (paired hand-off dispatch).
     def test_golden_envelopes_carry_terminal_id(self):
         for name, document in load_golden():
             self.assertIn('terminal', document['payload'], f"{name}: no 'terminal' key")
             self.assertIn('id', document['payload']['terminal'], f'{name}: no terminal.id')
 
-    @known_bug(
-        "B3/A1: the real consumer rejects every OES-produced execution event with "
-        "'Execution event requires event_id, terminal.id, order_id, and event.'"
-    )
+    # Formerly known bug B3/A1; fixed by TCL-003a (paired hand-off dispatch).
     def test_golden_leg_applies_through_real_consumer(self):
         """Replaying OES's own payloads moves the container and completes the order."""
         golden = load_golden()
