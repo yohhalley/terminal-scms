@@ -102,8 +102,7 @@ here; anything not covered by an explicit decision is listed as open.
    `SIM_*` aliases are local-only and are rejected by the runner.
    - Open: the runner only forwards what OES puts in the claim `environment`;
      OES does not set these yet.
-   - Open: the existing `SIMULATOR_DEFAULT_SPEED_MPS` (set in compose.yaml) is
-     also not in the allowlist. I did not add it, as it is not new here.
+   - `SIMULATOR_DEFAULT_SPEED_MPS` (set in compose.yaml) is now allowlisted too.
    - The timing values are env-only; the proposal wants them from
      scenario/bootstrap (§5.1). Not changed here.
 4. **OES must change ExpiresAtMs (Backend Engineer is being told):** OES must
@@ -112,13 +111,15 @@ here; anything not covered by an explicit decision is listed as open.
    `Sim/Timing/CommandTtlS`. Today `dispatch.py` sends wall-clock epoch ms +
    `EQUIPMENT_COMMAND_TTL_SECONDS` (30 s). Read as sim time, that value lies
    about 55 years ahead, so until OES changes, Godot effectively never expires
-   a command. OES needs the current Sim/TimeMs to do this: from result DDATA
-   today, and from periodic DDATA once open point 6 is done.
+   a command. OES can take the current Sim/TimeMs from any DDATA (open point 6).
    - Open: whether a DCMD without ExpiresAtMs should rather be rejected. Godot
      now applies the default TTL; before, a missing value was rejected as expired.
    - Open: whether a running command should also expire.
 5. At high time scale, the 2 s sim-time cadence for a working CHE can flood the broker.
-6. Periodic equipment DDATA has no `Sim/TimeMs`; only results do.
+6. Resolved: periodic equipment DDATA (and DBIRTH) now carries `Sim/TimeMs` (sim clock at
+   publish) next to `Session/Id`, so OES can use it as its sim-time source. Idle CHE
+   publish every 20 s sim time, working CHE every 2 s. `Event/TimeMs` is still only
+   on results.
 7. PUBACK is not tracked: an outbox item counts as delivered once handed to
    the MQTT client.
 8. Assumed names: the `Command/Result/MoveKind` metric (echo-only) and the
