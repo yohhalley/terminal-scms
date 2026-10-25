@@ -7,6 +7,7 @@ signal message_rejected(message_type: String, device_id: String, reason: String)
 signal sparkplug_command_received(topic: String, message_type: String, device_id: String, metrics: Dictionary)
 
 const SPARKPLUG_MANAGER = preload("res://source/sparkplugB/SparkPlugMQTTManager.gd")
+const SIM_IDS = preload("res://source/headless/SimIds.gd")
 const CONNECT_TIMEOUT_SECONDS := 8.0
 
 var _manager = null
@@ -237,7 +238,7 @@ func _on_message_received(topic: String, payload: PackedByteArray):
 
 
 func _device_id(che: Dictionary) -> String:
-	return "CHE_%s" % str(che.get("pk", che.get("id", che.get("name", "UNKNOWN"))))
+	return SIM_IDS.device_id(che)
 
 
 func _che_metrics(che: Dictionary) -> Array:

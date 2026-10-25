@@ -2,6 +2,7 @@ extends Node
 
 const OESBootstrapClient = preload("res://source/headless/OESBootstrapClient.gd")
 const MQTTNodeClient = preload("res://source/terminal-sandbox/MQTTNodeClient.gd")
+const SimIds = preload("res://source/headless/SimIds.gd")
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 
 var _bootstrap := OESBootstrapClient.new()
@@ -180,7 +181,7 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 		_replay_command_result(command_id)
 		return
 	var che_id = int(metrics.get("Command/CheId", 0))
-	if not _ches.has(che_id) or device_id != "CHE_%s" % che_id:
+	if not _ches.has(che_id) or device_id != SimIds.device_id(_ches[che_id]):
 		_publish_command_result(che_id, command_id, "failed", 0, "Unknown command target")
 		return
 	if str(metrics.get("Command/SessionId", "")) != _session_id:
