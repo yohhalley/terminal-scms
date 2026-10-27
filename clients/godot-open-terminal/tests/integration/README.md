@@ -1,5 +1,11 @@
 # Godot, TOS, and MQTT integration checks
 
+CI (TCL-029): the root workflow `.github/workflows/ci.yml` runs
+`test_headless_sim.gd`, `test_terminal_integration.gd` and `test_che_rails.gd`
+with Godot 4.2.1 headless in job `godot`. The live broker check below runs in
+the separate, non-blocking job `godot-mqtt-broker` against a HiveMQ CE
+service container.
+
 The integration contract is split at the network boundaries so it can run without
 production credentials or a live broker.
 

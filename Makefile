@@ -87,6 +87,8 @@ test-runner:
 
 test-godot: build-simulator
 	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
+		godot --headless --path /app -s res://tests/unit/test_headless_sim.gd
+	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
 		godot --headless --path /app -s res://tests/unit/test_terminal_integration.gd
 	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
 		godot --headless --path /app -s res://tests/unit/test_che_rails.gd
