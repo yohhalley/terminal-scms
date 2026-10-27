@@ -1381,22 +1381,24 @@ def transition_visit_status(request, visit_id):
     if not new_status:
         return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    visit_manager = VisitStateManager()
-    success, message = visit_manager.transition_visit_status(visit, new_status, request.user)
-
-    if success:
-        # Return updated visit
-        serializer = VisitSerializer(visit)
-        return Response({
-            'success': True,
-            'message': message,
-            'visit': serializer.data
-        })
-    else:
+    # TCL-032: the legacy VisitStateManager/VisitSerializer never existed in this
+    # codebase. Use the same rules as the CarrierVisit API (CarrierVisitSerializer:
+    # status must be one of CarrierVisit.STATUS_CHOICES); no transition graph is
+    # enforced because none is defined yet (open question for the PO).
+    old_status = visit.status
+    serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
+    if not serializer.is_valid():
         return Response({
             'success': False,
-            'message': message
+            'message': f'Invalid status {new_status!r} for visit {visit.name}.',
+            'errors': serializer.errors,
         }, status=status.HTTP_400_BAD_REQUEST)
+    serializer.save()
+    return Response({
+        'success': True,
+        'message': f'Visit {visit.name} status changed from {old_status} to {visit.status}.',
+        'visit': serializer.data,
+    })
 
 
 @api_view(['POST'])
