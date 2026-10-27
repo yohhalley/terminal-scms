@@ -11,15 +11,16 @@
       "container_number": "MSCU1234565",
       "container_visit_id": 101,
       "destination_position_id": 112,
+      "detail": "no TT within 300 s",
       "event": "handoff_exception",
       "from_che_id": 1,
       "from_che_name": "QC01",
       "giver_leg_id": 4101,
-      "handoff_id": "a43177f4-82ac-5ae3-8079-ef5c1602c966",
+      "handoff_id": "a2d0a2f7-12d2-5319-b4d4-740cbb5d665e",
       "leg_id": 4101,
       "occurred_at": "2026-09-21T14:18:40+00:00",
       "order_id": 41,
-      "reason": "NO_TT_TIMEOUT",
+      "reason": "SIMULATOR_FAILURE",
       "receiver_leg_id": 4102,
       "to_che_id": 12,
       "to_che_name": "TT02"
@@ -29,7 +30,7 @@
       "id": "0a0a0a0a-0000-4000-8000-000000000001",
       "name": "Enterprise A"
     },
-    "event_id": "2d87a466-826a-58ba-b9cf-8d0be973d162",
+    "event_id": "c909dcc8-07c5-509e-8646-8089dab33470",
     "schema": "scms.execution.event.v1",
     "site": {
       "code": "site-a",

@@ -5,7 +5,7 @@
       "che_name": "SC01",
       "event": "leg_started",
       "leg_id": 4101,
-      "occurred_at": "2026-10-25T14:42:33.790531+00:00",
+      "occurred_at": "2026-10-27T08:09:10.300769+00:00",
       "order_id": 41
     },
     "enterprise": {
@@ -13,7 +13,7 @@
       "id": "0a0a0a0a-0000-4000-8000-000000000001",
       "name": "Enterprise A"
     },
-    "event_id": "597c63e6-ea8e-4d55-aec3-150a6c67d0a7",
+    "event_id": "babf340b-3787-49d8-a374-124f34c5aa92",
     "schema": "scms.execution.event.v1",
     "site": {
       "code": "site-a",

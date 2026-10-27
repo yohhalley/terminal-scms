@@ -15,6 +15,8 @@ import json
 import unittest
 from pathlib import Path
 
+from django.core.exceptions import ValidationError
+
 from minitos_core.models import ContainerVisit, IntegrationInbox, Order, OrderLeg, Position
 from minitos_core.services import apply_execution_message
 from minitos_core.services import order_execution
@@ -32,6 +34,7 @@ HANDOFF_GOLDEN_DIR = (
 OES_ORDER, OES_LEGS = 41, (4101, 4102, 4103)
 OES_QC, OES_TTS, OES_RTG = 1, (11, 12), 21
 OES_DESTINATION_POSITION = 112
+EXCEPTION_GOLDEN = '03_handoff_exception_simulator_failure'
 
 
 def load(name):
@@ -85,24 +88,56 @@ class GoldenHandoffEventConsumerTests(handoff_tests.HandoffExecutionTests):
             IntegrationInbox.objects.filter(status=IntegrationInbox.PROCESSED).count(), 2,
         )
 
-    def test_golden_no_tt_timeout_relocates_to_block01_and_closes_the_order(self):
+    def test_golden_simulator_failure_relocates_to_block01_and_closes_the_order(self):
+        """D-017: SIMULATOR_FAILURE + detail is accepted and stored on the visit."""
         self.event('container_picked_up', che=self.qc, source='VESSEL')
-        self.apply('03_handoff_exception_no_tt_timeout')
+        self.apply(EXCEPTION_GOLDEN)
         self.visit.refresh_from_db()
         self.order.refresh_from_db()
         self.assertEqual(self.visit.status, ContainerVisit.AT_YARD)
-        self.assertEqual(self.visit.exception_reason, 'NO_TT_TIMEOUT')
+        self.assertEqual(self.visit.exception_reason, 'SIMULATOR_FAILURE')
+        self.assertEqual(self.visit.exception_detail, 'no TT within 300 s')
         self.assertEqual(Position.objects.get(container_visit=self.visit), self.planned)
-        # A-1 (TL interim call, pending Yael): no-show completes the order by
-        # exception; follows MiniTOS NO_SHOW_ORDER_STATUS if that decision flips.
-        self.assertEqual(
-            self.order.status,
-            getattr(order_execution, 'NO_SHOW_ORDER_STATUS', Order.CANCELLED),
-        )
+        # D-017: a no-show is completed by exception (MiniTOS NO_SHOW_ORDER_STATUS).
+        self.assertEqual(self.order.status, order_execution.NO_SHOW_ORDER_STATUS)
+        self.assertEqual(self.order.status, Order.COMPLETE)
         self.assertEqual(
             set(OrderLeg.objects.filter(order=self.order).values_list('status', flat=True)),
             {OrderLeg.CANCELLED},
         )
+
+    def apply_edited(self, name, edit):
+        topic, raw = self.rebind(load(name))
+        payload = json.loads(raw)
+        edit(payload['data'])
+        return apply_execution_message(topic, json.dumps(payload))
+
+    def assert_rejected(self, edit, code):
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        with self.assertRaises(ValidationError) as caught:
+            self.apply_edited(EXCEPTION_GOLDEN, edit)
+        self.assertEqual(caught.exception.code, code)
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.current_che, self.qc, 'a rejected exception moves nothing')
+        self.assertEqual(
+            IntegrationInbox.objects.get(source='terminal-oes').status, IntegrationInbox.FAILED,
+        )
+
+    def test_superseded_no_tt_timeout_is_rejected_as_reason_unknown(self):
+        """D-017 supersedes NO_TT_TIMEOUT (T-007); MiniTOS rejects unknown codes."""
+        self.assert_rejected(lambda data: data.update(reason='NO_TT_TIMEOUT'), 'reason_unknown')
+
+    def test_missing_reason_is_rejected_as_reason_required(self):
+        self.assert_rejected(lambda data: data.pop('reason'), 'reason_required')
+
+    def test_missing_detail_is_accepted(self):
+        """detail is optional for the consumer (OES always sends it; the schema requires it)."""
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        self.apply_edited(EXCEPTION_GOLDEN, lambda data: data.pop('detail'))
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.exception_reason, 'SIMULATOR_FAILURE')
+        self.assertEqual(self.visit.exception_detail, '')
+        self.assertEqual(Position.objects.get(container_visit=self.visit), self.planned)
 
 
 # Do not re-run TCL-003a's own tests from this module.

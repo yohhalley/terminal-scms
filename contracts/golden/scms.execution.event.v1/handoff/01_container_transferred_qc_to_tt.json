@@ -9,7 +9,7 @@
       "from_che_id": 1,
       "from_che_name": "QC01",
       "giver_leg_id": 4101,
-      "handoff_id": "5f3e6dc5-c3f5-5d37-ac72-c0dc5ccab362",
+      "handoff_id": "ff1be656-c6ee-5cb2-890e-f421e99a7e8d",
       "leg_id": 4102,
       "occurred_at": "2026-09-21T14:13:40+00:00",
       "order_id": 41,
@@ -23,7 +23,7 @@
       "id": "0a0a0a0a-0000-4000-8000-000000000001",
       "name": "Enterprise A"
     },
-    "event_id": "d56960a8-b20c-57a9-80f9-20e41d234715",
+    "event_id": "440ef4c4-ad50-5b69-b636-5a110e2fe271",
     "schema": "scms.execution.event.v1",
     "site": {
       "code": "site-a",

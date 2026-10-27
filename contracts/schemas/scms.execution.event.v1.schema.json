@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yohhalley/terminal-scms/contracts/schemas/scms.execution.event.v1.schema.json",
   "title": "scms.execution.event.v1 (OES -> MiniTOS business execution event)",
-  "description": "Envelope as decided in the TCL-002 backend review section 2.7 and vault decision T-006. Topic: scms/v2/{enterprise}/{site}/oes/orders/{order_id}/execution, QoS 1, not retained. 'terminal' is required because the MiniTOS consumer (minitos_core/services/integration_events.py apply_execution_message) reads payload['terminal']['id']. correlation_id, causation_id and source_sim_time_ms (review S7) are optional until agreed. TCL-003a: container_transferred (T-006 CHE-to-CHE custody change) requires data.handoff_id, from_che_id and to_che_id, because MiniTOS order_execution.apply_execution_event rejects it without from_che_id/to_che_id; handoff_exception (T-007/D-013, e.g. reason NO_TT_TIMEOUT) requires data.handoff_id and reason (MiniTOS rejects it without reason since TCL-003a 478a455). D-015 (TCL-003a 4fef656): both hand-off events always carry from_che_name/to_che_name, so they are required there; che_name is optional (sent next to che_id only when the CHE has a name). Other hand-off fields are optional and nullable where the producer may send null.",
+  "description": "Envelope as decided in the TCL-002 backend review section 2.7 and vault decision T-006. Topic: scms/v2/{enterprise}/{site}/oes/orders/{order_id}/execution, QoS 1, not retained. 'terminal' is required because the MiniTOS consumer (minitos_core/services/integration_events.py apply_execution_message) reads payload['terminal']['id']. correlation_id, causation_id and source_sim_time_ms (review S7) are optional until agreed. TCL-003a: container_transferred (T-006 CHE-to-CHE custody change) requires data.handoff_id, from_che_id and to_che_id, because MiniTOS order_execution.apply_execution_event rejects it without from_che_id/to_che_id; handoff_exception (T-007/D-013) requires data.handoff_id, reason and detail. D-017: reason is a closed, extensible list, today only SIMULATOR_FAILURE (OES HandoffExceptionReason, MiniTOS ExceptionReason; MiniTOS rejects a missing reason as reason_required and any other code, including the superseded NO_TT_TIMEOUT, as reason_unknown). detail is free text that OES always sends ('no TT within <N> s'); MiniTOS accepts it missing. data.reason on other events stays a free string. D-015 (TCL-003a 4fef656): both hand-off events always carry from_che_name/to_che_name, so they are required there; che_name is optional (sent next to che_id only when the CHE has a name). Other hand-off fields are optional and nullable where the producer may send null.",
   "type": "object",
   "required": [
     "schema",
@@ -175,6 +175,10 @@
         },
         "to_che_name": {
           "type": "string"
+        },
+        "detail": {
+          "type": "string",
+          "description": "D-017: free-text trigger next to the reason code, e.g. 'no TT within 300 s'."
         }
       }
     }
@@ -224,11 +228,19 @@
             "required": [
               "handoff_id",
               "reason",
+              "detail",
               "from_che_id",
               "from_che_name",
               "to_che_id",
               "to_che_name"
-            ]
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "SIMULATOR_FAILURE"
+                ]
+              }
+            }
           }
         }
       }

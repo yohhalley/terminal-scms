@@ -25,15 +25,19 @@ the producer test ignores those two fields when comparing.
 ## `golden/scms.execution.event.v1/handoff/*.json`
 TCL-003a hand-off events, written from the real OES producer driven through
 TCL-003a's own scenario (`execution/test_handoffs.py`): `container_transferred`
-QC->TT and TT->RTG (T-006) and `handoff_exception` with `NO_TT_TIMEOUT`
-(T-007/D-013). `data.handoff_id` is also ignored when comparing (derived from the
+QC->TT and TT->RTG (T-006) and `handoff_exception` with reason
+`SIMULATOR_FAILURE` and `detail` "no TT within 300 s" (T-007/D-013, D-017; D-017
+supersedes `NO_TT_TIMEOUT`). `data.handoff_id` is also ignored when comparing (derived from the
 session pk). Producer test `execution/test_contract_handoff_events.py`, consumer
 test `minitos_core/test_contract_handoff_events.py`; both skip until TCL-003a is
-merged. The schema requires `handoff_id`, `from_che_id`, `to_che_id` on
-`container_transferred` and `handoff_id`, `reason` on `handoff_exception`
+merged. The schema requires `handoff_id`, `from_che_id`, `to_che_id` (and the
+D-015 names) on `container_transferred`, and `handoff_id`, `reason`, `detail` (and
+the names) on `handoff_exception`, where `reason` is the D-017 enum
+(`SIMULATOR_FAILURE` today). MiniTOS rejects a missing reason (`reason_required`)
+or an unknown one (`reason_unknown`) and accepts a missing `detail`
 (`allOf`/`if`/`then`, supported by the stdlib validator in the OES test).
 
-The goldens were regenerated from TCL-003a (8070626faa0b): every envelope carries
+The goldens were regenerated from TCL-003a (baf3adf4aff5): every envelope carries
 `terminal {id, code}`, `container_picked_up` carries `data.container_visit_id`, and
 events carry `che_name` (D-015); hand-off events also carry `from_che_name` and
 `to_che_name` (required there). The MiniTOS consumer rejects a `container_visit_id`
