@@ -1385,7 +1385,15 @@ def transition_visit_status(request, visit_id):
     # codebase. Use the same rules as the CarrierVisit API (CarrierVisitSerializer:
     # status must be one of CarrierVisit.STATUS_CHOICES); no transition graph is
     # enforced because none is defined yet (open question for the PO).
+    # A same-status request is a 200 no-op: nothing is saved, so save() does not
+    # recompute etd or bump last_updated.
     old_status = visit.status
+    if new_status == old_status:
+        return Response({
+            'success': True,
+            'message': f'Visit {visit.name} is already {old_status}; no change.',
+            'visit': CarrierVisitSerializer(visit).data,
+        })
     serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
     if not serializer.is_valid():
         return Response({

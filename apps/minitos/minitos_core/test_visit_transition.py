@@ -8,6 +8,9 @@ visit view ``VisitSerializer``) and raised NameError (HTTP 500) for every
 authenticated request that got past the input checks.
 """
 
+from datetime import datetime, timezone as dt_timezone
+from decimal import Decimal
+
 from django.contrib.auth.models import User
 from django.urls import reverse
 from rest_framework import status
@@ -45,6 +48,32 @@ class VisitTransitionStatusTests(APITestCase):
         self.assertEqual(response.data["visit"]["status_display"], "Arrived")
         self.visit.refresh_from_db()
         self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
+
+    def test_same_status_is_a_200_no_op_that_does_not_save(self):
+        # CarrierVisit.save() recomputes etd from eta + calculated duration and
+        # bumps last_updated (auto_now); a same-status request must do neither.
+        CarrierVisit.objects.filter(pk=self.visit.pk).update(
+            eta=datetime(2026, 10, 27, 8, 0, tzinfo=dt_timezone.utc),
+            moves_in=100, moves_out=100, crane_split=2,
+            expected_productivity_per_crane=Decimal("25.00"),
+        )
+        self.visit.refresh_from_db()
+        self.assertIsNotNone(self.visit.calculated_duration_minutes)
+        sentinel_etd = datetime(2030, 1, 1, 0, 0, tzinfo=dt_timezone.utc)
+        sentinel_updated = datetime(2020, 1, 1, 0, 0, tzinfo=dt_timezone.utc)
+        CarrierVisit.objects.filter(pk=self.visit.pk).update(
+            etd=sentinel_etd, last_updated=sentinel_updated,
+        )
+
+        response = self.post({"status": CarrierVisit.ANNOUNCED})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["visit"]["status"], CarrierVisit.ANNOUNCED)
+        after = CarrierVisit.objects.get(pk=self.visit.pk)
+        self.assertEqual(after.status, CarrierVisit.ANNOUNCED)
+        self.assertEqual(after.etd, sentinel_etd)
+        self.assertEqual(after.last_updated, sentinel_updated)
 
     def test_unknown_status_is_400_and_leaves_the_visit_unchanged(self):
         response = self.post({"status": "Docked"})
