@@ -356,8 +356,10 @@ class ExecutionOrderViewSet(ReadOnlyModelViewSet):
 
 def _first_error_message(errors):
     """Short human text for a DRF error dict: ``field: first message``."""
-    for field, messages in errors.items():
-        message = messages[0] if isinstance(messages, list) and messages else messages
+    for field, field_messages in errors.items():
+        message = field_messages
+        if isinstance(field_messages, list) and field_messages:
+            message = field_messages[0]
         return f"Invalid request body: {field}: {message}"
     return "Invalid request body."
 
