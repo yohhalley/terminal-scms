@@ -65,20 +65,6 @@ class PositionSerializer(serializers.ModelSerializer):
         model = Position
         fields = ['pk', '__str__', 'container_visit_id', 'is_reserved', 'is_occupied', 'tier', 'container']
        
-    def partial_update(self, instance, validated_data):
-        
-        position = Position.objects.get(pk=instance.id)
-        Position.objects.filter(pk=instance.id)\
-                           .update(**validated_data)
-        # TCL-032: was `position.container is Null` (Position has no `container`
-        # attribute; `Null` is undefined). Branch values kept as-is although they
-        # are the inverse of Position.save() (is_occupied = bool(container_visit));
-        # open question. Note DRF never calls a serializer `partial_update`.
-        if position.container_visit is None:
-            position.is_occupied = True
-        else:
-            position.is_occupied = False
-        return position
         
 ####  Pile
 class PileSerializer(serializers.ModelSerializer):
