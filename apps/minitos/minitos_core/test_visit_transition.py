@@ -84,11 +84,19 @@ class VisitTransitionStatusTests(APITestCase):
         self.assertEqual(self.visit.status, CarrierVisit.ANNOUNCED)
 
     def test_only_the_status_is_changed(self):
-        response = self.post({"status": "Arrived", "name": "RENAMED", "vessel_name": "X"})
+        # ata/atd are sent on purpose: setting them on Arrived/Departed is open (Q2),
+        # so the transition must not touch them.
+        response = self.post({
+            "status": "Arrived", "name": "RENAMED", "vessel_name": "X",
+            "ata": "2026-10-27T08:00:00Z", "atd": "2026-10-27T20:00:00Z",
+        })
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
         self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
         self.assertEqual(self.visit.name, "VISIT-032")
         self.assertIsNone(self.visit.vessel_name)
+        self.assertIsNone(self.visit.ata)
+        self.assertIsNone(self.visit.atd)
 
     def test_missing_status_unknown_visit_and_anonymous_keep_their_codes(self):
         self.assertEqual(self.post({}).status_code, status.HTTP_400_BAD_REQUEST)
