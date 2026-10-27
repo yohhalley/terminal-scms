@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yohhalley/terminal-scms/contracts/schemas/scms.execution.event.v1.schema.json",
+  "title": "scms.execution.event.v1 (OES -> MiniTOS business execution event)",
+  "description": "Envelope as decided in the TCL-002 backend review section 2.7 and vault decision T-006. Topic: scms/v2/{enterprise}/{site}/oes/orders/{order_id}/execution, QoS 1, not retained. 'terminal' is required because the MiniTOS consumer (minitos_core/services/integration_events.py apply_execution_message) reads payload['terminal']['id']. correlation_id, causation_id and source_sim_time_ms (review S7) are optional until agreed. TCL-003a: container_transferred (T-006 CHE-to-CHE custody change) requires data.handoff_id, from_che_id and to_che_id, because MiniTOS order_execution.apply_execution_event rejects it without from_che_id/to_che_id; handoff_exception (T-007/D-013) requires data.handoff_id, reason and detail. D-017: reason is a closed, extensible list, today only SIMULATOR_FAILURE (OES HandoffExceptionReason, MiniTOS ExceptionReason; MiniTOS rejects a missing reason as reason_required and any other code, including the superseded NO_TT_TIMEOUT, as reason_unknown). detail is free text that OES always sends ('no TT within <N> s'); MiniTOS accepts it missing. data.reason on other events stays a free string. D-015 (TCL-003a 4fef656): both hand-off events always carry from_che_name/to_che_name, so they are required there; che_name is optional (sent next to che_id only when the CHE has a name). Other hand-off fields are optional and nullable where the producer may send null.",
+  "type": "object",
+  "required": [
+    "schema",
+    "event_id",
+    "enterprise",
+    "site",
+    "terminal",
+    "data"
+  ],
+  "properties": {
+    "schema": {
+      "const": "scms.execution.event.v1"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "enterprise": {
+      "type": "object",
+      "required": [
+        "id",
+        "code"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        }
+      }
+    },
+    "site": {
+      "type": "object",
+      "required": [
+        "id",
+        "code",
+        "source_location_id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "source_location_id": {
+          "type": "integer"
+        },
+        "configuration_revision": {
+          "type": "integer"
+        }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "code": {
+          "type": "string"
+        }
+      }
+    },
+    "correlation_id": {
+      "type": "string"
+    },
+    "causation_id": {
+      "type": "string"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "event",
+        "order_id",
+        "occurred_at"
+      ],
+      "properties": {
+        "event": {
+          "enum": [
+            "order_started",
+            "leg_dispatched",
+            "leg_started",
+            "container_picked_up",
+            "container_dropped",
+            "leg_completed",
+            "leg_failed",
+            "leg_blocked",
+            "order_failed",
+            "order_cancelled",
+            "container_transferred",
+            "handoff_exception"
+          ]
+        },
+        "order_id": {
+          "type": "integer"
+        },
+        "leg_id": {
+          "type": "integer"
+        },
+        "che_id": {
+          "type": "integer"
+        },
+        "position_id": {
+          "type": "integer"
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "container_visit_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "container_number": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "handoff_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "from_che_id": {
+          "type": "integer"
+        },
+        "to_che_id": {
+          "type": "integer"
+        },
+        "giver_leg_id": {
+          "type": "integer"
+        },
+        "receiver_leg_id": {
+          "type": "integer"
+        },
+        "transfer_position_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cancelled_leg_ids": {
+          "type": "array"
+        },
+        "destination_position_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "che_name": {
+          "type": "string",
+          "description": "D-015: CHE name people see (e.g. QC01). Sent with che_id when the OES equipment has a name; optional because the producer omits it for events without equipment."
+        },
+        "from_che_name": {
+          "type": "string"
+        },
+        "to_che_name": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string",
+          "description": "D-017: free-text trigger next to the reason code, e.g. 'no TT within 300 s'."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "data": {
+            "properties": {
+              "event": {
+                "const": "container_transferred"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "required": [
+              "handoff_id",
+              "from_che_id",
+              "from_che_name",
+              "to_che_id",
+              "to_che_name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "data": {
+            "properties": {
+              "event": {
+                "const": "handoff_exception"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "required": [
+              "handoff_id",
+              "reason",
+              "detail",
+              "from_che_id",
+              "from_che_name",
+              "to_che_id",
+              "to_che_name"
+            ],
+            "properties": {
+              "reason": {
+                "enum": [
+                  "SIMULATOR_FAILURE"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

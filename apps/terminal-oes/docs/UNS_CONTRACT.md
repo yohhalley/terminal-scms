@@ -99,6 +99,69 @@ the command ID before starting motion. Duplicate delivery replays the original
 result ID and never creates a second physical action. A session-specific runtime
 file preserves active commands and recent CHE state across process restart.
 
+### Hand-offs, cancel and sim-time expiry (TCL-003a / TCL-028)
+
+- **Expiry is sim time.** `Command/ExpiresAtMs` (Int64) is a `Sim/TimeMs`
+  value: the anchor `Sim/TimeMs` + TTL. The anchor is the `Sim/TimeMs` of the
+  result that caused the command (H1 transfer for H2, the time-out for cancels),
+  else the highest `Sim/TimeMs` OES has seen on any NDATA/DDATA/DBIRTH of the
+  session. The TTL is NBIRTH `Sim/Timing/CommandTtlS`, else
+  `EQUIPMENT_COMMAND_TTL_SIM_SECONDS` (default 600). OES also sends it to the
+  simulator as `SIMULATOR_COMMAND_TTL_S` in the claim environment.
+- **Paired dispatch (T-006).** A hand-off pair shares `Command/HandoffId` and
+  carries `Command/HandoffRole` (`giver`/`receiver`), `Command/CounterpartCheId`
+  and `Command/TransferPositionId`. A QC giver gets `Command/Type=qc_discharge`.
+  The TT->RTG hand-off (H2) is dispatched only after H1 has transferred (Q18):
+  the TT gets `assign_handoff` (giver) and the RTG `execute_order_leg` (receiver).
+- **Destination.** Every leg DCMD with a destination carries
+  `Command/DestinationPositionId` (Int64, MiniTOS operational position),
+  `Command/DestinationPositionCode` (String, its readable code, e.g. a block
+  lane or slot) and, for a yard slot, `Command/DestinationInventoryPositionId`
+  (Int64, the MiniTOS stack position chosen by MiniTOS), plus
+  `Command/DestinationLatitude`/`Longitude`. These are the names Godot
+  TCL-014b reads (contract rev 9.3); Godot prefers the inventory id, then the
+  position id, and uses a seeded dummy slot only when none is sent (O6).
+- **Cancel.** `Command/Type=cancel`, `Command/CancelCommandId` = the command to
+  cancel, `Command/Reason`, plus the normal envelope (`Command/AssignmentId` of
+  the target, `Command/ExpiresAtMs`). The cancel's own `Command/Id` is derived
+  from the target, so a re-issued cancel is the same command.
+- **Session scope (Q14).** Every NDATA, DDATA and DBIRTH must carry this
+  session's `Session/Id`; a message without it or from another session is
+  dropped and counted (`stale_message_count`) before sequence tracking or any
+  CHE update. DDEATH carries only `seq` and is not checked. At NBIRTH every CHE
+  of the site restarts idle at `Sim/StartEpochMs` (D-014/D-016).
+- **Results.** Every result carries `Command/Result/Id` (applied once),
+  `Session/Id`, `Sim/TimeMs`,
+  `Event/TimeMs` and `Sim/EventSeq`. `arrived_at_source`,
+  `arrived_at_destination` and `waiting_for_handoff` are informational. One
+  `handoff_completed` per side; the first emits `container_transferred`.
+  `handoff_timed_out` (QC giver) raises `handoff_exception` with
+  `reason` `SIMULATOR_FAILURE` and `detail` `"no TT within <N> s"` (N = this
+  session's NBIRTH `Sim/Timing/TtNoShowTimeoutS`, else OES
+  `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, else 300), and cancels the remaining
+  legs (cancel `Command/Reason` = the same code); the order ends complete by
+  exception (D-017). `reason` is an extensible enum (OES
+  `HandoffExceptionReason`, MiniTOS `ExceptionReason`); MiniTOS rejects a
+  missing reason (`reason_required`) or an unknown one (`reason_unknown`).
+  `detail` is optional free text. A rejected result is stored with a reason
+  and logged, never rolled back into the DDATA.
+- **Aborted hand-offs.** A failed or cancelled leg cancels its pending
+  hand-off and the counterpart leg (cancel DCMD). Stopping, a runner
+  stop/failure, NDEATH after stop, or NBIRTH of a new session closes the
+  session's pending hand-offs; a CHE is "busy" only for its own session.
+- **Known gap: `Sim/EventSeq` ordering.** OES stores `Sim/EventSeq` on each
+  result receipt but does not reorder or detect out-of-order results; it
+  relies on QoS 1 per-topic ordering from one publisher. Follow-up story
+  (TL review S-5).
+- **One consumer.** Exactly one OES process consumes the Sparkplug topics for
+  a site (fixed client id, persistent session). Two consumers would apply
+  results concurrently; receipts are idempotent but ordering is not.
+- **CHE name (D-015).** Execution events carry `che_name` (e.g. `QC01`) next
+  to the numeric `che_id` that MiniTOS resolves; hand-off events add
+  `from_che_name`/`to_che_name`.
+- **MQTT.** The OES consumer uses MQTT 3.1.1 with clean session false and a
+  fixed client id, so QoS 1 results queue while it is down (MQTT 5 is backlog).
+
 Order release and execution lifecycle events are business messages and intentionally do not pretend to be Sparkplug device telemetry.
 
 The OES equipment projection includes the independent power, work,

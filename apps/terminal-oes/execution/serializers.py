@@ -106,3 +106,4 @@ class CommandEventSerializer(serializers.Serializer):
     ])
     position_id = serializers.IntegerField(required=False, min_value=1)
     reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+    detail = serializers.CharField(required=False, allow_blank=True, max_length=1000)
