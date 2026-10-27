@@ -178,6 +178,9 @@ def _route_result(command, event, metrics, result_id):
     detail = str(metrics.get("Command/Result/Detail", ""))
     if expected_number and reported_number and reported_number != expected_number:
         if event != "failed":
+            # TL review N-4: this includes ``cancelled``. A cancel is terminal and
+            # Godot won't resend it, so a mismatching one leaves the command live
+            # in OES until it expires (agreed rule for S1: only ``failed`` passes).
             raise ResultRejected("container_number_mismatch")
         # TL TCL-028: a failure is still a failure. Apply it, keep the reported
         # number (receipt raw_metrics + failure_detail) and flag the mismatch.

@@ -822,7 +822,8 @@ def apply_command_event(
     assignment.completed_at = now
     # §3.2c: ``reason`` is the raw failure code, kept as sent; an unknown code
     # is a generic failure. ``detail`` is human text, stored, never parsed.
-    detail = str(detail or "")
+    # TL review N-1: detail is only kept for a failed or cancelled leg.
+    detail = str(detail or "") if (failed or cancelled) else ""
     assignment.failure_reason = reason
     assignment.failure_detail = detail
     assignment.save(update_fields=["status", "completed_at", "failure_reason", "failure_detail"])
@@ -875,9 +876,15 @@ def apply_command_event(
             "status", "failure_reason", "failure_detail", "completed_at", "updated_at",
         ])
     elif cancelled:
+        # TL review N-2: keep the cancel's reason/detail on the order too, as on
+        # the operation, the assignment and the ``order_cancelled`` event.
         order.status = ExecutionOrder.CANCELLED
+        order.failure_reason = reason
+        order.failure_detail = detail
         order.completed_at = now
-        order.save(update_fields=["status", "completed_at", "updated_at"])
+        order.save(update_fields=[
+            "status", "failure_reason", "failure_detail", "completed_at", "updated_at",
+        ])
     elif not order.operations.exclude(status=ExecutionOperation.COMPLETE).exists():
         order.status = ExecutionOrder.COMPLETE
         order.completed_at = now

@@ -8,6 +8,9 @@ custody moves to the TT with ``container_transferred`` (MiniTOS
 ``transfer_container`` makes the visit On Equipment / TT).
 """
 
+from unittest import mock
+
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -83,6 +86,27 @@ class DispatchNextApiTests(DispatchNextApiTestBase):
         self.assertEqual(self.leg_commands().count(), commands)
         self.assertEqual(self.dcmd_count(), dcmds)
         self.assertEqual(Handoff.objects.count(), 1)
+
+    def test_operation_not_plannable_is_409(self):
+        # TL review N-3: a blocked next leg cannot be dispatched.
+        self.order.operations.filter(sequence=1).update(status=ExecutionOperation.BLOCKED)
+        response = self.post(self.order.pk)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.data["code"], "operation_not_plannable")
+        self.assertTrue(response.data["detail"])
+        self.assertFalse(EquipmentCommand.objects.exists())
+
+    def test_uncoded_service_error_is_409_dispatch_refused(self):
+        # TL review N-3: a ValidationError without a code maps to the fallback.
+        with mock.patch(
+            "execution.views.dispatch_next_operation",
+            side_effect=ValidationError("Something the service refused."),
+        ):
+            response = self.post(self.order.pk)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.data, {
+            "code": "dispatch_refused", "detail": "Something the service refused.",
+        })
 
     def test_not_released_order_is_409(self):
         for state in [ExecutionOrder.COMPLETE, ExecutionOrder.FAILED, ExecutionOrder.CANCELLED]:
@@ -282,6 +306,44 @@ class GodotFailureCodeTests(DispatchNextApiTestBase):
         )
 
 
+    def operator_event(self, command, body):
+        with self.settings(OES_API_TOKEN=TOKEN):
+            return APIClient().post(
+                reverse("equipment-command-event", args=[command.command_id]),
+                body, format="json", HTTP_X_OES_TOKEN=TOKEN,
+            )
+
+    def test_completed_leg_does_not_store_detail(self):
+        # TL review N-1: detail is failure text; a completed leg keeps none.
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        qc_cmd = self.command_for(self.qc)
+        response = self.operator_event(qc_cmd, {"event": "completed", "detail": "all fine"})
+        self.assertEqual(response.status_code, 200, response.content)
+        operation = self.order.operations.get(sequence=1)
+        self.assertEqual(operation.status, ExecutionOperation.COMPLETE)
+        self.assertEqual(operation.failure_detail, "")
+        self.assertEqual(operation.assignment.failure_detail, "")
+        completed = OutboxEvent.objects.get(payload__data__event="leg_completed")
+        self.assertNotIn("detail", completed.payload["data"])
+
+    def test_cancelled_leg_keeps_reason_and_detail_on_the_order(self):
+        # TL review N-2: same reason/detail on the order as on the operation.
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        qc_cmd = self.command_for(self.qc)
+        response = self.operator_event(qc_cmd, {
+            "event": "cancelled", "reason": "operator_abort", "detail": "berth closed",
+        })
+        self.assertEqual(response.status_code, 200, response.content)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, ExecutionOrder.CANCELLED)
+        self.assertEqual(
+            (self.order.failure_reason, self.order.failure_detail),
+            ("operator_abort", "berth closed"),
+        )
+        cancelled = OutboxEvent.objects.get(payload__data__event="order_cancelled")
+        self.assertEqual(cancelled.payload["data"]["detail"], "berth closed")
+
+
 class FailedResultContainerMismatchTests(DispatchNextApiTestBase):
     """TL TCL-028: a failed result with another container number still fails the leg."""
 
@@ -324,7 +386,7 @@ class FailedResultContainerMismatchTests(DispatchNextApiTestBase):
         self.assertEqual(self.post(self.order.pk).status_code, 201)
         qc_cmd = self.command_for(self.qc)
         status_before = qc_cmd.status
-        for event in ("acknowledged", "started", "completed"):
+        for event in ("acknowledged", "started", "completed", "handoff_completed"):
             receipt = self.result(qc_cmd, event, 0, **{
                 "Command/Result/ContainerNumber": "TGHU0000000",
             })
