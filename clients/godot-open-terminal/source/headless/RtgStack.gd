@@ -8,29 +8,33 @@ extends RefCounted
 ## ready to give this container right now (0 = none); the simulator owns that
 ## gate (same HandoffId, TT waiting at the block lane, counterparts match).
 ##
-## idle -> commanded -> [waiting_for_tt] -> picking_from_tt -> holding -> done
-## - On command receipt: acknowledged + started (commanded). The RTG stays put
-##   (no gantry travel is modelled; contract `gantry_to_bay` is not used yet).
+## Contract rev 9.1 §3.4 canonical RTG states:
+## idle -> gantry_to_bay -> [waiting_for_tt] -> picking_from_tt -> holding
+##      -> depositing_to_stack -> idle
+## - On command receipt: acknowledged + started (gantry_to_bay). No gantry
+##   travel is modelled, so gantry_to_bay takes zero sim time.
 ## - The pick from the TT happens at the first step the TT is ready. If the TT
 ##   is not ready yet, the RTG enters waiting_for_tt (waiting_for_handoff).
 ## - Pick = handoff_completed (receiver), then the seeded hold (whole seconds,
-##   Sim/Timing/RtgHold*) before the container is put down in the dummy slot:
-##   container_dropped (slot) + completed.
+##   Sim/Timing/RtgHold*) before the container is put down in the commanded
+##   slot (or the dummy slot when OES sent none): container_dropped
+##   (depositing_to_stack, slot echoed) + completed (idle).
 ## - D-013 analogue: after `tt_no_show_timeout_ms` of sim time in
 ##   waiting_for_tt the RTG publishes handoff_timed_out once and the HandoffId
 ##   is no longer valid here (a late TT gets no transfer). OES cancels.
 
 const IDLE := "idle"
-const COMMANDED := "commanded"
+const GANTRY_TO_BAY := "gantry_to_bay"
+## Canonical since contract rev 9.1 (Tech Lead decision (a), mirrors the QC).
 const WAITING_FOR_TT := "waiting_for_tt"
 const PICKING_FROM_TT := "picking_from_tt"
 const HOLDING := "holding"
-const DONE := "done"
+const DEPOSITING_TO_STACK := "depositing_to_stack"
 const DEFAULT_TT_NO_SHOW_TIMEOUT_MS := 300000
 
 
 static func is_finished(command: Dictionary) -> bool:
-	return str(command.get("work_state", IDLE)) == DONE
+	return bool(command.get("rtg_finished", false))
 
 
 ## Accepts the command. `hold_wait_ms` is the seeded stack hold used after the
@@ -41,7 +45,8 @@ static func start(
 	slot: Dictionary,
 	tt_no_show_timeout_ms: int = DEFAULT_TT_NO_SHOW_TIMEOUT_MS
 ) -> Array:
-	command["work_state"] = COMMANDED
+	command["work_state"] = GANTRY_TO_BAY
+	command["rtg_finished"] = false
 	command["hold_wait_ms"] = hold_wait_ms
 	command["tt_no_show_timeout_ms"] = tt_no_show_timeout_ms
 	command["waiting_since_ms"] = 0
@@ -53,7 +58,7 @@ static func start(
 	command["slot_position_code"] = str(slot.get("position_code", ""))
 	var events: Array = [_event("acknowledged"), _event("started")]
 	for item in events:
-		item["work_state"] = COMMANDED
+		item["work_state"] = GANTRY_TO_BAY
 	return events
 
 
@@ -63,7 +68,7 @@ static func step(command: Dictionary, now_ms: int, ready_counterpart_id: int) ->
 	var events: Array = []
 	for _guard in range(4):
 		var state = str(command.get("work_state", IDLE))
-		if state == COMMANDED:
+		if state == GANTRY_TO_BAY:
 			if ready_counterpart_id > 0:
 				events.append_array(_pick(command, now_ms, ready_counterpart_id))
 			else:
@@ -126,11 +131,14 @@ static func _pick(command: Dictionary, now_ms: int, counterpart_id: int) -> Arra
 static func _drop(command: Dictionary) -> Array:
 	var counterpart_id = int(command.get("counterpart_che_id_actual", 0))
 	var position_id = int(command.get("slot_position_id", 0))
-	command["work_state"] = DONE
+	command["work_state"] = IDLE
+	command["rtg_finished"] = true
 	command["wait_until_ms"] = 0
 	command["load_container_visit_id"] = 0
 	var dropped = _event("container_dropped", position_id, counterpart_id)
+	dropped["work_state"] = DEPOSITING_TO_STACK
 	var done = _event("completed", position_id, counterpart_id)
+	done["work_state"] = IDLE
 	var code = str(command.get("slot_position_code", ""))
 	if not code.is_empty():
 		dropped["position_code"] = code

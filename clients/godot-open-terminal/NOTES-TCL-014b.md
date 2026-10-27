@@ -9,11 +9,16 @@ items marked **Yael** need a decision through the Tech Lead.
 
 - `source/headless/RtgStack.gd`: a pure, serialisable RTG state machine that
   mirrors `QcDischarge.gd`:
-  `idle -> commanded -> [waiting_for_tt] -> picking_from_tt -> holding -> done`.
+  contract rev 9.1 §3.4 canonical states
+  `idle -> gantry_to_bay -> [waiting_for_tt] -> picking_from_tt -> holding -> depositing_to_stack -> idle`.
+  - `gantry_to_bay` (ack + started) takes zero sim time; no gantry travel.
+  - `waiting_for_tt` is canonical (Tech Lead decision (a), rev 9.1, mirrors
+    the QC), kept as its own state in the `RtgStack.WAITING_FOR_TT` constant.
   - The pick is `handoff_completed` (receiver), published with `Work/State` set
     to `picking_from_tt`.
   - Then comes the seeded hold (whole seconds, default 10..30).
-  - Then `container_dropped` with the slot, followed by `completed`.
+  - Then `container_dropped` (Work/State `depositing_to_stack`) with the slot,
+    followed by `completed` (Work/State `idle`); the RTG is idle again.
 - The RTG leg follows contract rev 8 (§3.2, §4 step 10): an `execute_order_leg`
   sent to an RTG CHE (equipment type `RTG`/`ARTG`) with a `Command/HandoffId`.
   - It needs `Command/ContainerVisitId`. `Command/HandoffRole` must be
@@ -58,10 +63,12 @@ items marked **Yael** need a decision through the Tech Lead.
     `Load` 0. The TT is empty and idle.
   - RTG: `handoff_completed` (receiver), with `Load` = the visit.
   - Both carry H2, counterpart ids and the same `Event/TimeMs`.
-- Slot (D-009):
-  - If OES sends `Command/DestinationInventoryPositionId` or
-    `Command/DestinationPositionId`, that becomes `Command/Result/PositionId`.
-  - Otherwise the slot is a dummy, `Command/Result/PositionCode =
+- Slot (O6, D-009):
+  - OES always sends the RTG leg's destination (MiniTOS picks the slot).
+    `Command/DestinationInventoryPositionId` / `Command/DestinationPositionId`
+    and `Command/DestinationPositionCode` are echoed in `container_dropped`
+    and `completed` as `Command/Result/PositionId` / `PositionCode`.
+  - Only when none is sent, the slot is a dummy, `Command/Result/PositionCode =
     BLOCKxx-DUMMY-nn`, with nn in 1..20 drawn from the seed (per RTG and leg).
     The block comes from the lane code (`BLOCK01-TL` → `BLOCK01`).
 - D-013 analogue: an RTG in `waiting_for_tt` publishes `handoff_timed_out` once,
@@ -87,9 +94,9 @@ items marked **Yael** need a decision through the Tech Lead.
 - A1: The RTG does not travel; contract `gantry_to_bay` is not modelled. The RTG
   is assumed to be at the lane. One hold is used after the pick, symmetric with
   the QC's single hold.
-- A2: The RTG `Work/State` names follow the task (`commanded`, `waiting_for_tt`,
-  `picking_from_tt`, `holding`, `done`), not the contract §3.4 list
-  (`gantry_to_bay`, `depositing_to_stack`). See O2.
+- A2: The RTG `Work/State` names follow contract rev 9.1 §3.4 (O2 resolved).
+  The command field name `Command/DestinationPositionCode` is assumed (the
+  contract §4 step 10 says "PositionId/PositionCode" without the metric name).
 - A3: A TT that received a container through a hand-off now always waits at its
   destination for the RTG, as in contract §4 steps 11-12.
   - In TCL-014a it dropped the container at the destination and completed. The
@@ -115,8 +122,8 @@ items marked **Yael** need a decision through the Tech Lead.
 - O1 (**Yael**, via the Tech Lead): RTG timing. The contract gives none, so the
   default is 10..30 s like the QC hold, and it is configurable. Should there be
   a separate gantry/travel wait before the pick?
-- O2 (contract): should the RTG `Work/State` list be aligned with §3.4
-  (`gantry_to_bay`, `depositing_to_stack`) or with what is built here (A2)?
+- O2: resolved (rev 9 / 9.1): names aligned to §3.4, `waiting_for_tt`
+  canonical.
 - O3: resolved. TCL-014a no longer emits `container_dropped` (QC giver) or
   `container_picked_up` (TT receiver) for the hand-off (A4).
 - O4 (backend): D-011 cannot be enforced, because the OES bootstrap has no RTG
@@ -129,11 +136,9 @@ items marked **Yael** need a decision through the Tech Lead.
 - O5: resolved by the BE interface (A5). Still to land in the contract text:
   `assign_handoff` fields, results on the assign id (`handoff_completed`
   only, or `failed`), and no ack.
-- O6 (contract): dummy slots go out as a String `Command/Result/PositionCode`
-  (`BLOCK01-DUMMY-07`), because `PositionId` is Int64. OES/MiniTOS need either
-  to accept the code or to always send a destination position id for the RTG
-  leg (contract §4 step 10 says OES sends the dummy slot as the destination; if
-  it does, PositionId is used and no code is sent).
+- O6: resolved (rev 9): OES always sends the RTG destination; Godot echoes it,
+  dummy slot only when absent. Confirm the `Command/DestinationPositionCode`
+  metric name (A2).
 - O7 (**Yael**): should the D-013 time-out apply on the RTG side at all, and
   with which start point (A6)? It is implemented behind the same
   `TtNoShowTimeoutS` until decided.

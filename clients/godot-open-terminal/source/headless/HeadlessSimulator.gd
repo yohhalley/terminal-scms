@@ -547,6 +547,7 @@ func _build_command(command_type: String, command_id: String, metrics: Dictionar
 		"move_kind": str(metrics.get("Command/MoveKind", "")),
 		"source_position_id": int(metrics.get("Command/SourcePositionId", 0)),
 		"destination_position_id": int(metrics.get("Command/DestinationPositionId", 0)),
+		"destination_position_code": str(metrics.get("Command/DestinationPositionCode", "")).strip_edges(),
 	}
 	if metrics.has("Command/SourceLatitude") and metrics.has("Command/SourceLongitude"):
 		command["source_latitude"] = float(metrics["Command/SourceLatitude"])
@@ -634,14 +635,17 @@ func _draw_rtg_wait_s(che: Dictionary, command_key: String, wait_index: int, ste
 	return _random.draw_wait_s(SimIds.seed_key(che), "rtg:" + command_key, wait_index, int(bounds[0]), int(bounds[1]))
 
 
-## Destination slot: OES's destination position when sent, else a dummy slot
-## BLOCKxx-DUMMY-nn drawn from the seed (D-009).
+## Destination slot (O6, contract §4 steps 10/13): OES always sends the RTG
+## leg's destination PositionId / PositionCode (MiniTOS picks the slot), and
+## container_dropped echoes it. Only when both are absent: the deterministic
+## dummy slot BLOCKxx-DUMMY-nn drawn from the seed (D-009).
 func _rtg_slot(che: Dictionary, command: Dictionary, command_key: String) -> Dictionary:
 	var position_id = int(command.get("destination_inventory_position_id", 0))
 	if position_id <= 0:
 		position_id = int(command.get("destination_position_id", 0))
-	if position_id > 0:
-		return {"position_id": position_id, "position_code": ""}
+	var position_code = str(command.get("destination_position_code", ""))
+	if position_id > 0 or not position_code.is_empty():
+		return {"position_id": max(position_id, 0), "position_code": position_code}
 	var block = lane_block_code(str(command.get("transfer_position_code", "")))
 	if block.is_empty():
 		block = _rtg_block_code(che)

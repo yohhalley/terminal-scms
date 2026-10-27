@@ -81,6 +81,7 @@ func _initialize():
 	_test_mqtt_packet_id_wraps()
 	_test_rtg_state_machine()
 	_test_chain_happy_path_d016()
+	_test_rtg_commanded_slot()
 	_test_chain_late_tt_at_rtg()
 	_test_chain_rtg_cancel()
 	_test_chain_determinism()
@@ -743,7 +744,7 @@ func _rtg_command() -> Dictionary:
 
 func _test_rtg_state_machine():
 	var slot = {"position_id": 0, "position_code": "BLOCK01-DUMMY-03"}
-	# TT ready at once: commanded -> pick -> holding -> done.
+	# TT ready at once: gantry_to_bay -> pick -> holding -> depositing_to_stack -> idle.
 	var command = _rtg_command()
 	_assert(_names(RtgStack.start(command, 12000, slot)) == ["acknowledged", "started"], "RTG start publishes ack + started")
 	var picked = RtgStack.step(command, 1000, TT_ID)
@@ -754,6 +755,8 @@ func _test_rtg_state_machine():
 	var dropped = RtgStack.step(command, 13000, 0)
 	_assert(_names(dropped) == ["container_dropped", "completed"], "RTG drops into the slot, then completes")
 	_assert(str(dropped[0].position_code) == "BLOCK01-DUMMY-03" and RtgStack.is_finished(command), "Drop names the dummy slot")
+	_assert(str(dropped[0].work_state) == RtgStack.DEPOSITING_TO_STACK and str(dropped[1].work_state) == RtgStack.IDLE, "Drop is depositing_to_stack, completed is idle")
+	_assert(str(command.work_state) == RtgStack.IDLE, "RTG returns to idle after the deposit")
 	_assert(int(command.load_container_visit_id) == 0, "RTG is empty when done")
 	# TT late: waiting_for_tt, then the pick.
 	command = _rtg_command()
@@ -825,7 +828,7 @@ func _sequence(results: Array) -> Array:
 
 ## Drives the chain: QC + TT (H1), H2 to the TT once H1 is done, RTG command
 ## once the TT waits at BLOCK01-TL (or at once when `rtg_early`), run to the end.
-func _run_chain(simulator, rtg_early: bool) -> Dictionary:
+func _run_chain(simulator, rtg_early: bool, rtg_extra := {}) -> Dictionary:
 	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
 	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
 	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000), "H1 completes")
@@ -833,9 +836,41 @@ func _run_chain(simulator, rtg_early: bool) -> Dictionary:
 	_send(simulator, TT_ID, assign)
 	if not rtg_early:
 		_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 3000), "TT reaches BLOCK01-TL")
-	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	var rtg = _rtg_metrics()
+	for key in rtg_extra:
+		rtg[key] = rtg_extra[key]
+	_send(simulator, RTG_ID, _command(RTG_ID, rtg))
 	_run_until(simulator, func(): return simulator._active_commands.is_empty(), 3000)
 	return assign
+
+
+## O6: OES sends the RTG destination (MiniTOS picks the slot); Godot echoes it
+## in container_dropped and never invents a dummy slot then.
+func _test_rtg_commanded_slot():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_run_chain(simulator, false, {"Command/DestinationPositionId": 5012, "Command/DestinationPositionCode": "BLOCK01-03-02-1"})
+	_assert(simulator._active_commands.is_empty(), "Commanded slot: all legs finish")
+	var results = _results(simulator)
+	var drop = _find(results, "RTG01", "container_dropped")
+	_assert(int(drop.get("Command/Result/PositionId", 0)) == 5012, "container_dropped echoes the commanded PositionId")
+	_assert(str(drop.get("Command/Result/PositionCode", "")) == "BLOCK01-03-02-1", "container_dropped echoes the commanded PositionCode")
+	_assert(str(drop["Work/State"]) == "depositing_to_stack", "Deposit is depositing_to_stack")
+	_assert(int(_find(results, "RTG01", "completed").get("Command/Result/PositionId", 0)) == 5012, "completed carries the commanded slot")
+	_free_simulator(simulator)
+	# PositionCode only: echoed as is, no dummy.
+	simulator = _new_chain_simulator(42, QC_LAT)
+	_run_chain(simulator, false, {"Command/DestinationPositionCode": "BLOCK01-05-01-2"})
+	drop = _find(_results(simulator), "RTG01", "container_dropped")
+	_assert(str(drop.get("Command/Result/PositionCode", "")) == "BLOCK01-05-01-2" and not drop.has("Command/Result/PositionId"), "A commanded PositionCode alone is echoed")
+	_free_simulator(simulator)
+	# Absent: deterministic dummy slot (D-009), same on a rerun.
+	var dummies: Array = []
+	for _run in range(2):
+		simulator = _new_chain_simulator(42, QC_LAT)
+		_run_chain(simulator, false)
+		dummies.append(str(_find(_results(simulator), "RTG01", "container_dropped").get("Command/Result/PositionCode", "")))
+		_free_simulator(simulator)
+	_assert(dummies[0].begins_with("BLOCK01-DUMMY-") and dummies[0] == dummies[1], "No destination: seeded dummy slot %s" % [dummies])
 
 
 func _test_chain_happy_path_d016():
@@ -852,9 +887,9 @@ func _test_chain_happy_path_d016():
 		"QC01 handoff_completed done", "QC01 completed done",
 		"TT01 handoff_completed driving_to_destination",
 		"TT01 arrived_at_destination at_destination_waiting", "TT01 waiting_for_handoff at_destination_waiting",
-		"RTG01 acknowledged commanded", "RTG01 started commanded",
+		"RTG01 acknowledged gantry_to_bay", "RTG01 started gantry_to_bay",
 		"TT01 handoff_completed idle", "TT01 completed idle",
-		"RTG01 handoff_completed picking_from_tt", "RTG01 container_dropped done", "RTG01 completed done",
+		"RTG01 handoff_completed picking_from_tt", "RTG01 container_dropped depositing_to_stack", "RTG01 completed idle",
 	]
 	_assert(sequence == expected, "D-016 ordered states/events:\n%s" % "\n".join(PackedStringArray(sequence)))
 	var tt_give: Dictionary = {}
