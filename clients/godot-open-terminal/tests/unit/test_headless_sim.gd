@@ -119,15 +119,22 @@ func _test_seed_determinism():
 	_assert(SimRandom.fnv1a32("a") == 0xe40c292c, "FNV-1a must match the reference value")
 
 
+## S15-1: Result/Id = uuid5(NS_TCL002, "{Session/Id}:{Sim/EventSeq}") (contract §5.2).
+## Reference values from Python: uuid.uuid5(uuid.UUID(NS_TCL002), f"{session}:{seq}").
 func _test_result_ids():
 	var uuid = RegEx.new()
-	uuid.compile("^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-	var a = SimRandom.new(1, "run-a")
-	var id_a = a.result_id(SESSION_ID, "cmd", "completed", 3)
-	_assert(uuid.search(id_a) != null, "Result ids must be UUID shaped (v8, RFC 4122 variant): %s" % id_a)
-	_assert(id_a == SimRandom.new(1, "run-a").result_id(SESSION_ID, "cmd", "completed", 3), "Result ids must be deterministic")
-	_assert(id_a != SimRandom.new(1, "run-b").result_id(SESSION_ID, "cmd", "completed", 3), "Result ids must include the run id")
-	_assert(id_a != a.result_id(SESSION_ID, "cmd", "completed", 4), "Result ids must differ per event")
+	uuid.compile("^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+	_assert(SimRandom.NS_TCL002 == SimRandom.uuid5("6ba7b811-9dad-11d1-80b4-00c04fd430c8", "urn:scms:contract:tcl-002:result-id"), "NS_TCL002 is uuid5(NAMESPACE_URL, urn:scms:contract:tcl-002:result-id)")
+	var id_a = SimRandom.result_id(SESSION_ID, 3)
+	_assert(uuid.search(id_a) != null, "Result ids are UUID v5 (RFC 4122 variant): %s" % id_a)
+	_assert(id_a == "7d422a93-a77f-54c7-9a08-c1970096d39d", "Result/Id matches Python uuid5 for seq 3: %s" % id_a)
+	_assert(SimRandom.result_id(SESSION_ID, 4) == "653ce639-35c3-5a62-bfd0-b42e91905699", "Result/Id matches Python uuid5 for seq 4")
+	_assert(SimRandom.result_id("99999999-1111-4111-8111-111111111111", 3) != id_a, "A new Session/Id gives new ids")
+	var simulator = _new_simulator(1, QC_LAT)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	for item in _results(simulator):
+		_assert(str(item.m["Command/Result/Id"]) == SimRandom.result_id(SESSION_ID, int(item.m["Sim/EventSeq"])), "Published Result/Id is uuid5(Session/Id:EventSeq)")
+	_free_simulator(simulator)
 
 
 # --- clock ------------------------------------------------------------------

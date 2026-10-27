@@ -738,7 +738,7 @@ func _publish_command_result(
 		return
 	_event_seq += 1
 	if result_id.is_empty():
-		result_id = _random.result_id(_session_id, command_id, event, _event_seq)
+		result_id = SimRandom.result_id(_session_id, _event_seq)
 	var metrics: Array = [
 		{"name": "Command/Result/Id", "type": "String", "value": result_id},
 		{"name": "Command/Result/CommandId", "type": "String", "value": command_id},
