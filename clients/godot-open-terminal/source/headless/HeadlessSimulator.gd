@@ -10,6 +10,25 @@ const COMMAND_EXECUTE_ORDER_LEG := "execute_order_leg"
 const COMMAND_QC_DISCHARGE := "qc_discharge"
 const COMMAND_CANCEL := "cancel"
 const SUPPORTED_COMMAND_TYPES := [COMMAND_EXECUTE_ORDER_LEG, COMMAND_QC_DISCHARGE, COMMAND_CANCEL]
+## Command/Result/Reason machine codes on `failed` (contract §3.2: consumers branch
+## on the code; the human-readable text goes in Command/Result/Detail).
+const REASON_UNKNOWN_COMMAND_TARGET := "unknown_command_target"
+const REASON_SESSION_MISMATCH := "session_mismatch"
+const REASON_SITE_MISMATCH := "site_mismatch"
+const REASON_CONFIGURATION_REVISION_MISMATCH := "configuration_revision_mismatch"
+const REASON_COMMAND_EXPIRED := "command_expired"
+const REASON_ASSIGNMENT_ID_MISSING := "assignment_id_missing"
+const REASON_UNSUPPORTED_COMMAND_TYPE := "unsupported_command_type"
+const REASON_CHE_BUSY := "che_busy"
+const REASON_CONTAINER_NUMBER_INVALID := "container_number_invalid"
+const REASON_DESTINATION_MISSING := "destination_missing"
+const REASON_HANDOFF_ID_MISSING := "handoff_id_missing"
+const REASON_CONTAINER_VISIT_ID_MISSING := "container_visit_id_missing"
+const REASON_HANDOFF_ALREADY_ACTIVE := "handoff_already_active"
+const REASON_CHE_NOT_EXECUTABLE := "che_not_executable"
+const REASON_CANCEL_TARGET_MISSING := "cancel_target_missing"
+const REASON_NO_ACTIVE_COMMAND := "no_active_command"
+const REASON_CANCEL_TARGET_MISMATCH := "cancel_target_mismatch"
 const TT_DRIVING_TO_SOURCE := "driving_to_source"
 const TT_AT_SOURCE_WAITING := "at_source_waiting"
 const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
@@ -21,6 +40,9 @@ const DEFAULT_COMMAND_TTL_S := 600
 ## Sim time is checkpointed at least this often, so a restart loses at most this much.
 const SIM_TIME_CHECKPOINT_MS := 1000
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
+## NBIRTH Contract/Version (TCL-002 §3.1, S2): "tcl-002.<minor>". OES refuses an
+## unsupported major version.
+const CONTRACT_VERSION := "tcl-002.1"
 
 var _bootstrap := OESBootstrapClient.new()
 var _mqtt := MQTTNodeClient.new()
@@ -39,8 +61,13 @@ var _mqtt_retry_pending := false
 var _ches := {}
 var _active_commands := {}
 var _command_outcomes := {}
-## Command results not yet handed to the MQTT client, in publish order. Buffered
-## while disconnected and replayed in order after reconnect and rebirth.
+## Result journal (contract §5.2, B4): every result in Sim/EventSeq order, persisted.
+## Entry: {seq, che_id, result_id, metrics, packet_id, acked}. An entry stays
+## pending until the broker's PUBACK for its packet id arrives; packet_id 0 means
+## "not sent on the current connection". After a disconnect or restart every
+## pending entry is resent, in Sim/EventSeq order, with the same Result/Id.
+## Acked entries are kept until session end/reset (Q20). Full-session replay
+## after an OES rebirth request is S2 (Tech Lead review B15-2), not done here.
 var _result_outbox: Array = []
 var _persisted_runtime_state := {}
 var _last_publish_ms := {}
@@ -49,6 +76,8 @@ var _clock := SimClock.new()
 var _random := SimRandom.new()
 var _event_seq := 0
 var _start_epoch_ms := 0
+## NBIRTH Sim/ScenarioId: OES bootstrap session.scenario_id, else SIMULATOR_SCENARIO_ID.
+var _scenario_id := ""
 var _last_checkpoint_sim_ms := 0
 ## Whole seconds, inclusive, per QC wait step. D-012: only the hold wait exists.
 var _qc_wait_s := {
@@ -77,6 +106,7 @@ func _ready():
 	_mqtt.broker_checked.connect(_on_broker_checked)
 	_mqtt.sparkplug_command_received.connect(_on_sparkplug_command)
 	_mqtt.message_rejected.connect(_on_message_rejected)
+	_mqtt.publish_acknowledged.connect(_on_result_acknowledged)
 	_load_bootstrap()
 	print("HEADLESS simulator requesting OES session %s for Site %s" % [_session_id, _site_id])
 
@@ -92,6 +122,7 @@ func _configure_simulation():
 	var time_scale = float(_env_any(["SIMULATOR_TIME_SCALE", "SIM_TIME_SCALE"], "1.0"))
 	_clock = SimClock.new(step_ms, time_scale)
 	_start_epoch_ms = int(_env_any(["SIMULATOR_START_EPOCH_MS", "SIM_START_EPOCH_MS"], "0"))
+	_scenario_id = _env_any(["SIMULATOR_SCENARIO_ID", "SIM_SCENARIO_ID"], "")
 	SimIds.use_che_name = _env_any(["SIMULATOR_DEVICE_ID_MODE", "SIM_DEVICE_ID_MODE"], "name") != "legacy"
 	_mqtt.session_id = _session_id
 	var default_min = _env_any(["SIMULATOR_QC_WAIT_MIN_S", "SIM_QC_WAIT_MIN_S"], str(DEFAULT_QC_WAIT_MIN_S))
@@ -226,6 +257,9 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 	_mqtt.session_id = _session_id
 	if _start_epoch_ms <= 0:
 		_start_epoch_ms = int(session.get("start_epoch_ms", 0)) if session.get("start_epoch_ms") != null else 0
+	var scenario_id = session.get("scenario_id")
+	if scenario_id != null and not str(scenario_id).strip_edges().is_empty():
+		_scenario_id = str(scenario_id).strip_edges()
 	if session.has("seed") and session.get("seed") != null:
 		_random.run_seed = SimRandom.parse_seed(str(session.get("seed")), _random.run_seed)
 	_load_equipment(document)
@@ -235,7 +269,15 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		_start_epoch_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	_configuration_loaded = true
 	_bootstrap_retry_pending = false
-	_mqtt.set_node_birth_metrics([
+	_mqtt.set_node_birth_metrics(node_birth_metrics())
+	_connect_mqtt()
+	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
+
+
+## NBIRTH metrics (contract §1, §2.1, §3.1, §5.1).
+func node_birth_metrics() -> Array:
+	return [
+		{"name": "Contract/Version", "type": "String", "value": CONTRACT_VERSION},
 		{"name": "Session/Id", "type": "String", "value": _session_id},
 		{"name": "Site/Id", "type": "String", "value": _site_id},
 		{"name": "Configuration/Revision", "type": "Int64", "value": _configuration_revision},
@@ -244,14 +286,13 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		{"name": "Sim/RunId", "type": "String", "value": _random.run_id},
 		{"name": "Sim/TimeScale", "type": "Double", "value": _clock.time_scale},
 		{"name": "Sim/FixedStepMs", "type": "Int64", "value": _clock.step_ms},
-		{"name": "Sim/StartEpochMs", "type": "DateTime", "value": _start_epoch_ms},
+		{"name": "Sim/ScenarioId", "type": "String", "value": _scenario_id},
+		{"name": "Sim/StartEpochMs", "type": "Int64", "value": _start_epoch_ms},
 		{"name": "Sim/Timing/QcHoldMinS", "type": "Int64", "value": int(_qc_wait_s.hold[0])},
 		{"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": int(_qc_wait_s.hold[1])},
 		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
 		{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": _command_ttl_s},
-	])
-	_connect_mqtt()
-	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
+	]
 
 
 func _fail_bootstrap(message: String):
@@ -306,6 +347,7 @@ func _connect_mqtt():
 func _on_broker_checked(ok: bool, message: String):
 	_mqtt_connected = ok
 	if not ok:
+		_on_broker_lost()
 		push_warning(message)
 		_schedule_mqtt_retry()
 		return
@@ -333,59 +375,67 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 		return
 	var che_id = int(metrics.get("Command/CheId", 0))
 	if not _ches.has(che_id) or device_id != SimIds.device_id(_ches[che_id]):
-		_publish_command_result(che_id, command_id, "failed", 0, "Unknown command target")
+		_fail(che_id, command_id, REASON_UNKNOWN_COMMAND_TARGET, "Unknown command target")
 		return
 	if str(metrics.get("Command/SessionId", "")) != _session_id:
-		_publish_command_result(che_id, command_id, "failed", 0, "Session mismatch")
+		_fail(che_id, command_id, REASON_SESSION_MISMATCH, "Session mismatch")
 		return
 	if str(metrics.get("Command/SiteId", "")) != _site_id:
-		_publish_command_result(che_id, command_id, "failed", 0, "Site mismatch")
+		_fail(che_id, command_id, REASON_SITE_MISMATCH, "Site mismatch")
 		return
 	if int(metrics.get("Command/ConfigurationRevision", -1)) != _configuration_revision:
-		_publish_command_result(che_id, command_id, "failed", 0, "Configuration revision mismatch")
+		_fail(che_id, command_id, REASON_CONFIGURATION_REVISION_MISMATCH, "Configuration revision mismatch")
 		return
 	# ExpiresAtMs is a sim-time deadline (Sim/TimeMs units), checked on receipt
 	# against the sim clock, never the wall clock.
 	if is_command_expired(metrics):
-		_publish_command_result(che_id, command_id, "failed", 0, "Command expired")
+		_fail(che_id, command_id, REASON_COMMAND_EXPIRED, "Command expired")
 		return
 	if str(metrics.get("Command/AssignmentId", "")).is_empty():
-		_publish_command_result(che_id, command_id, "failed", 0, "Assignment identity is missing")
+		_fail(che_id, command_id, REASON_ASSIGNMENT_ID_MISSING, "Assignment identity is missing")
 		return
 	var command_type = str(metrics.get("Command/Type", "")).strip_edges()
 	if command_type.is_empty():
 		command_type = COMMAND_EXECUTE_ORDER_LEG
 	if not command_type in SUPPORTED_COMMAND_TYPES:
-		_publish_command_result(che_id, command_id, "failed", 0, "Unsupported command type: %s" % command_type)
+		_fail(che_id, command_id, REASON_UNSUPPORTED_COMMAND_TYPE, "Unsupported command type: %s" % command_type)
 		return
 	if command_type == COMMAND_CANCEL:
 		_handle_cancel(che_id, command_id, metrics)
 		return
 	if _active_commands.has(che_id):
-		_publish_command_result(che_id, command_id, "failed", 0, "CHE already has an active command")
+		# Contract §3.2: a hand-off assignment for a CHE that already holds one
+		# is handoff_already_active; any other second command is che_busy.
+		var holds_handoff = not str(_active_commands[che_id].get("handoff_id", "")).is_empty()
+		var wants_handoff = not str(metrics.get("Command/HandoffId", "")).strip_edges().is_empty()
+		_fail(
+			che_id, command_id,
+			REASON_HANDOFF_ALREADY_ACTIVE if holds_handoff and wants_handoff else REASON_CHE_BUSY,
+			"CHE already has an active command"
+		)
 		return
 	var container_number = str(metrics.get("Command/ContainerNumber", "")).strip_edges().to_upper()
 	if not container_number.is_empty() and not is_container_number_format(container_number):
-		_publish_command_result(che_id, command_id, "failed", 0, "Container number format is invalid")
+		_fail(che_id, command_id, REASON_CONTAINER_NUMBER_INVALID, "Container number format is invalid")
 		return
 	if command_type == COMMAND_EXECUTE_ORDER_LEG:
 		if not metrics.has("Command/DestinationLatitude") or not metrics.has("Command/DestinationLongitude"):
-			_publish_command_result(che_id, command_id, "failed", 0, "Command has no destination coordinates")
+			_fail(che_id, command_id, REASON_DESTINATION_MISSING, "Command has no destination coordinates")
 			return
 	elif command_type == COMMAND_QC_DISCHARGE:
 		if str(metrics.get("Command/HandoffId", "")).strip_edges().is_empty():
-			_publish_command_result(che_id, command_id, "failed", 0, "qc_discharge requires Command/HandoffId")
+			_fail(che_id, command_id, REASON_HANDOFF_ID_MISSING, "qc_discharge requires Command/HandoffId")
 			return
 		if int(metrics.get("Command/ContainerVisitId", 0)) <= 0:
-			_publish_command_result(che_id, command_id, "failed", 0, "qc_discharge requires Command/ContainerVisitId")
+			_fail(che_id, command_id, REASON_CONTAINER_VISIT_ID_MISSING, "qc_discharge requires Command/ContainerVisitId")
 			return
 	var handoff_id = str(metrics.get("Command/HandoffId", "")).strip_edges()
 	if not handoff_id.is_empty() and _handoff_side_taken(handoff_id, command_type == COMMAND_QC_DISCHARGE):
-		_publish_command_result(che_id, command_id, "failed", 0, "HandoffId is already held by another active command")
+		_fail(che_id, command_id, REASON_HANDOFF_ALREADY_ACTIVE, "HandoffId is already held by another active command")
 		return
 	var che: Dictionary = _ches[che_id]
 	if not bool(che.get("powered_on", false)) or bool(che.get("is_in_maintenance", false)):
-		_publish_command_result(che_id, command_id, "failed", 0, "CHE is not executable")
+		_fail(che_id, command_id, REASON_CHE_NOT_EXECUTABLE, "CHE is not executable")
 		return
 	var command = _build_command(command_type, command_id, metrics, che)
 	command["container_number"] = container_number
@@ -420,7 +470,7 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 func _handle_cancel(che_id: int, cancel_id: String, metrics: Dictionary):
 	var target_id = str(metrics.get("Command/CancelCommandId", "")).strip_edges()
 	if target_id.is_empty():
-		_publish_command_result(che_id, cancel_id, "failed", 0, "Cancel requires Command/CancelCommandId")
+		_fail(che_id, cancel_id, REASON_CANCEL_TARGET_MISSING, "Cancel requires Command/CancelCommandId")
 		return
 	if not _active_commands.has(che_id):
 		if (
@@ -431,11 +481,11 @@ func _handle_cancel(che_id: int, cancel_id: String, metrics: Dictionary):
 			_save_runtime_state()
 			_replay_command_result(target_id)
 			return
-		_publish_command_result(che_id, cancel_id, "failed", 0, "No active command to cancel")
+		_fail(che_id, cancel_id, REASON_NO_ACTIVE_COMMAND, "No active command to cancel")
 		return
 	var command: Dictionary = _active_commands[che_id]
 	if target_id != str(command.command_id):
-		_publish_command_result(che_id, cancel_id, "failed", 0, "Cancel target is not the active command")
+		_fail(che_id, cancel_id, REASON_CANCEL_TARGET_MISMATCH, "Cancel target is not the active command")
 		return
 	var events: Array
 	if _is_qc_command(command):
@@ -480,8 +530,12 @@ func _build_command(command_type: String, command_id: String, metrics: Dictionar
 	if metrics.has("Command/SourceLatitude") and metrics.has("Command/SourceLongitude"):
 		command["source_latitude"] = float(metrics["Command/SourceLatitude"])
 		command["source_longitude"] = float(metrics["Command/SourceLongitude"])
-	if command_type == COMMAND_QC_DISCHARGE:
-		# Discharge: the destination is the QC transfer point (TT lane) where the TT receives.
+	# Hand-off lane: Command/TransferPositionId as sent by OES (S15-4). Only when
+	# OES sends none does the QC fall back to its destination (the TT lane).
+	var oes_transfer_id = int(metrics.get("Command/TransferPositionId", 0))
+	if oes_transfer_id > 0:
+		command["transfer_position_id"] = oes_transfer_id
+	elif command_type == COMMAND_QC_DISCHARGE:
 		var transfer_id = int(command.destination_inventory_position_id)
 		command["transfer_position_id"] = transfer_id if transfer_id > 0 else int(command.destination_position_id)
 	return command
@@ -576,7 +630,9 @@ func _complete_tt_handoff(tt_id: int, qc_id: int):
 	command["counterpart_che_id_actual"] = qc_id
 	_active_commands[tt_id] = command
 	_save_runtime_state()
-	var position_id = int(command.get("source_inventory_position_id", 0))
+	var position_id = int(command.get("transfer_position_id", 0))
+	if position_id <= 0:
+		position_id = int(command.get("source_inventory_position_id", 0))
 	if position_id <= 0:
 		position_id = int(command.get("source_position_id", 0))
 	# The receiver's pick is the hand-off itself: handoff_completed only.
@@ -596,6 +652,13 @@ func _publish_events(che_id: int, command: Dictionary, events: Array):
 			context["handoff_role"] = str(item.handoff_role)
 		if item.has("source"):
 			context["source"] = str(item.source)
+		if str(item.event) == "handoff_completed":
+			# Contract §3.3: both sides report the same FromCheId/ToCheId/TransferPositionId.
+			var counterpart_id = int(item.get("counterpart_che_id", 0))
+			var giver = str(item.get("handoff_role", "")) != "receiver"
+			context["from_che_id"] = che_id if giver else counterpart_id
+			context["to_che_id"] = counterpart_id if giver else che_id
+			context["result_transfer_position_id"] = int(item.get("position_id", 0))
 		_publish_command_result(
 			che_id, str(command.command_id), str(item.event), int(item.get("position_id", 0)), "", "", context
 		)
@@ -731,7 +794,7 @@ func _publish_command_result(
 		return
 	_event_seq += 1
 	if result_id.is_empty():
-		result_id = _random.result_id(_session_id, command_id, event, _event_seq)
+		result_id = SimRandom.result_id(_session_id, _event_seq)
 	var metrics: Array = [
 		{"name": "Command/Result/Id", "type": "String", "value": result_id},
 		{"name": "Command/Result/CommandId", "type": "String", "value": command_id},
@@ -744,15 +807,23 @@ func _publish_command_result(
 	metrics.append_array(_result_context_metrics(context))
 	metrics.append({"name": "Session/Id", "type": "String", "value": _session_id})
 	metrics.append({"name": "Sim/TimeMs", "type": "Int64", "value": _clock.now_ms})
-	metrics.append({"name": "Event/TimeMs", "type": "DateTime", "value": _start_epoch_ms + _clock.now_ms})
+	metrics.append({"name": "Event/TimeMs", "type": "Int64", "value": _start_epoch_ms + _clock.now_ms})
 	metrics.append({"name": "Sim/EventSeq", "type": "Int64", "value": _event_seq})
 	_command_outcomes[command_id] = {
 		"che_id": che_id, "event": event, "position_id": position_id,
 		"reason": reason, "result_id": result_id, "metrics": metrics,
 	}
-	_result_outbox.append({"che_id": che_id, "metrics": metrics})
+	_result_outbox.append({
+		"seq": _event_seq, "che_id": che_id, "result_id": result_id,
+		"metrics": metrics, "packet_id": 0, "acked": false,
+	})
 	_save_runtime_state()
 	_flush_result_outbox()
+
+
+## `failed` result: Reason is a machine code, Detail the human-readable text.
+func _fail(che_id: int, command_id: String, code: String, detail := ""):
+	_publish_command_result(che_id, command_id, "failed", 0, code, "", {"detail": detail})
 
 
 ## Optional result metrics taken from the command (absent fields are omitted).
@@ -760,6 +831,8 @@ func _result_context_metrics(context: Dictionary) -> Array:
 	var metrics: Array = []
 	if context.is_empty():
 		return metrics
+	if not str(context.get("detail", "")).is_empty():
+		metrics.append({"name": "Command/Result/Detail", "type": "String", "value": str(context.detail)})
 	if int(context.get("container_visit_id", 0)) > 0:
 		metrics.append({"name": "Command/Result/ContainerVisitId", "type": "Int64", "value": int(context.container_visit_id)})
 	if not str(context.get("container_number", "")).is_empty():
@@ -770,6 +843,12 @@ func _result_context_metrics(context: Dictionary) -> Array:
 		metrics.append({"name": "Command/Result/CounterpartCheId", "type": "Int64", "value": int(context.counterpart_che_id)})
 	if not str(context.get("handoff_role", "")).is_empty():
 		metrics.append({"name": "Command/Result/HandoffRole", "type": "String", "value": str(context.handoff_role)})
+	if int(context.get("from_che_id", 0)) > 0:
+		metrics.append({"name": "Command/Result/FromCheId", "type": "Int64", "value": int(context.from_che_id)})
+	if int(context.get("to_che_id", 0)) > 0:
+		metrics.append({"name": "Command/Result/ToCheId", "type": "Int64", "value": int(context.to_che_id)})
+	if int(context.get("result_transfer_position_id", 0)) > 0:
+		metrics.append({"name": "Command/Result/TransferPositionId", "type": "Int64", "value": int(context.result_transfer_position_id)})
 	if not str(context.get("source", "")).is_empty():
 		metrics.append({"name": "Command/Result/Source", "type": "String", "value": str(context.source)})
 	if not str(context.get("move_kind", "")).is_empty():
@@ -778,29 +857,103 @@ func _result_context_metrics(context: Dictionary) -> Array:
 	if not work_state.is_empty():
 		metrics.append({"name": "Work/State", "type": "String", "value": work_state})
 		metrics.append({"name": "Work/WaitUntilSimMs", "type": "Int64", "value": int(context.get("wait_until_ms", 0))})
-		metrics.append({"name": "Load/ContainerVisitId", "type": "Int64", "value": int(context.get("load_container_visit_id", 0))})
+		metrics.append({"name": "Carrying/ContainerVisitId", "type": "Int64", "value": int(context.get("load_container_visit_id", 0))})
 	return metrics
 
 
+## Sends every pending journal entry not yet sent on this connection, in
+## Sim/EventSeq order. Nothing is removed here: an entry stays pending until its
+## PUBACK (_on_result_acknowledged). Stops at the first failed publish.
 func _flush_result_outbox():
-	var sent := 0
+	if not _mqtt_connected:
+		return
 	_mqtt.sim_time_ms = _clock.now_ms
-	while not _result_outbox.is_empty() and _mqtt_connected:
-		var item: Dictionary = _result_outbox[0]
+	var sent := 0
+	for item in _pending_results_in_order():
+		if int(item.get("packet_id", 0)) != 0:
+			continue
 		var che_id = int(item.get("che_id", 0))
 		var che: Dictionary = _ches.get(che_id, {"pk": che_id})
 		if not _mqtt.publish_command_result(che, item.get("metrics", [])):
 			break
-		_result_outbox.pop_front()
+		var packet_id = int(_mqtt.last_result_packet_id)
+		if packet_id <= 0:
+			# Transport without PUBACK (QoS 0): nothing more to wait for.
+			item["acked"] = true
+		else:
+			# A wrapped packet id still held by an older unacked entry: that
+			# entry's PUBACK can no longer be told apart, so resend it later.
+			for other in _result_outbox:
+				if not is_same(other, item) and not bool(other.get("acked", false)) and int(other.get("packet_id", 0)) == packet_id:
+					other["packet_id"] = 0
+			item["packet_id"] = packet_id
 		sent += 1
 	if sent > 0:
 		_save_runtime_state()
 
 
+## Unacked journal entries sorted by Sim/EventSeq (stable for equal seq).
+func _pending_results_in_order() -> Array:
+	var pending: Array = []
+	for item in _result_outbox:
+		if not bool(item.get("acked", false)):
+			pending.append(item)
+	pending.sort_custom(func(a, b): return int(a.get("seq", 0)) < int(b.get("seq", 0)))
+	return pending
+
+
+func pending_result_count() -> int:
+	return _pending_results_in_order().size()
+
+
+## PUBACK from the broker: the matching in-flight entry is acked.
+func _on_result_acknowledged(packet_id: int):
+	if packet_id <= 0:
+		return
+	for item in _result_outbox:
+		if not bool(item.get("acked", false)) and int(item.get("packet_id", 0)) == packet_id:
+			item["acked"] = true
+			_save_runtime_state()
+			return
+
+
+func _on_broker_lost():
+	_mqtt_connected = false
+	_requeue_unacked_results()
+
+
+## Connection lost (or process restarted): in-flight entries never got a PUBACK
+## on that connection, so they are resent after the next connect.
+func _requeue_unacked_results():
+	var changed := false
+	for item in _result_outbox:
+		if not bool(item.get("acked", false)) and int(item.get("packet_id", 0)) != 0:
+			item["packet_id"] = 0
+			changed = true
+	if changed:
+		_save_runtime_state()
+
+
+## A redelivered DCMD replays the recorded result with the same Result/Id and
+## Sim/EventSeq: its journal entry goes back to pending.
 func _replay_command_result(command_id: String):
 	var outcome: Dictionary = _command_outcomes[command_id]
 	if outcome.get("metrics") is Array:
-		_result_outbox.append({"che_id": int(outcome.get("che_id", 0)), "metrics": outcome.metrics})
+		var result_id = str(outcome.get("result_id", ""))
+		var entry = null
+		for item in _result_outbox:
+			if str(item.get("result_id", "")) == result_id and not result_id.is_empty():
+				entry = item
+				break
+		if entry == null:
+			entry = {
+				"seq": _metric_value(outcome.metrics, "Sim/EventSeq", 0), "che_id": int(outcome.get("che_id", 0)),
+				"result_id": result_id, "metrics": outcome.metrics, "packet_id": 0, "acked": false,
+			}
+			_result_outbox.append(entry)
+		entry["acked"] = false
+		entry["packet_id"] = 0
+		_save_runtime_state()
 		_flush_result_outbox()
 		return
 	_publish_command_result(
@@ -808,6 +961,13 @@ func _replay_command_result(command_id: String):
 		int(outcome.get("position_id", 0)), str(outcome.get("reason", "")),
 		str(outcome.get("result_id", ""))
 	)
+
+
+static func _metric_value(metrics: Array, name: String, fallback):
+	for metric in metrics:
+		if metric is Dictionary and str(metric.get("name", "")) == name:
+			return metric.get("value", fallback)
+	return fallback
 
 
 func _load_runtime_state():
@@ -855,7 +1015,17 @@ func _restore_runtime_state():
 		_command_outcomes = saved_outcomes
 	var saved_outbox = _persisted_runtime_state.get("result_outbox", [])
 	if saved_outbox is Array:
-		_result_outbox = saved_outbox
+		_result_outbox = []
+		for saved in saved_outbox:
+			if not saved is Dictionary:
+				continue
+			var item: Dictionary = saved
+			# JSON turns ints into floats; nothing was acked on the new connection.
+			item["seq"] = int(item.get("seq", _metric_value(item.get("metrics", []), "Sim/EventSeq", 0)))
+			item["che_id"] = int(item.get("che_id", 0))
+			item["acked"] = bool(item.get("acked", false))
+			item["packet_id"] = 0
+			_result_outbox.append(item)
 	_persisted_runtime_state.clear()
 
 
