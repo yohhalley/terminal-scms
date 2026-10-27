@@ -43,6 +43,21 @@ events carry `che_name` (D-015); hand-off events also carry `from_che_name` and
 `to_che_name` (required there). The MiniTOS consumer rejects a `container_visit_id`
 that is not the order's own visit, so the consumer tests rebind it too.
 
+## `golden/scms.execution.event.v1/failure/*.json`
+`leg_failed` written by the real OES producer after a Godot `failed` result on the
+Sparkplug result path: `01_leg_failed_with_detail` (Godot sent
+`Command/Result/Detail`, so OES puts it in `data.detail`) and
+`02_leg_failed_without_detail` (empty detail, so the key is left out).
+`data.reason` is Godot's raw `Command/Result/Reason` code. `data.detail` is an
+optional free string in the schema. The detail behaviour arrives with TCL-028
+(PR #20); `01` was generated on TCL-028 5e36047. Producer test
+`execution/test_contract_failure_events.py`: the with-detail check is skipped while
+TCL-028 is not merged and fails under `SCMS_CONTRACT_STRICT=1`. Consumer test
+`minitos_core/test_contract_failure_events.py` replays `leg_dispatched`,
+`leg_started` and each `leg_failed` through MiniTOS. Regenerate (on a branch with
+TCL-028) with
+`SCMS_UPDATE_GOLDEN=1 python manage.py test execution.test_contract_failure_events`.
+
 Regenerate after an intended producer change, then review the diff:
 
     cd apps/terminal-oes
