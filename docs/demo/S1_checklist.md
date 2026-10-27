@@ -1,20 +1,17 @@
 # S1 demo run checklist: import scenario, steps 1–3 (+4)
 
-Prepared by QA (TCL-001) on 27 Oct 2026, for the S1 sprint review. v2 addresses the Tech Lead and SME reviews of PR #19.
+Prepared by QA (TCL-001) on 27 Oct 2026, for the S1 sprint review. v2 addresses the Tech Lead and SME reviews of PR #19. v2.1 (TCL-001a): step 2 uses the visit-transition API; merge list updated.
 - **Scenario spec:** `docs/scenarios/import_v1.md`, with acceptance checks AC*.
-- **Evidence:** `main` @ `9c4b96d` plus the open PRs below (tips as read on 27 Oct). QA has **no Docker**, so every command below is
+- **Evidence:** `main` @ `83949ef` (27 Oct), with #13, #14, #15, #16, #18, #19, #20 and #21 merged. QA has **no Docker**, so every command below is
   **UNVERIFIED** unless it's marked ✔ (read in the code, Makefile or README, not executed). Run it once, end to end,
   on Yael's machine before the review.
 - **Q18** (used below): the contract rule that the TT→RTG hand-off is dispatched only after the QC→TT hand-off has transferred (`apps/terminal-oes/docs/UNS_CONTRACT.md` § Hand-offs).
 
-## 0. Merge list: needed before the demo can pass
+## 0. Merge list
 
-- [ ] PR #13 TCL-003a (OES hand-off dispatch + MiniTOS custody) is merged into `main`. It also passes the `SIMULATOR_*` settings in the runner claim ✔.
-- [ ] PR #14 TCL-005 (contract tests; based on #13) is merged.
-- [ ] PR #15 TCL-014a (Godot QC→TT) is merged.
-- [ ] PR #16 TCL-029 (Godot CI; adds `test_headless_sim.gd` to `make test-godot`) is merged. The sprint's "verified by" needs it.
-- [ ] PR #18 TCL-004 (replaces the LAN address in `compose.yaml` with `${SCMS_SERVER_HOST:-localhost}`) is merged.
-- [ ] PR #20 TCL-028 (dispatch-next response codes, `failure_detail` on `leg_failed`; based on #13) is merged. Recommended.
+Merged into `main` @ `83949ef` (27 Oct; main CI green): #13 TCL-003a, #14 TCL-005, #15 TCL-014a, #16 TCL-029, #18 TCL-004, #19 TCL-001, #20 TCL-028, #21 TCL-032 ✔.
+
+Still needed:
 - [ ] PR #17 TCL-014b (TT→RTG) is merged, if step 4 is shown. It's pulled forward from S2.
 - [ ] TCL-006 (seed + `make scenario-reset SCENARIO=import_v1` + the release step command) is pushed. **It's not on origin today**, and `main`'s Makefile has no `scenario-reset` target.
 
@@ -23,9 +20,9 @@ Prepared by QA (TCL-001) on 27 Oct 2026, for the S1 sprint review. v2 addresses 
 - [ ] Docker Engine + Compose v2. `make`, `python3`, `curl` and the `mosquitto-clients` package (for `mosquitto_sub`) on the host.
 - [ ] `.env`: `make setup` copies `.env.example` → `.env` if it's missing ✔.
   - Set `SIMULATOR_RUNNER_TOKEN` (required by compose) and `OES_API_TOKEN` ✔. Never commit `.env`.
-  - With #18 merged: set `SCMS_SERVER_HOST` in your local `.env` only if you browse from another machine; otherwise there is nothing to do. Don't copy the address into notes or slides.
+  - Set `SCMS_SERVER_HOST` in your local `.env` only if you browse from another machine (compose defaults to `localhost`, #18); otherwise there is nothing to do. Don't copy the address into notes or slides.
 - [ ] Load `.env` into each shell you use for the commands below, so the token is never typed: `set -a; . ./.env; set +a`.
-- [ ] With #13 merged, compose sets `SIMULATOR_SEED=1`, `SIMULATOR_START_EPOCH_MS=1792886400000`, `EQUIPMENT_COMMAND_TTL_SIM_SECONDS=600` and `SIMULATOR_DEVICE_ID_MODE=name` ✔.
+- [ ] Compose sets `SIMULATOR_SEED=1`, `SIMULATOR_START_EPOCH_MS=1792886400000`, `EQUIPMENT_COMMAND_TTL_SIM_SECONDS=600` and `SIMULATOR_DEVICE_ID_MODE=name` ✔.
 - [ ] Free ports (defaults from `.env.example`) ✔:
 
 | Service | URL / port | Health |
@@ -51,7 +48,7 @@ Prepared by QA (TCL-001) on 27 Oct 2026, for the S1 sprint review. v2 addresses 
 
 ## 3. Walk-through with pass criteria
 
-Commands for 3a/3b/4 (✔ paths and header checked in the code; not executed):
+Commands for 2/3a/3b/4 (✔ paths, auth and headers checked in the code; not executed):
 - **Release (3a):** any logged-in MiniTOS user (e.g. the superuser from step 2). Browsable API after logging in at `/admin/`, or
   `curl -u <admin> -X POST "http://localhost:${MINITOS_HTTP_PORT:-8000}/minitos_core/locations/<loc>/work_queues/<wq>/orders/<id>/release/"`.
   `<loc>`, `<wq>` and `<id>` (the MiniTOS order id) are shown in the admin `Order` list. Or use the TCL-006 step command once it exists.
@@ -59,13 +56,16 @@ Commands for 3a/3b/4 (✔ paths and header checked in the code; not executed):
   Use its `id`. That is **not** the MiniTOS order id, which appears as `tos_order_id`.
 - **Dispatch (3b, 4):** `curl -s -X POST -H "X-OES-Token: $OES_API_TOKEN" -H 'Content-Type: application/json' -d '{}' "http://localhost:${OES_HTTP_PORT:-8010}/api/orders/<oes_id>/dispatch-next/"`.
   It returns 201 when commands are sent. Without the header it returns 403.
+- **Vessel arrival (2, optional):** any logged-in MiniTOS user. `<visit_id>` is the vessel visit's id in admin → Carrier visits:
+  `curl -s -u <admin> -X POST -H 'Content-Type: application/json' -d '{"status":"Arrived"}' "http://localhost:${MINITOS_HTTP_PORT:-8000}/minitos_core/api/visits/<visit_id>/transition-status/"`.
+  It returns 200 with `success: true` and the visit (`status: Arrived`); repeating it is a 200 no-op. An unknown status returns 400.
 
 | # | Action | Pass criteria (see the spec for the full AC list) |
 |---|---|---|
 | 1 Inbound, advised on vessel | Show the seeded container visit in MiniTOS admin → Container visits | Status `Preadvised` (read as "inbound, advised on vessel"), category Import, inbound carrier = the vessel visit, no CHE, no slot (AC1.1–1.2). *No UNS event exists yet (spec G1/Q2): say so.* |
-| 2 Vessel arrival (optional) | Not in the S1 script. Optionally show the seeded vessel visit state in admin; it's a check, not an action | Matches the seed. Don't use the transition API: it's broken (bug TCL-032). |
+| 2 Vessel arrival (optional) | Not in the S1 script. Optionally run the vessel-arrival command above, or just show the seeded vessel visit in admin | 200, and admin shows the vessel visit as `Arrived` (AC2.1). No UNS event and no `ata` yet (spec Q2; Q2 in #21). Don't demo an "invalid transition": which transitions are allowed is pending Yael (Q1 in #21); today any listed status is accepted. |
 | 3a Release | Release command above | One message on `…/tos/orders/{id}/released`. The OES order is `released` with 3 planned operations (AC3.1). |
-| 3b Dispatch | Dispatch command above, once | Two `leg_dispatched` (QC01, TTxx). `/equipment/` shows QC and TT dispatched. Calling it again now sends **no new command**: 400 with the Q18 message on #13, 200 with `dispatched: false` after #20 (AC3.2). |
+| 3b Dispatch | Dispatch command above, once | Two `leg_dispatched` (QC01, TTxx). `/equipment/` shows QC and TT dispatched. Calling it again now sends **no new command**: 200 with `dispatched: false` and a `code` (AC3.2). |
 | 3c Appear | (Godot, automatic) | `leg_started` (QC01), then `container_picked_up` with `source: VESSEL`. Admin shows "On Equipment", current CHE QC01 (AC3.4–3.5). |
 | 3d Transfer | (Godot) Wait for the seeded 10–30 s hold (**compressed time**, not a real crane cycle) plus the TT's drive time | `leg_started` (TT), then exactly one `container_transferred` QC01→TT, then `leg_completed` (QC01). Admin shows "On Equipment" with current CHE = TT (AC3.4–3.6). |
 | 4 (stretch, needs #17) | Dispatch command again, after 3d | `leg_dispatched`/`leg_started` RTG01, `container_transferred` TT→RTG01, `leg_completed` TT, `container_dropped` (slot), `leg_completed` RTG01. Admin shows `At Yard` in the planned slot; the order is `complete` in both systems (AC4.1–4.4). **No timeout in S1** while the TT waits at the block: if it stalls at `waiting_for_handoff`, stop the session and reset. |
@@ -82,13 +82,15 @@ General pass rules for the run:
 
 | Target | What it runs ✔ | Relevant to |
 |---|---|---|
-| `make test-minitos` | `manage.py test --settings=minitos_site.settings_test` | custody, D-015, release payload (after #13/#14) |
-| `make test-oes` | `manage.py test` | dispatch, hand-offs, D-014/016/017, contracts (after #13/#14) |
+| `make test-minitos` | `manage.py test --settings=minitos_site.settings_test` | custody, D-015, release payload, visit transition (#21) |
+| `make test-oes` | `manage.py test` | dispatch, hand-offs, D-014/016/017, contracts |
 | `make test-runner` | `unittest` for `apps/simulator-runner` | session claim/runner |
-| `make test-godot` | `test_terminal_integration.gd` + `test_che_rails.gd` only on `main`; **`test_headless_sim.gd` is only added by TCL-029 (#16)** | QC/TT state machine, seed replay |
+| `make test-godot` | `test_headless_sim.gd`, `test_terminal_integration.gd`, `test_che_rails.gd`, `test_cancel_regression.gd` (`requires-TCL-014a/test_acceptance_d012_d013.gd` is not wired in) | QC/TT state machine, seed replay |
 | `make test` | all of the above | — |
 
-For reference: on 27 Oct QA ran only the OES hand-off happy-path scenario from #13, outside Docker (SQLite, at the TCL-005 tip). The full suites weren't run for this checklist, and that run is no substitute for compose.
+For reference, QA ran these on `main` @ `83949ef` on 27 Oct, outside Docker (SQLite, Python 3.13, Godot 4.2.1 headless); that is no substitute for compose:
+- OES 125 tests OK and MiniTOS 165 tests OK, in normal mode and with `SCMS_CONTRACT_STRICT=1`; 0 skips. `makemigrations --check` finds no changes in either app.
+- Godot: `test_headless_sim.gd`, `test_terminal_integration.gd` and `test_che_rails.gd` pass. **`test_cancel_regression.gd` fails** (exit 1) on its precondition: the simulator rejects command A with `unknown_command_target` (the test addresses the CHE as `CHE_17`, while the merged simulator expects the CHE name). So `make test-godot` fails today. CI doesn't run that script, which is why CI is green.
 
 ## 5. Caveats to state in the review
 

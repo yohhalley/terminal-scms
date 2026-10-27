@@ -6,10 +6,20 @@ const SimIds = preload("res://source/headless/SimIds.gd")
 const SimClock = preload("res://source/headless/SimClock.gd")
 const SimRandom = preload("res://source/headless/SimRandom.gd")
 const QcDischarge = preload("res://source/headless/QcDischarge.gd")
+const RtgStack = preload("res://source/headless/RtgStack.gd")
 const COMMAND_EXECUTE_ORDER_LEG := "execute_order_leg"
 const COMMAND_QC_DISCHARGE := "qc_discharge"
 const COMMAND_CANCEL := "cancel"
-const SUPPORTED_COMMAND_TYPES := [COMMAND_EXECUTE_ORDER_LEG, COMMAND_QC_DISCHARGE, COMMAND_CANCEL]
+## Gives an active TT leg its next (giver) hand-off, e.g. H2 TT -> RTG after H1
+## QC -> TT has completed (Q18). Name and shape assumed; contract leaves it to TCL-028.
+const COMMAND_ASSIGN_HANDOFF := "assign_handoff"
+const SUPPORTED_COMMAND_TYPES := [
+	COMMAND_EXECUTE_ORDER_LEG, COMMAND_QC_DISCHARGE, COMMAND_CANCEL, COMMAND_ASSIGN_HANDOFF
+]
+## Equipment type codes that run the RTG stack machine for a hand-off leg.
+const RTG_EQUIPMENT_CODES := ["RTG", "ARTG"]
+## Dummy yard slots per block when OES sends no destination position (D-009).
+const RTG_DUMMY_SLOT_COUNT := 20
 ## Command/Result/Reason machine codes on `failed` (contract §3.2: consumers branch
 ## on the code; the human-readable text goes in Command/Result/Detail).
 const REASON_UNKNOWN_COMMAND_TARGET := "unknown_command_target"
@@ -29,12 +39,24 @@ const REASON_CHE_NOT_EXECUTABLE := "che_not_executable"
 const REASON_CANCEL_TARGET_MISSING := "cancel_target_missing"
 const REASON_NO_ACTIVE_COMMAND := "no_active_command"
 const REASON_CANCEL_TARGET_MISMATCH := "cancel_target_mismatch"
+## TCL-014b codes (RTG legs and assign_handoff); not yet in the contract code list.
+const REASON_HANDOFF_ROLE_INVALID := "handoff_role_invalid"
+const REASON_RTG_BLOCK_MISMATCH := "rtg_block_mismatch"
+const REASON_HANDOFF_TARGET_MISMATCH := "handoff_target_mismatch"
+const REASON_COUNTERPART_CHE_MISSING := "counterpart_che_missing"
+const REASON_HANDOFF_NOT_READY := "handoff_not_ready"
+const REASON_HANDOFF_ID_REUSED := "handoff_id_reused"
 const TT_DRIVING_TO_SOURCE := "driving_to_source"
 const TT_AT_SOURCE_WAITING := "at_source_waiting"
 const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
+const TT_AT_DESTINATION_WAITING := "at_destination_waiting"
 const DEFAULT_QC_WAIT_MIN_S := 10
 const DEFAULT_QC_WAIT_MAX_S := 30
 const DEFAULT_TT_NO_SHOW_TIMEOUT_S := 300
+## D17-1: the RTG-side no-show time-out (D-013 analogue) is a separate switch and
+## stays OFF until the PO decides O7. Off: an RTG in waiting_for_tt waits until
+## the TT arrives or OES cancels. On: it uses Sim/Timing/TtNoShowTimeoutS.
+const DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED := false
 ## Sim-time command TTL (seconds) applied when a DCMD carries no ExpiresAtMs.
 const DEFAULT_COMMAND_TTL_S := 600
 ## Sim time is checkpointed at least this often, so a restart loses at most this much.
@@ -84,7 +106,11 @@ var _qc_wait_s := {
 	"hold": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
 }
 ## D-013: whole seconds of sim time a QC waits for its TT before handoff_timed_out.
+var _rtg_wait_s := {
+	"hold": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
+}
 var _tt_no_show_timeout_s := DEFAULT_TT_NO_SHOW_TIMEOUT_S
+var _rtg_no_show_timeout_enabled := DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED
 var _command_ttl_s := DEFAULT_COMMAND_TTL_S
 
 
@@ -134,9 +160,24 @@ func _configure_simulation():
 			_env_any(["SIMULATOR_QC_%s_WAIT_MIN_S" % upper, "SIM_QC_%s_WAIT_MIN_S" % upper], default_min),
 			_env_any(["SIMULATOR_QC_%s_WAIT_MAX_S" % upper, "SIM_QC_%s_WAIT_MAX_S" % upper], default_max)
 		)
+	var rtg_min = _env_any(["SIMULATOR_RTG_WAIT_MIN_S", "SIM_RTG_WAIT_MIN_S"], str(DEFAULT_QC_WAIT_MIN_S))
+	var rtg_max = _env_any(["SIMULATOR_RTG_WAIT_MAX_S", "SIM_RTG_WAIT_MAX_S"], str(DEFAULT_QC_WAIT_MAX_S))
+	for step_name in _rtg_wait_s.keys():
+		var upper = step_name.to_upper()
+		configure_rtg_wait(
+			step_name,
+			_env_any(["SIMULATOR_RTG_%s_WAIT_MIN_S" % upper, "SIM_RTG_%s_WAIT_MIN_S" % upper], rtg_min),
+			_env_any(["SIMULATOR_RTG_%s_WAIT_MAX_S" % upper, "SIM_RTG_%s_WAIT_MAX_S" % upper], rtg_max)
+		)
 	configure_tt_no_show_timeout(
 		_env_any(
 			["SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "SIM_TT_NO_SHOW_TIMEOUT_S"], str(DEFAULT_TT_NO_SHOW_TIMEOUT_S)
+		)
+	)
+	configure_rtg_no_show_timeout_enabled(
+		_env_any(
+			["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", "SIM_RTG_NO_SHOW_TIMEOUT_ENABLED"],
+			str(DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED)
 		)
 	)
 
@@ -170,6 +211,25 @@ func is_command_expired(metrics: Dictionary) -> bool:
 	return command_deadline_sim_ms(metrics) <= _clock.now_ms
 
 
+## Sets Sim/Timing/RtgNoShowTimeoutEnabled from true/false, 1/0, yes/no or on/off
+## (case-insensitive). Anything else keeps the previous value. Returns true when applied.
+func configure_rtg_no_show_timeout_enabled(text: String) -> bool:
+	var value_text = text.strip_edges().to_lower()
+	if value_text in ["true", "1", "yes", "on"]:
+		_rtg_no_show_timeout_enabled = true
+		return true
+	if value_text in ["false", "0", "no", "off"]:
+		_rtg_no_show_timeout_enabled = false
+		return true
+	push_warning("Invalid RTG no-show switch %s; keeping %s" % [text, _rtg_no_show_timeout_enabled])
+	return false
+
+
+## RTG no-show time-out in ms for RtgStack.start (0 = never times out).
+func rtg_no_show_timeout_ms() -> int:
+	return _tt_no_show_timeout_s * 1000 if _rtg_no_show_timeout_enabled else 0
+
+
 ## Sets Sim/Timing/TtNoShowTimeoutS (whole seconds, > 0). Invalid values keep the
 ## previous value. Returns true when applied.
 func configure_tt_no_show_timeout(text: String) -> bool:
@@ -199,6 +259,24 @@ func configure_qc_wait(step_name: String, min_text: String, max_text: String) ->
 	return false
 
 
+## Sets the inclusive whole-second range of one RTG wait step (same rules as
+## configure_qc_wait). Returns true when the given range was applied.
+func configure_rtg_wait(step_name: String, min_text: String, max_text: String) -> bool:
+	if not _rtg_wait_s.has(step_name):
+		push_warning("Unknown RTG wait step %s" % step_name)
+		return false
+	var low_text = min_text.strip_edges()
+	var high_text = max_text.strip_edges()
+	if low_text.is_valid_int() and high_text.is_valid_int():
+		var low = int(low_text)
+		var high = int(high_text)
+		if low >= 0 and high >= low:
+			_rtg_wait_s[step_name] = [low, high]
+			return true
+	push_warning("Invalid RTG %s wait range %s..%s; keeping %s" % [step_name, min_text, max_text, _rtg_wait_s[step_name]])
+	return false
+
+
 func _process(delta: float):
 	if not _configuration_loaded:
 		return
@@ -215,7 +293,7 @@ func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		var che: Dictionary = _ches[che_id]
 		if _active_commands.has(che_id):
-			if not _is_qc_command(_active_commands[che_id]):
+			if not _is_crane_command(_active_commands[che_id]):
 				_step_command(int(che_id), che, _active_commands[che_id], step_s)
 		else:
 			_consume_idle_energy(che, step_s)
@@ -223,6 +301,9 @@ func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		if _active_commands.has(che_id) and _is_qc_command(_active_commands[che_id]):
 			_step_qc(int(che_id), _ches[che_id], _active_commands[che_id])
+	for che_id in _ches.keys():
+		if _active_commands.has(che_id) and _is_rtg_command(_active_commands[che_id]):
+			_step_rtg(int(che_id), _ches[che_id], _active_commands[che_id])
 	if _clock.now_ms - _last_checkpoint_sim_ms >= SIM_TIME_CHECKPOINT_MS:
 		_save_runtime_state()
 
@@ -290,7 +371,10 @@ func node_birth_metrics() -> Array:
 		{"name": "Sim/StartEpochMs", "type": "Int64", "value": _start_epoch_ms},
 		{"name": "Sim/Timing/QcHoldMinS", "type": "Int64", "value": int(_qc_wait_s.hold[0])},
 		{"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": int(_qc_wait_s.hold[1])},
+		{"name": "Sim/Timing/RtgHoldMinS", "type": "Int64", "value": int(_rtg_wait_s.hold[0])},
+		{"name": "Sim/Timing/RtgHoldMaxS", "type": "Int64", "value": int(_rtg_wait_s.hold[1])},
 		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
+		{"name": "Sim/Timing/RtgNoShowTimeoutEnabled", "type": "Boolean", "value": _rtg_no_show_timeout_enabled},
 		{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": _command_ttl_s},
 	]
 
@@ -403,6 +487,9 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	if command_type == COMMAND_CANCEL:
 		_handle_cancel(che_id, command_id, metrics)
 		return
+	if command_type == COMMAND_ASSIGN_HANDOFF:
+		_handle_assign_handoff(che_id, command_id, metrics)
+		return
 	if _active_commands.has(che_id):
 		# Contract §3.2: a hand-off assignment for a CHE that already holds one
 		# is handoff_already_active; any other second command is che_busy.
@@ -418,7 +505,15 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	if not container_number.is_empty() and not is_container_number_format(container_number):
 		_fail(che_id, command_id, REASON_CONTAINER_NUMBER_INVALID, "Container number format is invalid")
 		return
-	if command_type == COMMAND_EXECUTE_ORDER_LEG:
+	var rtg_leg = command_type == COMMAND_EXECUTE_ORDER_LEG and _is_rtg_che(_ches[che_id]) and not str(
+		metrics.get("Command/HandoffId", "")
+	).strip_edges().is_empty()
+	if rtg_leg:
+		var rtg_reason: Array = _rtg_leg_rejection(_ches[che_id], metrics)
+		if not rtg_reason.is_empty():
+			_fail(che_id, command_id, rtg_reason[0], rtg_reason[1])
+			return
+	elif command_type == COMMAND_EXECUTE_ORDER_LEG:
 		if not metrics.has("Command/DestinationLatitude") or not metrics.has("Command/DestinationLongitude"):
 			_fail(che_id, command_id, REASON_DESTINATION_MISSING, "Command has no destination coordinates")
 			return
@@ -430,7 +525,8 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 			_fail(che_id, command_id, REASON_CONTAINER_VISIT_ID_MISSING, "qc_discharge requires Command/ContainerVisitId")
 			return
 	var handoff_id = str(metrics.get("Command/HandoffId", "")).strip_edges()
-	if not handoff_id.is_empty() and _handoff_side_taken(handoff_id, command_type == COMMAND_QC_DISCHARGE):
+	var side = "giver" if command_type == COMMAND_QC_DISCHARGE else "receiver"
+	if not handoff_id.is_empty() and _handoff_side_taken(handoff_id, side):
 		_fail(che_id, command_id, REASON_HANDOFF_ALREADY_ACTIVE, "HandoffId is already held by another active command")
 		return
 	var che: Dictionary = _ches[che_id]
@@ -439,6 +535,10 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 		return
 	var command = _build_command(command_type, command_id, metrics, che)
 	command["container_number"] = container_number
+	if not handoff_id.is_empty():
+		command["handoff_side"] = side
+	if rtg_leg:
+		command["rtg_stack"] = true
 	che["working"] = true
 	che["is_dispatched"] = true
 	che["is_available"] = false
@@ -451,6 +551,13 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 		_active_commands[che_id] = command
 		_save_runtime_state()
 		_publish_events(che_id, command, events)
+	elif rtg_leg:
+		var rtg_key = _command_seed_key(command)
+		var rtg_hold_s = _draw_rtg_wait_s(che, rtg_key, 0, "hold")
+		var rtg_events = RtgStack.start(command, rtg_hold_s * 1000, _rtg_slot(che, command, rtg_key), rtg_no_show_timeout_ms())
+		_active_commands[che_id] = command
+		_save_runtime_state()
+		_publish_events(che_id, command, rtg_events)
 	else:
 		if not str(command.get("handoff_id", "")).is_empty() and command.has("source_latitude"):
 			command["tt_phase"] = TT_DRIVING_TO_SOURCE
@@ -490,6 +597,8 @@ func _handle_cancel(che_id: int, cancel_id: String, metrics: Dictionary):
 	var events: Array
 	if _is_qc_command(command):
 		events = QcDischarge.cancel(command)
+	elif _is_rtg_command(command):
+		events = RtgStack.cancel(command)
 	else:
 		command["load_container_visit_id"] = 0
 		command["wait_until_ms"] = 0
@@ -526,16 +635,23 @@ func _build_command(command_type: String, command_id: String, metrics: Dictionar
 		"move_kind": str(metrics.get("Command/MoveKind", "")),
 		"source_position_id": int(metrics.get("Command/SourcePositionId", 0)),
 		"destination_position_id": int(metrics.get("Command/DestinationPositionId", 0)),
+		"destination_position_code": str(metrics.get("Command/DestinationPositionCode", "")).strip_edges(),
 	}
 	if metrics.has("Command/SourceLatitude") and metrics.has("Command/SourceLongitude"):
 		command["source_latitude"] = float(metrics["Command/SourceLatitude"])
 		command["source_longitude"] = float(metrics["Command/SourceLongitude"])
-	# Hand-off lane: Command/TransferPositionId as sent by OES (S15-4). Only when
-	# OES sends none does the QC fall back to its destination (the TT lane).
-	var oes_transfer_id = int(metrics.get("Command/TransferPositionId", 0))
-	if oes_transfer_id > 0:
-		command["transfer_position_id"] = oes_transfer_id
+	var transfer_code = str(metrics.get("Command/TransferPositionCode", "")).strip_edges()
+	if not transfer_code.is_empty():
+		command["transfer_position_code"] = transfer_code
+	if int(metrics.get("Command/TransferPositionId", 0)) > 0:
+		command["transfer_position_id"] = int(metrics["Command/TransferPositionId"])
+	elif _is_rtg_che(che):
+		# Import: the RTG receives at its source, the block transfer lane.
+		var lane_id = int(command.source_inventory_position_id)
+		command["transfer_position_id"] = lane_id if lane_id > 0 else int(command.source_position_id)
 	elif command_type == COMMAND_QC_DISCHARGE:
+		# Only when OES sends none (S15-4): the QC falls back to its destination,
+		# the QC transfer point (TT lane) where the TT receives.
 		var transfer_id = int(command.destination_inventory_position_id)
 		command["transfer_position_id"] = transfer_id if transfer_id > 0 else int(command.destination_position_id)
 	return command
@@ -544,11 +660,156 @@ func _build_command(command_type: String, command_id: String, metrics: Dictionar
 ## One HandoffId per transfer: each side (QC giver, TT receiver) can be held by
 ## one active command only. A CHE holds one active command, so a TT also holds
 ## at most one handoff.
-func _handoff_side_taken(handoff_id: String, qc_side: bool) -> bool:
+func _handoff_side_taken(handoff_id: String, side: String) -> bool:
 	for other in _active_commands.values():
-		if str(other.get("handoff_id", "")) == handoff_id and _is_qc_command(other) == qc_side:
+		if str(other.get("handoff_id", "")) == handoff_id and _handoff_side(other) == side:
 			return true
 	return false
+
+
+## Which side of its current HandoffId a command holds: the QC gives, a TT
+## receives (H1) and then gives (H2), an RTG receives.
+func _handoff_side(command: Dictionary) -> String:
+	if command.has("handoff_side"):
+		return str(command.handoff_side)
+	return "giver" if _is_qc_command(command) else "receiver"
+
+
+func _is_rtg_command(command: Dictionary) -> bool:
+	return bool(command.get("rtg_stack", false))
+
+
+## QC and RTG commands run their own state machines and do not drive.
+func _is_crane_command(command: Dictionary) -> bool:
+	return _is_qc_command(command) or _is_rtg_command(command)
+
+
+func _is_rtg_che(che: Dictionary) -> bool:
+	return str(che.get("equipment_type_code", "")).to_upper() in RTG_EQUIPMENT_CODES
+
+
+## Block an RTG serves, when the bootstrap names it (D-011: one RTG per block).
+## The OES bootstrap does not send this today; MiniTOS has it as current_asset.
+func _rtg_block_code(che: Dictionary) -> String:
+	for key in ["block_code", "current_asset_name"]:
+		var code = str(che.get(key, "")).strip_edges()
+		if not code.is_empty():
+			return code
+	return ""
+
+
+## Block of a transfer lane code such as BLOCK01-TL ("" if unknown).
+static func lane_block_code(lane_code: String) -> String:
+	var code = lane_code.strip_edges()
+	if code.ends_with("-TL"):
+		return code.substr(0, code.length() - 3)
+	return ""
+
+
+## Returns [] when accepted, else [reason code, detail].
+func _rtg_leg_rejection(che: Dictionary, metrics: Dictionary) -> Array:
+	if int(metrics.get("Command/ContainerVisitId", 0)) <= 0:
+		return [REASON_CONTAINER_VISIT_ID_MISSING, "RTG hand-off leg requires Command/ContainerVisitId"]
+	var role = str(metrics.get("Command/HandoffRole", "receiver")).strip_edges()
+	if role != "receiver":
+		return [REASON_HANDOFF_ROLE_INVALID, "RTG hand-off leg must be the receiver (import)"]
+	var served = _rtg_block_code(che)
+	var lane_block = lane_block_code(str(metrics.get("Command/TransferPositionCode", "")))
+	if not served.is_empty() and not lane_block.is_empty() and served != lane_block:
+		return [REASON_RTG_BLOCK_MISMATCH, "RTG does not serve block %s" % lane_block]
+	return []
+
+
+func _draw_rtg_wait_s(che: Dictionary, command_key: String, wait_index: int, step_name: String) -> int:
+	var bounds: Array = _rtg_wait_s[step_name]
+	return _random.draw_wait_s(SimIds.seed_key(che), "rtg:" + command_key, wait_index, int(bounds[0]), int(bounds[1]))
+
+
+## Destination slot (O6, contract §4 steps 10/13): OES always sends the RTG
+## leg's destination PositionId / PositionCode (MiniTOS picks the slot), and
+## container_dropped echoes it. Only when both are absent: the deterministic
+## dummy slot BLOCKxx-DUMMY-nn drawn from the seed (D-009).
+func _rtg_slot(che: Dictionary, command: Dictionary, command_key: String) -> Dictionary:
+	var position_id = int(command.get("destination_inventory_position_id", 0))
+	if position_id <= 0:
+		position_id = int(command.get("destination_position_id", 0))
+	var position_code = str(command.get("destination_position_code", ""))
+	if position_id > 0 or not position_code.is_empty():
+		return {"position_id": max(position_id, 0), "position_code": position_code}
+	var block = lane_block_code(str(command.get("transfer_position_code", "")))
+	if block.is_empty():
+		block = _rtg_block_code(che)
+	if block.is_empty():
+		block = "BLOCK01"
+	var slot = _random.draw_wait_s(SimIds.seed_key(che), "slot:" + command_key, 0, 1, RTG_DUMMY_SLOT_COUNT)
+	return {"position_id": 0, "position_code": "%s-DUMMY-%02d" % [block, slot]}
+
+
+## OES gives an active TT leg its next hand-off (H2: TT giver, RTG receiver),
+## shaped as in BE TCL-003a `queue_assign_handoff_dcmd`: the base envelope with
+## AssignmentId = the TT leg's own assignment, plus Command/LegId (the giver
+## leg), ContainerVisitId, ContainerNumber, HandoffId, HandoffRole=giver,
+## CounterpartCheId (the RTG) and TransferPositionId. The target leg is the
+## TT's active leg with that AssignmentId (and LegId / ContainerVisitId when
+## both sides carry one). Allowed only once H1 (receiver) has completed, so a
+## TT never holds two active hand-offs (Q18 / T-006).
+## Success publishes nothing on the assign id (OES expects no ack there); the
+## TT's H2 handoff_completed (giver) is later reported on the assign id, and
+## completed on the leg id. Failures are reported on the assign id.
+func _handle_assign_handoff(che_id: int, assign_id: String, metrics: Dictionary):
+	var reason: Array = _assign_handoff_rejection(che_id, metrics)
+	if not reason.is_empty():
+		_fail(che_id, assign_id, reason[0], reason[1])
+		return
+	var command: Dictionary = _active_commands[che_id]
+	var done_ids: Array = command.get("completed_handoff_ids", [])
+	done_ids.append(str(command.get("handoff_id", "")))
+	command["completed_handoff_ids"] = done_ids
+	command["handoff_id"] = str(metrics["Command/HandoffId"]).strip_edges()
+	command["handoff_side"] = "giver"
+	command["counterpart_che_id"] = int(metrics["Command/CounterpartCheId"])
+	command["assign_command_id"] = assign_id
+	command["giver_transfer_position_id"] = int(metrics.get("Command/TransferPositionId", 0))
+	_active_commands[che_id] = command
+	# Silent outcome: a redelivered assign is deduplicated without a reply.
+	_command_outcomes[assign_id] = {"che_id": che_id, "event": "", "silent": true}
+	_save_runtime_state()
+	if str(command.get("tt_phase", "")) == TT_AT_DESTINATION_WAITING:
+		_publish_command_result(che_id, str(command.command_id), "waiting_for_handoff", 0, "", "", command)
+
+
+## Returns [] when accepted, else [reason code, detail].
+func _assign_handoff_rejection(che_id: int, metrics: Dictionary) -> Array:
+	if not _active_commands.has(che_id):
+		return [REASON_NO_ACTIVE_COMMAND, "No active command for hand-off assignment"]
+	var command: Dictionary = _active_commands[che_id]
+	if _is_crane_command(command):
+		return [REASON_HANDOFF_TARGET_MISMATCH, "Hand-off assignment is only for a TT leg"]
+	if str(metrics.get("Command/AssignmentId", "")) != str(command.get("assignment_id", "")):
+		return [REASON_HANDOFF_TARGET_MISMATCH, "Hand-off assignment does not match the active TT leg"]
+	var leg_id = int(metrics.get("Command/LegId", 0))
+	if leg_id > 0 and int(command.get("leg_id", 0)) > 0 and leg_id != int(command.leg_id):
+		return [REASON_HANDOFF_TARGET_MISMATCH, "Hand-off assignment LegId does not match the active TT leg"]
+	var visit_id = int(metrics.get("Command/ContainerVisitId", 0))
+	if visit_id > 0 and int(command.get("container_visit_id", 0)) > 0 and visit_id != int(command.container_visit_id):
+		return [REASON_HANDOFF_TARGET_MISMATCH, "Hand-off assignment ContainerVisitId does not match the TT leg"]
+	var handoff_id = str(metrics.get("Command/HandoffId", "")).strip_edges()
+	if handoff_id.is_empty():
+		return [REASON_HANDOFF_ID_MISSING, "assign_handoff requires Command/HandoffId"]
+	if int(metrics.get("Command/CounterpartCheId", 0)) <= 0:
+		return [REASON_COUNTERPART_CHE_MISSING, "assign_handoff requires Command/CounterpartCheId"]
+	if str(metrics.get("Command/HandoffRole", "")).strip_edges() != "giver":
+		return [REASON_HANDOFF_ROLE_INVALID, "Only a giver hand-off can be assigned to a TT leg (import)"]
+	var phase = str(command.get("tt_phase", ""))
+	if phase in [TT_DRIVING_TO_SOURCE, TT_AT_SOURCE_WAITING] or _handoff_side(command) == "giver":
+		return [REASON_HANDOFF_ALREADY_ACTIVE, "TT already holds an active hand-off"]
+	if phase not in [TT_DRIVING_TO_DESTINATION, TT_AT_DESTINATION_WAITING]:
+		return [REASON_HANDOFF_NOT_READY, "TT leg has no completed receiver hand-off"]
+	if handoff_id == str(command.get("handoff_id", "")) or handoff_id in command.get("completed_handoff_ids", []):
+		return [REASON_HANDOFF_ID_REUSED, "HandoffId was already used by this TT"]
+	if _handoff_side_taken(handoff_id, "giver"):
+		return [REASON_HANDOFF_ALREADY_ACTIVE, "HandoffId is already held by another active command"]
+	return []
 
 
 func _is_qc_command(command: Dictionary) -> bool:
@@ -641,6 +902,91 @@ func _complete_tt_handoff(tt_id: int, qc_id: int):
 	])
 
 
+func _step_rtg(che_id: int, che: Dictionary, command: Dictionary):
+	var ready_id = _ready_tt_for_rtg(che_id, command)
+	var events = RtgStack.step(command, _clock.now_ms, ready_id)
+	_active_commands[che_id] = command
+	if events.is_empty():
+		_publish_when_due(che)
+		return
+	var finished = RtgStack.is_finished(command)
+	if finished:
+		_mark_che_idle(che)
+		_ches[che_id] = che
+		_active_commands.erase(che_id)
+	_save_runtime_state()
+	# Same fixed step, giver first (as for QC -> TT): the TT gives, then the RTG receives.
+	if RtgStack.picked_in(events):
+		_complete_tt_giver(int(command.get("counterpart_che_id_actual", 0)), che_id)
+	_publish_events(che_id, command, events)
+	if finished:
+		print("HEADLESS completed rtg stack %s for CHE %s" % [command.command_id, che_id])
+	_publish_equipment_state(che, true)
+
+
+## A TT is ready to give to this RTG when its active leg holds the same HandoffId
+## as giver, it waits at its destination (the block lane) and, where either side
+## names a counterpart, the names match. Pairing is by HandoffId only (T-006).
+func _ready_tt_for_rtg(rtg_id: int, rtg_command: Dictionary) -> int:
+	var handoff_id = str(rtg_command.get("handoff_id", ""))
+	if handoff_id.is_empty():
+		return 0
+	var expected_id = int(rtg_command.get("counterpart_che_id", 0))
+	for other_key in _ches.keys():
+		var other_id = int(other_key)
+		if other_id == rtg_id or (expected_id > 0 and other_id != expected_id):
+			continue
+		if not _active_commands.has(other_id):
+			continue
+		var other: Dictionary = _active_commands[other_id]
+		if str(other.get("handoff_id", "")) != handoff_id or _handoff_side(other) != "giver":
+			continue
+		if str(other.get("tt_phase", "")) != TT_AT_DESTINATION_WAITING:
+			continue
+		var named_rtg = int(other.get("counterpart_che_id", 0))
+		if named_rtg > 0 and named_rtg != rtg_id:
+			continue
+		return other_id
+	return 0
+
+
+## TT side of H2: handoff_completed (giver) + completed, empty and idle. No
+## container_dropped: the contract rejects it for hand-off-role commands (Q8-R5).
+func _complete_tt_giver(tt_id: int, rtg_id: int):
+	if tt_id <= 0 or not _active_commands.has(tt_id):
+		return
+	var command: Dictionary = _active_commands[tt_id]
+	var che: Dictionary = _ches[tt_id]
+	command["tt_phase"] = ""
+	command["load_container_visit_id"] = 0
+	command["counterpart_che_id_actual"] = rtg_id
+	_mark_che_idle(che)
+	_ches[tt_id] = che
+	_active_commands.erase(tt_id)
+	_save_runtime_state()
+	var position_id = int(command.get("destination_inventory_position_id", 0))
+	if position_id <= 0:
+		position_id = int(command.get("destination_position_id", 0))
+	var handoff_position_id = int(command.get("giver_transfer_position_id", 0))
+	if handoff_position_id <= 0:
+		handoff_position_id = position_id
+	# BE interface: the giver's handoff_completed answers the assign_handoff
+	# command; completed closes the TT leg itself.
+	var handoff_command = command.duplicate()
+	var assign_id = str(command.get("assign_command_id", ""))
+	if not assign_id.is_empty():
+		handoff_command["command_id"] = assign_id
+	_publish_events(tt_id, handoff_command, [
+		{"event": "handoff_completed", "position_id": handoff_position_id, "counterpart_che_id": rtg_id,
+			"handoff_role": "giver", "work_state": "idle"},
+	])
+	_publish_events(tt_id, command, [
+		{"event": "completed", "position_id": position_id, "counterpart_che_id": rtg_id, "work_state": "idle"},
+	])
+	_publish_equipment_state(che, true)
+	print("HEADLESS completed TT leg %s for CHE %s (handed to %s)" % [command.command_id, tt_id, rtg_id])
+
+
 func _publish_events(che_id: int, command: Dictionary, events: Array):
 	for item in events:
 		var context = command.duplicate()
@@ -652,6 +998,8 @@ func _publish_events(che_id: int, command: Dictionary, events: Array):
 			context["handoff_role"] = str(item.handoff_role)
 		if item.has("source"):
 			context["source"] = str(item.source)
+		if item.has("position_code"):
+			context["position_code"] = str(item.position_code)
 		if str(item.event) == "handoff_completed":
 			# Contract §3.3: both sides report the same FromCheId/ToCheId/TransferPositionId.
 			var counterpart_id = int(item.get("counterpart_che_id", 0))
@@ -675,7 +1023,21 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 			_publish_command_result(che_id, str(command.command_id), "waiting_for_handoff", 0, "", "", command)
 			_publish_equipment_state(che, true)
 		return
-	if phase == TT_AT_SOURCE_WAITING:
+	if phase == TT_DRIVING_TO_DESTINATION:
+		# After H1 the TT carries the container to the block lane and waits there
+		# for the RTG (contract §4 steps 9-12); it no longer drops it itself.
+		if _drive_towards(
+			che_id, che, float(command.destination_latitude), float(command.destination_longitude), delta
+		):
+			command["tt_phase"] = TT_AT_DESTINATION_WAITING
+			_active_commands[che_id] = command
+			_save_runtime_state()
+			_publish_command_result(che_id, str(command.command_id), "arrived_at_destination", 0, "", "", command)
+			if _handoff_side(command) == "giver":
+				_publish_command_result(che_id, str(command.command_id), "waiting_for_handoff", 0, "", "", command)
+			_publish_equipment_state(che, true)
+		return
+	if phase == TT_AT_SOURCE_WAITING or phase == TT_AT_DESTINATION_WAITING:
 		che["speed_mps"] = 0.0
 		_consume_idle_energy(che, delta)
 		_ches[che_id] = che
@@ -851,6 +1213,10 @@ func _result_context_metrics(context: Dictionary) -> Array:
 		metrics.append({"name": "Command/Result/TransferPositionId", "type": "Int64", "value": int(context.result_transfer_position_id)})
 	if not str(context.get("source", "")).is_empty():
 		metrics.append({"name": "Command/Result/Source", "type": "String", "value": str(context.source)})
+	if not str(context.get("position_code", "")).is_empty():
+		metrics.append({"name": "Command/Result/PositionCode", "type": "String", "value": str(context.position_code)})
+	if not str(context.get("transfer_position_code", "")).is_empty():
+		metrics.append({"name": "Work/TransferPositionCode", "type": "String", "value": str(context.transfer_position_code)})
 	if not str(context.get("move_kind", "")).is_empty():
 		metrics.append({"name": "Command/Result/MoveKind", "type": "String", "value": str(context.move_kind)})
 	var work_state = str(context.get("work_state", context.get("tt_phase", "")))
@@ -938,6 +1304,8 @@ func _requeue_unacked_results():
 ## Sim/EventSeq: its journal entry goes back to pending.
 func _replay_command_result(command_id: String):
 	var outcome: Dictionary = _command_outcomes[command_id]
+	if bool(outcome.get("silent", false)):
+		return
 	if outcome.get("metrics") is Array:
 		var result_id = str(outcome.get("result_id", ""))
 		var entry = null

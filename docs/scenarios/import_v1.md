@@ -2,17 +2,17 @@
 
 - **Scenario:** import container visit, issue [#1](https://github.com/yohhalley/terminal-scms/issues/1). The export visit (#2) is out of scope here (D-002: import first).
 - **Owner:** QA (Moon Unit). **Reviewers:** SME (TCL-015) and Tech Lead.
-- **Status:** draft v2, 27 Oct 2026. v2 addresses the Tech Lead's and SME's reviews of PR #19. Steps 1–4 are complete. Steps 5–9 are an outline. The KG and historian columns stay `TBD (Yael decides Fri)` until Yael decides on Fri 30 Oct (D-004, TCL-013).
-- **Code base read** (branch tips **as read on 27 Oct 2026**; they will move): `main` @ `9c4b96d`, plus the open PRs this scenario depends on:
-  - #13 TCL-003a (OES hand-off dispatch), branch `TCL-003a-handoff-dispatch` @ `baf3adf`
-  - #14 TCL-005 (contract tests) @ `9785428`
-  - #15 TCL-014a (Godot QC→TT) @ `4dec5a1`
-  - #16 TCL-029 (Godot CI) @ `0bf7d42`
-  - #17 TCL-014b (Godot TT→RTG) @ `b3dded5`
-  - #18 TCL-004 (LAN IP placeholder) @ `0c1d561`
-  - #20 TCL-028 (dispatch-next API, based on #13) @ `5e36047`
+- **Status:** draft v2.1, 27 Oct 2026. v2 addresses the Tech Lead's and SME's reviews of PR #19. v2.1 (TCL-001a) rewrites step 2 for the fixed visit-transition API (TCL-032, #21) and updates the merge notes. Steps 1–4 are complete. Steps 5–9 are an outline. The KG and historian columns stay `TBD (Yael decides Fri)` until Yael decides on Fri 30 Oct (D-004, TCL-013).
+- **Code base read:** `main` @ `83949ef` (27 Oct 2026). These PRs are merged into `main`:
+  - #13 TCL-003a (OES hand-off dispatch)
+  - #14 TCL-005 (contract tests)
+  - #15 TCL-014a (Godot QC→TT)
+  - #16 TCL-029 (Godot CI)
+  - #18 TCL-004 (LAN IP placeholder)
+  - #20 TCL-028 (dispatch-next API)
+  - #21 TCL-032 (visit-transition fix)
 
-  A claim marked **[PR #n]** is true only on that branch, not on `main`.
+  Still open: #17 TCL-014b (Godot TT→RTG). A marker **[PR #n]** / **[#n]** names the PR that introduced a claim. For all PRs above it is now on `main`; a **[PR #17]** claim is true only on that branch.
 - **Decisions:** D-0xx and T-0xx refer to the team vault note `03 Decisions.md` (Obsidian). That vault is not in this repo.
 - **Evidence key:**
   - **[code]**: read in the file named.
@@ -60,7 +60,7 @@ Status of each step today: ✅ built and tested, 🟡 partly built or only on an
 | # | Issue #1 step | Trigger | UNS event(s) | MiniTOS end state | OES end state | UI | KG | Historian | Built | Tests |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Pre-advice (inbound, advised on vessel) | Seed (S1) or MiniTOS user creates the container visit | ❌ none today | `ContainerVisit.status=Preadvised` | none | admin / DRF API | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 MiniTOS only | ❌ |
-| 2 | Vessel arrival (not in the S1 demo; optional check of the seeded state) | Vessel visit → `Arrived` (API broken: TCL-032) | ❌ none today | `CarrierVisit.status=Arrived` | Sim session running, CHEs born | admin; OES `/simulations/`, `/equipment/` | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 transition API broken | ❌ (Sparkplug birth ✅) |
+| 2 | Vessel arrival (not in the S1 demo; optional check of the seeded state) | Vessel visit → `Arrived` (visit-transition API, `curl`) | ❌ none today | `CarrierVisit.status=Arrived` | Sim session running, CHEs born | admin; OES `/simulations/`, `/equipment/` | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 API works; no transition rules (Q1 in #21) | ❌ (Sparkplug birth ✅) |
 | 3 | Discharge QC→TT | Order released; OES `dispatch-next` (token) | `order.released`; `leg_dispatched`×2, `leg_started`, `container_picked_up`(VESSEL), `container_transferred` QC→TT, `leg_completed` | `OnEquipment`/QC01, then `OnEquipment`/TTxx | order `in_progress`, hand-off `transferred` | admin; OES `/equipment/`, `/api/orders/` | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 PR #13, #15 | 🟡 per service |
 | 4 | TT to yard, RTG stacks | 2nd `dispatch-next` (after H1, Q18) | `leg_dispatched`, `leg_started`, `container_transferred` TT→RTG, `leg_completed`, `container_dropped`, `leg_completed` | `AtYard` in slot; order `complete` | order `complete`, all CHEs free | admin | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 PR #13, #17 | 🟡 per service |
 | 5 | Yard dwell | time passes | TBD | `AtYard` unchanged | none | TBD | TBD (Yael decides Fri) | TBD (Yael decides Fri) | ❌ | ❌ |
@@ -99,13 +99,13 @@ Wording (SME review): for an import, terminals say the container is **inbound, a
 
 ### Step 2: Vessel arrival. The vessel arrives with the container
 
-**S1 scope:** not part of the S1 demo. The S1 script starts from the seeded reset and goes straight to release. In S1 this step is optional: show the seeded vessel visit state (a check, not an action). The broken transition API is bug **TCL-032**; the domain question is Q3a.
+**S1 scope:** not part of the S1 demo. The S1 script starts from the seeded reset and goes straight to release. In S1 this step is optional: show the seeded vessel visit state, or set it to `Arrived` with the `curl` below. The domain question is Q3a.
 
 **Preconditions:** step 1 passed. The vessel visit is in `Created` or `Announced`.
 
 | Aspect | Expected | Evidence |
 |---|---|---|
-| Trigger | Vessel visit status → `Arrived` (then `InOperation`, which in #4 should start dispatch; that's TCL-017, S4). API: `POST /minitos_core/api/visits/{visit_id}/transition-status/ {"status":"Arrived"}`. **This endpoint is broken on `main`:** `views.py` uses `VisitStateManager` and `VisitSerializer`, which are never defined or imported (pyflakes: `undefined name 'VisitStateManager'` at L1384/L1417, `'VisitSerializer'` at L1389). The call is outside the `try`, so it should return HTTP 500 [inferred, not run]. Workaround today: Django admin edit of `CarrierVisit.status`, which has no validation and no event. The admin panel is TCL-009 (S2). Bug: **TCL-032**. | `minitos_core/views.py::transition_visit_status`; TCL-032; Q3a |
+| Trigger | Vessel visit status → `Arrived` (then `InOperation`, which in #4 should start dispatch; that's TCL-017, S4). Any logged-in MiniTOS user (`IsAuthenticated`; HTTP Basic or session, e.g. the superuser from `make create-minitos-admin`). `<visit_id>` is the `CarrierVisit` id shown in admin → Carrier visits:<br>`curl -s -u <admin> -X POST -H 'Content-Type: application/json' -d '{"status":"Arrived"}' "http://localhost:${MINITOS_HTTP_PORT:-8000}/minitos_core/api/visits/<visit_id>/transition-status/"`<br>Responses (code on `main`):<br>- 200 `{success: true, message, visit}`, with `visit.status` = `Arrived`;<br>- 200 no-op if the visit already has that status (nothing is saved);<br>- 400 `{success: false, message, errors}` for a status that is not in `CarrierVisit.STATUS_CHOICES` (`Created`, `Announced`, `Arrived`, `InOperation`, `Complete`, `Departed`); the visit is unchanged;<br>- 400 if `status` is missing, 404 for an unknown id, 401/403 without login.<br>There is **no transition graph**: any listed status is accepted from any other (open question Q1 in #21). `ata` is not set (Q2 in #21). No UNS event is emitted (Q2 here). The admin panel is TCL-009 (S2). | `minitos_core/views.py::transition_visit_status`, `urls.py`; `test_visit_transition.py` (#21) |
 | Simulator start (S1 precondition for step 3) | The Godot session is started from the OES console `/simulations/` with `make run-simulator-runner` running. | `README.md` |
 | UNS/MQTT | **None today** for the visit status (same gap as step 1, Q2). Expected: a carrier-visit status event on `scms/v2/{ent}/{site}/tos/…`, schema TBD, with fields `carrier_visit_id`, `visit_type`, `status`, `ata`. | [code] |
 | Sparkplug | When the session starts:<br>- **STATE:** `spBv1.0/STATE/{host}` = ONLINE (retained).<br>- **NBIRTH:** carries `Session/Id`, `Site/Id`, `Configuration/Revision`, `Configuration/Checksum` and `bdSeq`, plus [PR #15] `Contract/Version`, `Sim/Seed`, `Sim/StartEpochMs`, `Sim/Timing/QcHoldMinS`/`QcHoldMaxS`/`TtNoShowTimeoutS`/`CommandTtlS`.<br>- **DBIRTH:** one per CHE (`QC01`, `TT01`, `TT02`, `RTG01`), each with `Identity/*`, `State/*`, `Position/*` and `Carrying/ContainerVisitId=0`. | `UNS_CONTRACT.md`; NOTES-TCL-014a |
@@ -116,16 +116,17 @@ Wording (SME review): for an import, terminals say the container is **inbound, a
 | Historian | TBD (Yael decides Fri) | D-004 |
 
 **Acceptance checks**
-- **AC2.1** The vessel visit's status is `Arrived`, set through a supported path (API or panel), not a DB edit (MVP DoD 2).
+- **AC2.1** The vessel visit's status is `Arrived`, set through a supported path (the transition API above, or the panel once TCL-009 exists), not a DB edit (MVP DoD 2).
 - **AC2.2** The container visit's status matches Q4's answer (`Preadvised` or `OnVessel`).
 - **AC2.3** OES shows one running session for the Site. NBIRTH revision/checksum = OES projection revision/checksum. All 4 CHEs are born, available and idle.
 - **AC2.4** *(blocked, Q2)* A visit-status event is on the UNS and validates.
-- **AC2.5** `POST …/transition-status/` returns 200 and a valid transition. An invalid one (e.g. `Departed` → `Arrived`) returns 400. Expected to fail until TCL-032 is fixed.
+- **AC2.5** `POST …/transition-status/` with `{"status":"Arrived"}` returns 200 and the updated visit (covered by #21).
+  - *Pending Yael (Q1 in #21, which transitions are allowed):* "an invalid transition (e.g. `Departed` → `Arrived`) returns 400". Today the code has no transition rules. It returns 400 only for an unknown status value, and it accepts `Departed` → `Arrived` with 200. QA doesn't decide which transitions are invalid.
 
 **Coverage:**
 - Sparkplug NBIRTH/DBIRTH: covered in OES `execution/tests.py` and `test_handoffs.py` [PR #13], and in Godot `test_headless_sim.gd::_test_node_birth_metrics` [PR #15].
-- Visit status transitions: no tests (`apps/minitos/TEST_COVERAGE_AUDIT.md` lists "visit status-transition endpoints" as uncovered and the state-manager symbols as a residual risk).
-- Missing: AC2.1, AC2.2, AC2.4, AC2.5.
+- Visit status transitions: MiniTOS `minitos_core/test_visit_transition.py` (#21): `Arrived` → 200 and saved, same status → 200 no-op, unknown status → 400, missing status/unknown id/anonymous → 400/404/401-403.
+- Missing: AC2.2, AC2.4, the "invalid transition" part of AC2.5 (pending Q1 in #21), and AC2.1 run against a live stack.
 
 ### Step 3: Discharge. The TT is sent to the QC, and the QC discharges the container onto the TT
 
@@ -150,7 +151,7 @@ D-005 and D-012 set the flow. The TT drives to the quay. The container *appears*
 
 | Aspect | Expected | Evidence |
 |---|---|---|
-| Trigger | OES API (S1 is manual; automatic dispatch is TCL-017, S4). Every `/api/` call needs the `X-OES-Token` header: the DRF default permission is `HasOESServiceToken`, and compose sets `OES_API_TOKEN` (from `.env`, else the compose default). Without it the call returns 403. Load the token from `.env` without writing it down: `set -a; . ./.env; set +a`.<br>1. Find the **OES** order id (the `id` field; the MiniTOS order id is `tos_order_id`, a different number):<br>`curl -s -H "X-OES-Token: $OES_API_TOKEN" "http://localhost:${OES_HTTP_PORT:-8010}/api/orders/?status=released"`<br>2. Dispatch:<br>`curl -s -X POST -H "X-OES-Token: $OES_API_TOKEN" -H 'Content-Type: application/json' -d '{}' "http://localhost:${OES_HTTP_PORT:-8010}/api/orders/<oes_id>/dispatch-next/"` → HTTP 201 (or use the TCL-006 step command if it wraps this).<br>A second call before H1 transfers sends **no new command**: HTTP 400 with the Q18 message on #13; HTTP 200 with `dispatched: false`, `code` and `detail` after #20 (TCL-028). | `execution/permissions.py::HasOESServiceToken`; `terminal_oes/settings.py` `REST_FRAMEWORK`; `compose.yaml` `OES_API_TOKEN`; `execution/views.py::ExecutionOrderViewSet` (`get_queryset` `status` filter, `dispatch_next`); `execution/models.py::ExecutionOrder.tos_order_id`; `dispatch.py::dispatch_next_operation` [PR #13]; TCL-028 `views.py::dispatch_next` [PR #20]; `test_qc_and_tt_are_dispatched_together_with_one_handoff_id` |
+| Trigger | OES API (S1 is manual; automatic dispatch is TCL-017, S4). Every `/api/` call needs the `X-OES-Token` header: the DRF default permission is `HasOESServiceToken`, and compose sets `OES_API_TOKEN` (from `.env`, else the compose default). Without it the call returns 403. Load the token from `.env` without writing it down: `set -a; . ./.env; set +a`.<br>1. Find the **OES** order id (the `id` field; the MiniTOS order id is `tos_order_id`, a different number):<br>`curl -s -H "X-OES-Token: $OES_API_TOKEN" "http://localhost:${OES_HTTP_PORT:-8010}/api/orders/?status=released"`<br>2. Dispatch:<br>`curl -s -X POST -H "X-OES-Token: $OES_API_TOKEN" -H 'Content-Type: application/json' -d '{}' "http://localhost:${OES_HTTP_PORT:-8010}/api/orders/<oes_id>/dispatch-next/"` → HTTP 201 (or use the TCL-006 step command if it wraps this).<br>A second call before H1 transfers sends **no new command**: HTTP 200 with `dispatched: false`, `code` and `detail` (TCL-028). It returns 409 `simulation_not_running` if the session is stopped, 409 for other refusals and 400 for a bad body or `equipment_id`. | `execution/permissions.py::HasOESServiceToken`; `terminal_oes/settings.py` `REST_FRAMEWORK`; `compose.yaml` `OES_API_TOKEN`; `execution/views.py::ExecutionOrderViewSet` (`get_queryset` `status` filter, `dispatch_next`); `execution/models.py::ExecutionOrder.tos_order_id`; `dispatch.py::dispatch_next_operation` [PR #13]; TCL-028 `views.py::dispatch_next` [PR #20]; `test_qc_and_tt_are_dispatched_together_with_one_handoff_id` |
 | TT choice | D-014: the longest idle on `Event/TimeMs`, ties broken by a PRNG seeded with `Sim/Seed:OrderId`. With no seed and a tie, it's an error. | `dispatch.py::select_equipment` [PR #13]; `test_d014_idle_longest_on_event_time`, `test_tie_break_is_seeded_from_sim_seed_and_order_id` |
 | Sparkplug | **DCMD** `spBv1.0/{group}/DCMD/{node}/QC01`:<br>- `Command/Type=qc_discharge`, `HandoffRole=giver`<br>- `HandoffId=H1`, `CounterpartCheId=<TT>`, `TransferPositionId`<br>- `ContainerVisitId`, `ContainerNumber`<br>- `ExpiresAtMs` (sim time, + `CommandTtlS`, default 600)<br>- plus the base envelope (`Id`, `AssignmentId`, `SessionId`, `SiteId`, `ConfigurationRevision`, `CheId`, `OrderId`, `LegId`)<br><br>**DCMD** `…/TTxx`:<br>- `Command/Type=execute_order_leg`, `HandoffRole=receiver`<br>- the same `HandoffId`, `CounterpartCheId=<QC>` | `UNS_CONTRACT.md` § Hand-offs [PR #13] |
 | UNS | `…/oes/orders/{id}/execution` (`scms.execution.event.v1`): `leg_dispatched` (leg 1, `che_name` QC01), then `leg_dispatched` (leg 2, TT) | [run] |
@@ -193,7 +194,7 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
 
 **Acceptance checks**
 - **AC3.1** The released payload validates (schema TBD for `order.released`; see gap G4). `container_number` = the visit pk and `container_unit_number` = the ISO number.
-- **AC3.2** One `dispatch-next` call produces exactly 2 DCMDs: QC `qc_discharge` (giver) and TT `execute_order_leg` (receiver), with the same `HandoffId`, crossed `CounterpartCheId`, and a sim-time `ExpiresAtMs`. The RTG op stays `planned`. A second call before H1 transfers sends **no new DCMD**, and the response says why (400 with the Q18 message on #13; 200 `dispatched:false` with `code`/`detail` after #20).
+- **AC3.2** One `dispatch-next` call produces exactly 2 DCMDs: QC `qc_discharge` (giver) and TT `execute_order_leg` (receiver), with the same `HandoffId`, crossed `CounterpartCheId`, and a sim-time `ExpiresAtMs`. The RTG op stays `planned`. A second call before H1 transfers sends **no new DCMD**, and the response says why (200 `dispatched:false` with `code`/`detail`, TCL-028).
 - **AC3.3** The TT chosen is the one idle longest. On a tie, the same seed gives the same TT across reruns (D-014, D-016).
 - **AC3.4** Ordered UNS sequence for the order:
   1. `leg_dispatched`(1)
@@ -208,7 +209,7 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
 - **AC3.5** After (4), MiniTOS shows `OnEquipment` with `current_che` = QC01 and no slot. After (6), it shows `OnEquipment` with `current_che` = TT, with exactly one location at all times.
 - **AC3.6** Sim time from appear to deposit (compressed time) is a whole number in [10, 30] if the TT was waiting, else the deposit happens at TT ready (D-012). Same seed, same hold sequence (D-016).
 - **AC3.7** No `CommandResultReceipt` is `rejected`, and no MiniTOS `IntegrationInbox` row is `failed`.
-- **AC3.8** No-show (fields checked on #13):
+- **AC3.8** No-show (fields checked in the #13 code, now on `main`):
   - **AC3.8a** OES `Handoff`: `status='exception'`, `exception_reason='SIMULATOR_FAILURE'`, `exception_detail='no TT within <N> s'`.
   - **AC3.8b** OES `ExecutionOrder`: `status='complete'`, `failure_reason='SIMULATOR_FAILURE'`. Open `ExecutionOperation`s and `DispatchAssignment`s are `cancelled` with `failure_reason='SIMULATOR_FAILURE'`, and cancel DCMDs are sent.
   - **AC3.8c** MiniTOS `ContainerVisit`: `status='AtYard'` in exactly one `BLOCK01` slot, `current_che` NULL, `exception_reason='SIMULATOR_FAILURE'`, `exception_detail` = the event's `detail`.
@@ -222,7 +223,7 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
   - MiniTOS `test_handoff_execution.py` (AC3.5, 3.8) [PR #13]
   - contract tests `test_contract_execution_events.py` / `test_contract_handoff_events.py` in both services (AC3.4 shape) [PR #14]
   - Godot `test_headless_sim.gd` (`_test_qc_state_machine_*`, `_test_sim_qc_tt_*_end_to_end`, `_test_sim_replay_same_seed`; AC3.6 per service) [PR #15]
-  - D-012/D-013 acceptance in `tests/requires-TCL-014a/test_acceptance_d012_d013.gd` [PR #14], which isn't wired into `make test-godot`.
+  - D-012/D-013 acceptance in `tests/requires-TCL-014a/test_acceptance_d012_d013.gd` [PR #14], which still isn't wired into `make test-godot` on `main`.
 - **Missing:**
   - (a) A cross-service run (compose: MiniTOS + OES + HiveMQ + Godot) asserting AC3.4/3.5 on the real broker. That's TCL-007, S2.
   - (b) The released payload of a real 3-leg discharge order built by MiniTOS. The tests build the legs by hand.
@@ -295,7 +296,7 @@ These issue-level requirements apply after step 9:
 | Check | Exists (branch) | Missing / owner |
 |---|---|---|
 | AC1.* pre-advice | — | MiniTOS API test for bulk create + an event contract test (after Q2) |
-| AC2.1/2.5 visit transition | — | TCL-032 (the `VisitStateManager` NameError); API tests; panel (TCL-009) |
+| AC2.1/2.5 visit transition | MiniTOS `test_visit_transition.py` [#21] | Transition rules (Q1 in #21); live-stack run; panel (TCL-009) |
 | AC2.3 session birth | OES `tests.py`, `test_handoffs.py` [#13]; Godot `_test_node_birth_metrics` [#15] | Cross-service (TCL-007) |
 | AC3.1 released payload | `test_released_payload_carries_*` [#13] | `order.released.v1` schema + goldens; a real 3-leg discharge order (TCL-006/TCL-010) |
 | AC3.2–3.4, 3.7–3.9 | OES `test_handoffs.py` [#13]; contract tests [#14] | Broker-level run |
@@ -311,7 +312,7 @@ These issue-level requirements apply after step 9:
 
 **Gaps found while writing this spec** (not fixed here; for the Tech Lead to assign):
 - **G1:** MiniTOS emits no UNS event for container-visit or carrier-visit status (steps 1, 2, 9).
-- **G2:** `transition_visit_status` / `transition_container_status` reference the undefined `VisitStateManager` / `VisitSerializer` (pyflakes on `main` @ `9c4b96d`). A request is expected to return 500 [inferred]. Tracked as **TCL-032**.
+- **G2:** *(resolved by TCL-032, #21)* the transition views referenced undefined names and returned 500. On `main` they validate the status against `STATUS_CHOICES` only; transition rules and `ata`/`atd` are open questions Q1/Q2 in #21.
 - **G3:** Nothing sets `ContainerVisit.status='OnVessel'` or `CarrierVisit.ata`/`atd`.
 - **G4:** There's no JSON Schema or golden for `scms.order.released.v1` (TCL-005 covers only `scms.execution.event.v1`).
 - **G5:** `ContainerUnit.is_in_terminal` turns True only at the yard drop, not when the container appears on the QC.
@@ -319,7 +320,7 @@ These issue-level requirements apply after step 9:
 
 **Follow-ups from the SME review** (not spec changes):
 - **F1 (S2):** rename the released-payload field `container_number` (it holds the visit pk) to `container_visit_id`, and use `container_number` for the ISO number. The SME has logged it for S2.
-- **F2:** the test fixtures and goldens on #13/#14 use `MSCU1234565`, whose ISO 6346 check digit is wrong; the valid number is `MSCU1234566`. `ContainerUnit` doesn't validate the check digit today.
+- **F2:** the test fixtures and goldens from #13/#14 (now on `main`) use `MSCU1234565`, whose ISO 6346 check digit is wrong; the valid number is `MSCU1234566`. `ContainerUnit` doesn't validate the check digit today.
 
 ## 6. Open questions for Yael
 
@@ -330,7 +331,7 @@ These go through the Tech Lead. QA doesn't decide them. Each has the SME's recom
 | **Q1** Seed vs live step 1 | **Answered for S1** by the sprint plan (TCL-006 seeds the advised container). Open only for the 1 Dec MVP demo. | For the MVP demo, is step 1 a seeded check or a live "discharge list received" action? | Seed it, and present it as "discharge list received" with a visible timestamp. A live load action can come later. |
 | **Q2** UNS events for steps 1–2 (and 9) | **TL/BE** (architecture), then Yael for the sprint. Issue #1 already requires every step to pass through the UNS. | (a) In which sprint do the visit-status events land (TCL-003b)? (b) What granularity: per-entity status-changed or per business step (TL/BE call)? (c) For Yael: may the S1 demo show steps 1–2 without an event? | Per-entity status-changed events (`container_visit`, `carrier_visit`) carrying industry milestone names; see Q14. |
 | **Q3a** What counts as "vessel arrival" (domain) | Open. SME first, then Yael. | Is "vessel arrival" `Arrived` (ATA) or `InOperation` (berthed, operations started)? | Show both: `Arrived` (ATA), then `InOperation` (ATB/operations start). See Q13. |
-| **Q3b** Transition API broken | **Not a question:** bug **TCL-032**. | — | Fix before AC2.1 can pass through a supported path. |
+| **Q3b** Which visit transitions are allowed | Open: asked as **Q1 in #21** (TCL-032). | Today any status in `STATUS_CHOICES` is accepted from any other. | Decides the "invalid transition → 400" part of AC2.5. |
 | **Q4** Container status on the vessel | Open (SME reviewed). | When the vessel arrives, should import containers move `Preadvised` → `OnVessel`? | No transition at arrival. Use one pre-discharge status meaning "inbound, advised on vessel" from step 1 (rename the label or create visits as `OnVessel`), and align the TCL-003a fixture with it. |
 | **Q5** Discharge order shape | **Answered** by T-006 and contract rev 9.3 (TL statement Yael can object to): one order with 3 legs QC→TT→RTG. Creator: TCL-006 step command in S1, TCL-010 in S2. | — | Agrees: one order with 3 legs; in S2 generate it from a "QC01 discharge work queue". |
 | **Q6** When is it "in terminal" | Open (SME reviewed). | Is the container "in the terminal" when it appears on the QC, at the QC→TT transfer, or only in the yard (today: yard drop, G5)? | At the QC→TT transfer (discharge confirmation). Keep `OnEquipment`/TT for location. See Q15. |
@@ -352,5 +353,5 @@ These go through the Tech Lead. QA doesn't decide them. Each has the SME's recom
 - The [run] event order comes from TCL-003a's own OES test scenario (`run_happy_path`), executed at the TCL-005 tip `9785428` on SQLite.
 - The Godot behaviour comes from reading NOTES-TCL-014a and NOTES-TCL-014b and the test names. QA last ran the Godot tests at an earlier TCL-014a commit, not at `4dec5a1`.
 - The UI descriptions come from the templates and URL confs; no browser was used.
-- G2 (HTTP 500) is inferred from static analysis.
-- v2 (review fixes): the `curl` commands, the `X-OES-Token` header, the `?status=released` filter, the 400/200 second-call responses, the release permission and the AC3.8 field names were checked by reading the code on the branches above. None of the commands was executed against a running stack.
+- Step 2 (v2.1): the path, auth, body and responses were read in `views.py`, `urls.py` and `test_visit_transition.py` on `main` @ `83949ef`; the `curl` was not executed against a running stack.
+- v2 (review fixes): the `curl` commands, the `X-OES-Token` header, the `?status=released` filter, the second-call responses, the release permission and the AC3.8 field names were checked by reading the code (re-read on `main` @ `83949ef` for v2.1). None of the commands was executed against a running stack.

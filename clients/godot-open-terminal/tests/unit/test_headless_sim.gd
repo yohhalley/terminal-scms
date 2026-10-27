@@ -2,7 +2,8 @@ extends SceneTree
 
 ## TCL-014a: seed determinism, fixed-step sim clock, QC discharge state machine
 ## (incl. late TT), HandoffId pairing, command type routing, result outbox and
-## MQTT packet-id wrap. Runs without a broker or OES.
+## MQTT packet-id wrap. TCL-014b: TT -> RTG at BLOCK01-TL, RTG stack to a dummy
+## slot (full QC -> TT -> RTG chain). Runs without a broker or OES.
 ##
 ##   godot --headless --path . --script tests/unit/test_headless_sim.gd
 
@@ -11,6 +12,7 @@ const SimClock = preload("res://source/headless/SimClock.gd")
 const SimRandom = preload("res://source/headless/SimRandom.gd")
 const SimIds = preload("res://source/headless/SimIds.gd")
 const QcDischarge = preload("res://source/headless/QcDischarge.gd")
+const RtgStack = preload("res://source/headless/RtgStack.gd")
 const MQTTClient = preload("res://addons/mqtt/mqtt.gd")
 
 const SESSION_ID := "11111111-1111-4111-8111-111111111111"
@@ -20,6 +22,11 @@ const TT_ID := 2
 const QC_LAT := 41.35
 const QC_LON := 2.17
 const HANDOFF_ID := "55555555-5555-4555-8555-555555555555"
+const RTG_ID := 3
+## Block transfer lane BLOCK01-TL = the TT leg's destination.
+const BLOCK_LAT := QC_LAT + 0.001
+const HANDOFF_ID_2 := "66666666-6666-4666-8666-666666666666"
+const HANDOFF_ID_WRONG := "77777777-7777-4777-8777-777777777777"
 ## Sim-time deadline (Sim/TimeMs units) far beyond every test run.
 const COMMAND_EXPIRES_AT_SIM_MS := 86400000
 
@@ -85,6 +92,16 @@ func _initialize():
 	_test_failure_reason_codes()
 	_test_device_id_mapping()
 	_test_mqtt_packet_id_wraps()
+	_test_rtg_state_machine()
+	_test_chain_happy_path_d016()
+	_test_rtg_commanded_slot()
+	_test_chain_late_tt_at_rtg()
+	_test_chain_rtg_cancel()
+	_test_chain_determinism()
+	_test_chain_wrong_handoff_id(false)
+	_test_chain_wrong_handoff_id(true)
+	_test_rtg_no_show_setting()
+	_test_rtg_rules_and_config()
 	_cleanup_state_file()
 	if not _failed:
 		print("Headless simulation checks passed")
@@ -353,7 +370,8 @@ func _test_sim_qc_tt_late_end_to_end():
 	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
 	_assert(simulator._active_commands.size() == 2, "QC and TT commands must both be accepted")
 	_run_steps(simulator, 3000)
-	_assert(simulator._active_commands.is_empty(), "QC and TT must both finish")
+	_assert(simulator._active_commands.keys() == [TT_ID], "QC finishes; the TT keeps its leg (%s)" % [simulator._active_commands.keys()])
+	_assert(_tt_phase(simulator) == "at_destination_waiting", "TCL-014b: the loaded TT waits at the block lane for the RTG")
 	var results = _results(simulator)
 	var qc_events = _events_of(results, "QC01")
 	_assert(qc_events == [
@@ -363,7 +381,7 @@ func _test_sim_qc_tt_late_end_to_end():
 	var tt_events = _events_of(results, "TT01")
 	_assert(tt_events == [
 		"acknowledged", "started", "arrived_at_source", "waiting_for_handoff",
-		"handoff_completed", "container_dropped", "completed",
+		"handoff_completed", "arrived_at_destination",
 	], "Late TT: TT event order: %s" % [tt_events])
 	var picked = _find(results, "QC01", "container_picked_up")
 	var waiting = _find(results, "QC01", "waiting_for_handoff")
@@ -414,7 +432,7 @@ func _test_sim_qc_tt_early_end_to_end():
 	var dropped = _find(results, "QC01", "handoff_completed")
 	var hold_s = SimRandom.new(7).draw_wait_s("QC01", "leg:4101", 0, 10, 30)
 	_assert(int(dropped["Sim/TimeMs"]) == int(picked["Sim/TimeMs"]) + hold_s * 1000, "Early TT: deposit at hold-wait end")
-	_assert(simulator._active_commands.is_empty(), "Early TT: both commands finish")
+	_assert(not simulator._active_commands.has(QC_ID), "Early TT: the QC command finishes")
 	_free_simulator(simulator)
 
 
@@ -959,6 +977,378 @@ func _test_mqtt_packet_id_wraps():
 			_assert(false, "Packet id out of range: %s" % value)
 			break
 	client.free()
+
+
+# --- TCL-014b: TT -> RTG at the block ---------------------------------------------
+
+func _rtg_command() -> Dictionary:
+	return {
+		"command_id": "rtg", "handoff_id": HANDOFF_ID_2, "container_visit_id": 101, "transfer_position_id": 900,
+	}
+
+
+func _test_rtg_state_machine():
+	var slot = {"position_id": 0, "position_code": "BLOCK01-DUMMY-03"}
+	# TT ready at once: gantry_to_bay -> pick -> holding -> depositing_to_stack -> idle.
+	var command = _rtg_command()
+	_assert(_names(RtgStack.start(command, 12000, slot)) == ["acknowledged", "started"], "RTG start publishes ack + started")
+	var picked = RtgStack.step(command, 1000, TT_ID)
+	_assert(_names(picked) == ["handoff_completed"] and RtgStack.picked_in(picked), "RTG picks from a ready TT at once")
+	_assert(str(picked[0].handoff_role) == "receiver" and str(picked[0].work_state) == "picking_from_tt", "RTG pick is the receiver side")
+	_assert(str(command.work_state) == "holding" and int(command.wait_until_ms) == 13000, "RTG holds for the seeded wait after the pick")
+	_assert(RtgStack.step(command, 12999, 0).is_empty(), "No drop before the hold ends")
+	var dropped = RtgStack.step(command, 13000, 0)
+	_assert(_names(dropped) == ["container_dropped", "completed"], "RTG drops into the slot, then completes")
+	_assert(str(dropped[0].position_code) == "BLOCK01-DUMMY-03" and RtgStack.is_finished(command), "Drop names the dummy slot")
+	_assert(str(dropped[0].work_state) == RtgStack.DEPOSITING_TO_STACK and str(dropped[1].work_state) == RtgStack.IDLE, "Drop is depositing_to_stack, completed is idle")
+	_assert(str(command.work_state) == RtgStack.IDLE, "RTG returns to idle after the deposit")
+	_assert(int(command.load_container_visit_id) == 0, "RTG is empty when done")
+	# TT late: waiting_for_tt, then the pick.
+	command = _rtg_command()
+	RtgStack.start(command, 10000, slot)
+	_assert(_names(RtgStack.step(command, 0, 0)) == ["waiting_for_handoff"], "RTG waits for a missing TT")
+	_assert(str(command.work_state) == "waiting_for_tt", "RTG Work/State waiting_for_tt")
+	_assert(_names(RtgStack.step(command, 50000, TT_ID)) == ["handoff_completed"], "Late TT: pick when it is ready")
+	# No-show: one handoff_timed_out, the late TT gets nothing, cancel clears.
+	command = _rtg_command()
+	RtgStack.start(command, 10000, slot, 300000)
+	RtgStack.step(command, 0, 0)
+	_assert(RtgStack.step(command, 299999, 0).is_empty(), "No time-out before 300 s")
+	_assert(_names(RtgStack.step(command, 300000, 0)) == ["handoff_timed_out"], "RTG times out after 300 s")
+	_assert(RtgStack.step(command, 300100, TT_ID).is_empty(), "A TT after the time-out gets no transfer")
+	_assert(_names(RtgStack.cancel(command)) == ["cancelled"] and str(command.work_state) == "idle", "Cancel clears the RTG")
+
+
+func _new_chain_simulator(run_seed: int, tt_lat: float) -> HeadlessSimulator:
+	var simulator = _new_simulator(run_seed, tt_lat)
+	var rtg = _che(RTG_ID, "RTG01", BLOCK_LAT, QC_LON)
+	rtg["equipment_type_code"] = "RTG"
+	simulator._ches[RTG_ID] = rtg
+	return simulator
+
+
+func _rtg_metrics(handoff_id := HANDOFF_ID_2) -> Dictionary:
+	return {
+		"Command/Type": "execute_order_leg", "Command/OrderId": 41, "Command/LegId": 4103,
+		"Command/ContainerVisitId": 101, "Command/ContainerNumber": "MSCU1234565",
+		"Command/HandoffId": handoff_id, "Command/HandoffRole": "receiver", "Command/CounterpartCheId": TT_ID,
+		"Command/TransferPositionCode": "BLOCK01-TL", "Command/SourcePositionId": 900,
+		"Command/DestinationLatitude": BLOCK_LAT, "Command/DestinationLongitude": QC_LON,
+		"Command/MoveKind": "discharge",
+	}
+
+
+## BE TCL-003a `queue_assign_handoff_dcmd` shape: base envelope (same
+## AssignmentId as the TT leg) + LegId of the giver leg, visit, number,
+## HandoffId, HandoffRole=giver, CounterpartCheId and TransferPositionId.
+func _assign_metrics(handoff_id := HANDOFF_ID_2) -> Dictionary:
+	return {
+		"Command/Type": "assign_handoff", "Command/OrderId": 41, "Command/LegId": 4102,
+		"Command/ContainerVisitId": 101, "Command/ContainerNumber": "MSCU1234565",
+		"Command/HandoffId": handoff_id, "Command/HandoffRole": "giver",
+		"Command/CounterpartCheId": RTG_ID, "Command/TransferPositionId": 900,
+	}
+
+
+func _tt_phase(simulator) -> String:
+	return str(simulator._active_commands.get(TT_ID, {}).get("tt_phase", ""))
+
+
+func _run_until(simulator, condition: Callable, max_steps: int) -> bool:
+	for _i in range(max_steps):
+		if condition.call():
+			return true
+		simulator._clock.step()
+		simulator._simulation_step(simulator._clock.step_seconds())
+	return condition.call()
+
+
+## "DEVICE event Work/State" for every result, in publish order (D-016).
+func _sequence(results: Array) -> Array:
+	var out: Array = []
+	for item in results:
+		out.append("%s %s %s" % [item.device, item.m["Command/Result/Event"], item.m.get("Work/State", "-")])
+	return out
+
+
+## Drives the chain: QC + TT (H1), H2 to the TT once H1 is done, RTG command
+## once the TT waits at BLOCK01-TL (or at once when `rtg_early`), run to the end.
+func _run_chain(simulator, rtg_early: bool, rtg_extra := {}) -> Dictionary:
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000), "H1 completes")
+	var assign = _command(TT_ID, _assign_metrics())
+	_send(simulator, TT_ID, assign)
+	if not rtg_early:
+		_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 3000), "TT reaches BLOCK01-TL")
+	var rtg = _rtg_metrics()
+	for key in rtg_extra:
+		rtg[key] = rtg_extra[key]
+	_send(simulator, RTG_ID, _command(RTG_ID, rtg))
+	_run_until(simulator, func(): return simulator._active_commands.is_empty(), 3000)
+	return assign
+
+
+## O6: OES sends the RTG destination (MiniTOS picks the slot); Godot echoes it
+## in container_dropped and never invents a dummy slot then.
+func _test_rtg_commanded_slot():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_run_chain(simulator, false, {"Command/DestinationPositionId": 5012, "Command/DestinationPositionCode": "BLOCK01-03-02-1"})
+	_assert(simulator._active_commands.is_empty(), "Commanded slot: all legs finish")
+	var results = _results(simulator)
+	var drop = _find(results, "RTG01", "container_dropped")
+	_assert(int(drop.get("Command/Result/PositionId", 0)) == 5012, "container_dropped echoes the commanded PositionId")
+	_assert(str(drop.get("Command/Result/PositionCode", "")) == "BLOCK01-03-02-1", "container_dropped echoes the commanded PositionCode")
+	_assert(str(drop["Work/State"]) == "depositing_to_stack", "Deposit is depositing_to_stack")
+	_assert(int(_find(results, "RTG01", "completed").get("Command/Result/PositionId", 0)) == 5012, "completed carries the commanded slot")
+	_free_simulator(simulator)
+	# PositionCode only: echoed as is, no dummy.
+	simulator = _new_chain_simulator(42, QC_LAT)
+	_run_chain(simulator, false, {"Command/DestinationPositionCode": "BLOCK01-05-01-2"})
+	drop = _find(_results(simulator), "RTG01", "container_dropped")
+	_assert(str(drop.get("Command/Result/PositionCode", "")) == "BLOCK01-05-01-2" and not drop.has("Command/Result/PositionId"), "A commanded PositionCode alone is echoed")
+	_free_simulator(simulator)
+	# Absent: deterministic dummy slot (D-009), same on a rerun.
+	var dummies: Array = []
+	for _run in range(2):
+		simulator = _new_chain_simulator(42, QC_LAT)
+		_run_chain(simulator, false)
+		dummies.append(str(_find(_results(simulator), "RTG01", "container_dropped").get("Command/Result/PositionCode", "")))
+		_free_simulator(simulator)
+	_assert(dummies[0].begins_with("BLOCK01-DUMMY-") and dummies[0] == dummies[1], "No destination: seeded dummy slot %s" % [dummies])
+
+
+func _test_chain_happy_path_d016():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_command_counter = 200
+	var assign = _run_chain(simulator, false)
+	_assert(simulator._active_commands.is_empty(), "QC, TT and RTG legs all finish")
+	var results = _results(simulator)
+	var sequence = _sequence(results)
+	var expected = [
+		"QC01 acknowledged commanded", "QC01 started commanded", "QC01 container_picked_up holding",
+		"TT01 acknowledged driving_to_source", "TT01 started driving_to_source",
+		"TT01 arrived_at_source at_source_waiting", "TT01 waiting_for_handoff at_source_waiting",
+		"QC01 handoff_completed done", "QC01 completed done",
+		"TT01 handoff_completed driving_to_destination",
+		"TT01 arrived_at_destination at_destination_waiting", "TT01 waiting_for_handoff at_destination_waiting",
+		"RTG01 acknowledged gantry_to_bay", "RTG01 started gantry_to_bay",
+		"TT01 handoff_completed idle", "TT01 completed idle",
+		"RTG01 handoff_completed picking_from_tt", "RTG01 container_dropped depositing_to_stack", "RTG01 completed idle",
+	]
+	_assert(sequence == expected, "D-016 ordered states/events:\n%s" % "\n".join(PackedStringArray(sequence)))
+	var tt_give: Dictionary = {}
+	for item in results:
+		if item.device == "TT01" and str(item.m["Command/Result/Event"]) == "handoff_completed":
+			tt_give = item.m
+	var rtg_take = _find(results, "RTG01", "handoff_completed")
+	var rtg_drop = _find(results, "RTG01", "container_dropped")
+	_assert(str(tt_give["Command/Result/HandoffId"]) == HANDOFF_ID_2 and str(rtg_take["Command/Result/HandoffId"]) == HANDOFF_ID_2, "Both sides report H2")
+	_assert(str(tt_give["Command/Result/HandoffRole"]) == "giver" and str(rtg_take["Command/Result/HandoffRole"]) == "receiver", "TT gives, RTG receives")
+	_assert(int(tt_give["Command/Result/CounterpartCheId"]) == RTG_ID and int(rtg_take["Command/Result/CounterpartCheId"]) == TT_ID, "Each side names the other")
+	_assert(int(tt_give["Event/TimeMs"]) == int(rtg_take["Event/TimeMs"]), "H2 is one instant on both sides")
+	_assert(int(tt_give["Carrying/ContainerVisitId"]) == 0 and int(rtg_take["Carrying/ContainerVisitId"]) == 101, "Custody moves from TT to RTG")
+	_assert(str(tt_give["Command/Result/CommandId"]) == str(assign["Command/Id"]), "BE: the TT giver's handoff_completed answers the assign_handoff command")
+	_assert(int(tt_give["Command/Result/PositionId"]) == 900, "TT giver reports the assign TransferPositionId")
+	var tt_done = _find(results, "TT01", "completed")
+	_assert(str(tt_done["Command/Result/CommandId"]) == "33333333-3333-4333-8333-%012d" % 202, "TT completed closes the TT leg itself")
+	for item in results:
+		_assert(str(item.m["Command/Result/CommandId"]) != str(assign["Command/Id"]) or str(item.m["Command/Result/Event"]) == "handoff_completed", "Only handoff_completed is published on the assign id (no ack)")
+	var hold_s = SimRandom.new(42).draw_wait_s("RTG01", "rtg:leg:4103", 0, 10, 30)
+	_assert(int(rtg_drop["Sim/TimeMs"]) == int(rtg_take["Sim/TimeMs"]) + hold_s * 1000, "RTG drops at the seeded hold end (%s s)" % hold_s)
+	var slot = SimRandom.new(42).draw_wait_s("RTG01", "slot:leg:4103", 0, 1, 20)
+	_assert(str(rtg_drop.get("Command/Result/PositionCode", "")) == "BLOCK01-DUMMY-%02d" % slot, "D-009: dummy slot from the seed (%s)" % rtg_drop.get("Command/Result/PositionCode", ""))
+	_assert(int(rtg_drop["Carrying/ContainerVisitId"]) == 0 and str(rtg_drop["Command/Result/ContainerNumber"]) == "MSCU1234565", "RTG drop echoes the container and is empty after")
+	_assert(not _events_of(results, "RTG01").has("waiting_for_handoff"), "TT already at the lane: RTG never waits")
+	for che_id in [QC_ID, TT_ID, RTG_ID]:
+		var che: Dictionary = simulator._ches[che_id]
+		_assert(not bool(che.working) and bool(che.is_available), "CHE %s is idle again" % che_id)
+	_free_simulator(simulator)
+
+
+func _test_chain_late_tt_at_rtg():
+	# TT 400 m from the QC: late at the QC, then the RTG is commanded before the TT reaches the block.
+	var simulator = _new_chain_simulator(42, QC_LAT - 0.0036)
+	_run_chain(simulator, true)
+	_assert(simulator._active_commands.is_empty(), "Late TT at RTG: all legs finish")
+	var results = _results(simulator)
+	var rtg_events = _events_of(results, "RTG01")
+	_assert(rtg_events == [
+		"acknowledged", "started", "waiting_for_handoff", "handoff_completed", "container_dropped", "completed",
+	], "Late TT at RTG: RTG event order %s" % [rtg_events])
+	_assert(str(_find(results, "RTG01", "waiting_for_handoff")["Work/State"]) == "waiting_for_tt", "RTG Work/State waiting_for_tt")
+	var arrived = _find(results, "TT01", "arrived_at_destination")
+	var take = _find(results, "RTG01", "handoff_completed")
+	_assert(int(take["Sim/TimeMs"]) == int(arrived["Sim/TimeMs"]), "RTG picks in the step the late TT arrives")
+	_assert(int(take["Sim/TimeMs"]) > int(_find(results, "RTG01", "acknowledged")["Sim/TimeMs"]), "RTG was commanded before the TT arrived")
+	_free_simulator(simulator)
+
+
+func _test_chain_rtg_cancel():
+	# Cancel while waiting_for_tt: RTG idle, TT keeps the container and H2, a new RTG command completes the chain.
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000)
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	var rtg_cmd = _command(RTG_ID, _rtg_metrics())
+	_send(simulator, RTG_ID, rtg_cmd)
+	_run_steps(simulator, 3)
+	_assert(str(simulator._active_commands[RTG_ID].work_state) == "waiting_for_tt", "RTG waits for the TT")
+	_send(simulator, RTG_ID, _command(RTG_ID, _cancel(RTG_ID, str(rtg_cmd["Command/Id"]))))
+	var cancelled = _last_result(simulator)
+	_assert(str(cancelled["Command/Result/Event"]) == "cancelled" and str(cancelled["Work/State"]) == "idle", "RTG cancel publishes cancelled/idle")
+	_assert(not simulator._active_commands.has(RTG_ID) and bool(simulator._ches[RTG_ID].is_available), "Cancel releases the RTG")
+	_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 3000)
+	_run_steps(simulator, 20)
+	_assert(_tt_phase(simulator) == "at_destination_waiting", "Without an RTG the TT keeps waiting at the lane")
+	_assert(int(simulator._active_commands[TT_ID].load_container_visit_id) == 101, "TT still carries the container")
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	_run_until(simulator, func(): return simulator._active_commands.is_empty(), 3000)
+	_assert(simulator._active_commands.is_empty(), "A new RTG command with the same H2 completes the chain")
+	_free_simulator(simulator)
+	# Cancel while holding: the container is cleared and never dropped.
+	simulator = _new_chain_simulator(42, QC_LAT)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000)
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 3000)
+	var holding_rtg = _command(RTG_ID, _rtg_metrics())
+	_send(simulator, RTG_ID, holding_rtg)
+	_run_steps(simulator, 2)
+	_assert(str(simulator._active_commands[RTG_ID].work_state) == "holding", "RTG holds the container")
+	_send(simulator, RTG_ID, _cancel(RTG_ID, str(holding_rtg["Command/Id"])))
+	cancelled = _last_result(simulator)
+	_assert(str(cancelled["Command/Result/Event"]) == "cancelled" and int(cancelled["Carrying/ContainerVisitId"]) == 0, "Cancel in holding clears the RTG load")
+	_run_steps(simulator, 400)
+	_assert(not _events_of(_results(simulator), "RTG01").has("container_dropped"), "A cancelled RTG never drops")
+	_free_simulator(simulator)
+
+
+func _chain_trace(run_seed: int) -> Array:
+	var simulator = _new_chain_simulator(run_seed, QC_LAT - 0.0036)
+	_command_counter = 300
+	_run_chain(simulator, true)
+	var trace: Array = []
+	for item in _results(simulator):
+		trace.append([
+			item.device, item.m["Command/Result/Event"], item.m.get("Work/State", ""), int(item.m["Sim/TimeMs"]),
+			item.m.get("Command/Result/PositionCode", ""),
+		])
+	_free_simulator(simulator)
+	return trace
+
+
+func _test_chain_determinism():
+	var first = _chain_trace(2024)
+	var second = _chain_trace(2024)
+	_assert(not first.is_empty() and first == second, "D-016: same seed, same chain states, order and times")
+	_assert(first != _chain_trace(77), "Another seed changes the chain")
+
+
+## D17-1: run with the RTG no-show switch off (default) and on.
+func _test_chain_wrong_handoff_id(rtg_no_show_enabled: bool):
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator.configure_rtg_no_show_timeout_enabled(str(rtg_no_show_enabled)), "RTG no-show switch applies")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_run_steps(simulator, 2)
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_already_active", "H2 before H1 completes is rejected")
+	_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000)
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics(HANDOFF_ID)))
+	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "failed", "Re-using H1 as H2 is rejected")
+	var mismatched = _command(TT_ID, _assign_metrics())
+	mismatched["Command/AssignmentId"] = "55555555-5555-4555-8555-555555555555"
+	_send(simulator, TT_ID, mismatched)
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_target_mismatch" and str(_last_result(simulator)["Command/Result/Detail"]) == "Hand-off assignment does not match the active TT leg", "assign_handoff for another assignment is rejected")
+	var wrong_leg = _command(TT_ID, _assign_metrics())
+	wrong_leg["Command/LegId"] = 9999
+	_send(simulator, TT_ID, wrong_leg)
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_target_mismatch" and str(_last_result(simulator)["Command/Result/Detail"]).contains("LegId"), "assign_handoff for another leg is rejected")
+	var no_role = _command(TT_ID, _assign_metrics())
+	no_role.erase("Command/HandoffRole")
+	_send(simulator, TT_ID, no_role)
+	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "failed", "assign_handoff requires HandoffRole=giver")
+	var before = _results(simulator).size()
+	var assign = _command(TT_ID, _assign_metrics())
+	_send(simulator, TT_ID, assign)
+	_assert(_results(simulator).size() == before, "H2 after H1 is accepted silently (no ack on the assign id)")
+	_assert(str(simulator._active_commands[TT_ID].handoff_id) == HANDOFF_ID_2, "The TT leg now holds H2")
+	_send(simulator, TT_ID, assign)
+	_assert(_results(simulator).size() == before and str(simulator._active_commands[TT_ID].handoff_id) == HANDOFF_ID_2, "A redelivered assign_handoff is deduplicated without a reply")
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics(HANDOFF_ID_WRONG)))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_already_active", "A TT holds at most one active hand-off")
+	_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 3000)
+	# RTG with a HandoffId the TT does not hold: never pairs. Switch on: times out
+	# after 300 s sim (D-013 analogue). Switch off: keeps waiting_for_tt.
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics(HANDOFF_ID_WRONG)))
+	_run_steps(simulator, 3100)
+	var rtg_events = _events_of(_results(simulator), "RTG01")
+	_assert(not rtg_events.has("handoff_completed"), "Wrong HandoffId: the RTG must not take the container (%s)" % [rtg_events])
+	if rtg_no_show_enabled:
+		_assert(rtg_events.has("handoff_timed_out"), "Switch on: the RTG times out (D-013 analogue)")
+	else:
+		_assert(not rtg_events.has("handoff_timed_out"), "Switch off: the RTG never times out (%s)" % [rtg_events])
+		_assert(str(simulator._active_commands[RTG_ID].work_state) == "waiting_for_tt", "Switch off: the RTG keeps waiting_for_tt")
+	_assert(_tt_phase(simulator) == "at_destination_waiting" and int(simulator._active_commands[TT_ID].load_container_visit_id) == 101, "The TT keeps the container")
+	_free_simulator(simulator)
+
+
+## D17-1: SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED parsing, default off, NBIRTH metric,
+## and RtgStack with timeout 0 never timing out.
+func _test_rtg_no_show_setting():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(not simulator._rtg_no_show_timeout_enabled and simulator.rtg_no_show_timeout_ms() == 0, "RTG no-show is off by default")
+	_assert(_birth_metric(simulator, "Sim/Timing/RtgNoShowTimeoutEnabled") == false, "NBIRTH reports the RTG no-show switch off")
+	for text in ["true", "1", "YES", " on "]:
+		_assert(simulator.configure_rtg_no_show_timeout_enabled(text) and simulator._rtg_no_show_timeout_enabled, "%s turns it on" % text)
+	_assert(simulator.rtg_no_show_timeout_ms() == 300000, "On: uses Sim/Timing/TtNoShowTimeoutS")
+	_assert(_birth_metric(simulator, "Sim/Timing/RtgNoShowTimeoutEnabled") == true, "NBIRTH reports the RTG no-show switch on")
+	_assert(not simulator.configure_rtg_no_show_timeout_enabled("maybe") and simulator._rtg_no_show_timeout_enabled, "Invalid text keeps the value")
+	for text in ["false", "0", "no", "OFF"]:
+		_assert(simulator.configure_rtg_no_show_timeout_enabled(text) and not simulator._rtg_no_show_timeout_enabled, "%s turns it off" % text)
+	_free_simulator(simulator)
+	var command = _rtg_command()
+	RtgStack.start(command, 10000, {"position_id": 0, "position_code": "BLOCK01-DUMMY-01"}, 0)
+	RtgStack.step(command, 0, 0)
+	_assert(RtgStack.step(command, 10000000, 0).is_empty(), "RtgStack with timeout 0 never times out")
+	_assert(_names(RtgStack.step(command, 10000100, TT_ID)) == ["handoff_completed"], "Switch off: a very late TT is still served")
+
+
+func _birth_metric(simulator: HeadlessSimulator, name: String):
+	for metric in simulator.node_birth_metrics():
+		if str(metric.name) == name:
+			return metric.value
+	return null
+
+
+func _test_rtg_rules_and_config():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	var giver = _rtg_metrics()
+	giver["Command/HandoffRole"] = "giver"
+	_send(simulator, RTG_ID, _command(RTG_ID, giver))
+	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "failed", "RTG must be the receiver in import")
+	var no_visit = _rtg_metrics()
+	no_visit.erase("Command/ContainerVisitId")
+	_send(simulator, RTG_ID, _command(RTG_ID, no_visit))
+	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "failed", "RTG hand-off leg needs a ContainerVisitId")
+	simulator._ches[RTG_ID]["block_code"] = "BLOCK02"
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "rtg_block_mismatch" and str(_last_result(simulator)["Command/Result/Detail"]) == "RTG does not serve block BLOCK01", "D-011: RTG rejects another block's lane")
+	simulator._ches[RTG_ID].erase("block_code")
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "failed", "assign_handoff without an active TT leg fails")
+	_free_simulator(simulator)
+	simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator.configure_rtg_wait("hold", "7", "7"), "RTG hold range is configurable")
+	_assert(not simulator.configure_rtg_wait("hold", "9", "3"), "Inverted RTG range is refused")
+	_run_chain(simulator, false)
+	var results = _results(simulator)
+	var gap = int(_find(results, "RTG01", "container_dropped")["Sim/TimeMs"]) - int(_find(results, "RTG01", "handoff_completed")["Sim/TimeMs"])
+	_assert(gap == 7000, "Configured RTG hold of 7 s is used (%s ms)" % gap)
+	_free_simulator(simulator)
 
 
 func _assert(condition: bool, message: String):
