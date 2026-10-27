@@ -330,7 +330,7 @@ class HappyPathTests(HandoffTestBase):
 
 class NoShowTests(HandoffTestBase):
     def test_tt_no_show_raises_one_exception_and_cancels_both_legs(self):
-        """D-013/T-007: handoff_timed_out → NO_TT_TIMEOUT, cancel DCMDs, handoff_exception."""
+        """D-013/T-007: handoff_timed_out → SIMULATOR_FAILURE (D-017), cancel DCMDs, handoff_exception."""
         qc_cmd, tt, tt_cmd = self.run_h1(tt_ready_ms=10**9)  # TT never ready
         self.result(qc_cmd, "waiting_for_handoff", 20_000)
         receipt = self.result(qc_cmd, "handoff_timed_out", 320_000)
@@ -338,7 +338,8 @@ class NoShowTests(HandoffTestBase):
 
         handoff = Handoff.objects.get()
         self.assertEqual(handoff.status, Handoff.EXCEPTION)
-        self.assertEqual(handoff.exception_reason, "NO_TT_TIMEOUT")
+        self.assertEqual(handoff.exception_reason, Handoff.ExceptionReason.SIMULATOR_FAILURE)
+        self.assertEqual(handoff.exception_detail, "no TT within 300 s")
         self.assertEqual(handoff.exception_event_ms, START_EPOCH_MS + 320_000)
         cancels = EquipmentCommand.objects.filter(command_type="cancel")
         self.assertEqual(
@@ -350,11 +351,11 @@ class NoShowTests(HandoffTestBase):
             self.assertEqual(metrics["Command/Type"], "cancel")
             self.assertTrue(metrics["Command/AssignmentId"])
             self.assertEqual(metrics["Command/ExpiresAtMs"], 920_000)
+            self.assertEqual(metrics["Command/Reason"], "SIMULATOR_FAILURE")
         self.order.refresh_from_db()
-        # A-1 (TL interim, pending Yael): completed by exception, not cancelled.
+        # D-017: completed by exception, not cancelled.
         self.assertEqual(self.order.status, ExecutionOrder.COMPLETE)
-        self.assertEqual(self.order.failure_reason, "NO_TT_TIMEOUT")
-        self.assertEqual(self.order.failure_reason, "NO_TT_TIMEOUT")
+        self.assertEqual(self.order.failure_reason, "SIMULATOR_FAILURE")
         self.assertEqual(
             set(self.order.operations.values_list("status", flat=True)),
             {ExecutionOperation.CANCELLED},
@@ -365,7 +366,8 @@ class NoShowTests(HandoffTestBase):
             self.assertEqual(che.idle_since_event_ms, START_EPOCH_MS + 320_000)
         exception = OutboxEvent.objects.get(payload__data__event="handoff_exception")
         data = exception.payload["data"]
-        self.assertEqual(data["reason"], "NO_TT_TIMEOUT")
+        self.assertEqual(data["reason"], "SIMULATOR_FAILURE")
+        self.assertEqual(data["detail"], "no TT within 300 s")
         self.assertEqual(data["container_number"], CONTAINER)
         self.assertEqual(data["cancelled_leg_ids"], [4101, 4102, 4103])
         self.assertEqual(data["destination_position_id"], 112)
@@ -385,6 +387,25 @@ class NoShowTests(HandoffTestBase):
         self.assertIn(late.reason, {"handoff_not_pending", "A terminal command cannot transition to another result."})
         self.assertEqual(OutboxEvent.objects.count(), count)
         self.assertEqual(Handoff.objects.get().status, Handoff.EXCEPTION)
+
+    def test_no_show_detail_uses_the_configured_timeout(self):
+        """D-017: the 5-min trigger is a detail, derived from SIMULATOR_TT_NO_SHOW_TIMEOUT_S."""
+        qc_cmd, tt, tt_cmd = self.run_h1(tt_ready_ms=10**9)
+        with self.settings(SIMULATOR_SIM_SETTINGS={"SIMULATOR_TT_NO_SHOW_TIMEOUT_S": "120"}):
+            self.result(qc_cmd, "handoff_timed_out", 140_000)
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.exception_reason, "SIMULATOR_FAILURE")
+        self.assertEqual(handoff.exception_detail, "no TT within 120 s")
+        data = OutboxEvent.objects.get(payload__data__event="handoff_exception").payload["data"]
+        self.assertEqual((data["reason"], data["detail"]), ("SIMULATOR_FAILURE", "no TT within 120 s"))
+
+    def test_no_show_reason_is_an_extensible_enum(self):
+        """D-017: a TextChoices list, not a flag; NO_TT_TIMEOUT is gone."""
+        from .models import HandoffExceptionReason
+
+        self.assertIs(Handoff.ExceptionReason, HandoffExceptionReason)
+        self.assertEqual(HandoffExceptionReason.SIMULATOR_FAILURE.label, "Simulator failure")
+        self.assertNotIn("NO_TT_TIMEOUT", HandoffExceptionReason.values)
 
     def test_timed_out_after_transfer_is_rejected(self):
         qc_cmd, tt, tt_cmd = self.run_h1()

@@ -510,6 +510,17 @@ class CommandResultReceipt(models.Model):
         ordering = ["received_at"]
 
 
+class HandoffExceptionReason(models.TextChoices):
+    """D-017: why a hand-off ended by exception. Extend by adding members.
+
+    ``Handoff.exception_reason`` also stores the B-2 cancel reasons
+    (LEG_FAILED, SESSION_STOPPED, ...) for ``cancelled`` hand-offs, so the
+    field itself carries no ``choices``.
+    """
+
+    SIMULATOR_FAILURE = "SIMULATOR_FAILURE", "Simulator failure"
+
+
 class Handoff(models.Model):
     """One CHE-to-CHE container transfer (T-006, contract rev 6 Q18/Q21).
 
@@ -529,7 +540,7 @@ class Handoff(models.Model):
         (CANCELLED, "Cancelled"),
     ]
     ACTIVE_STATES = [PENDING]
-    NO_TT_TIMEOUT = "NO_TT_TIMEOUT"
+    ExceptionReason = HandoffExceptionReason
 
     GIVER = "giver"
     RECEIVER = "receiver"
@@ -560,6 +571,7 @@ class Handoff(models.Model):
     transferred_event_ms = models.BigIntegerField(blank=True, null=True)
     exception_event_ms = models.BigIntegerField(blank=True, null=True)
     exception_reason = models.CharField(max_length=40, blank=True)
+    exception_detail = models.CharField(max_length=200, blank=True)
     conflict_count = models.PositiveIntegerField(default=0)
     last_conflict = models.CharField(max_length=200, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -136,9 +136,13 @@ file preserves active commands and recent CHE state across process restart.
   `arrived_at_destination` and `waiting_for_handoff` are informational. One
   `handoff_completed` per side; the first emits `container_transferred`.
   `handoff_timed_out` (QC giver) raises `handoff_exception` with
-  `NO_TT_TIMEOUT` and cancels the remaining legs; the order ends complete
-  by exception (assumption A-1, pending Yael; one constant in OES and
-  MiniTOS). A rejected result is stored with a reason and logged, never rolled
+  `reason` `SIMULATOR_FAILURE` and `detail` `"no TT within <N> s"` (N =
+  `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, default 300), and cancels the remaining
+  legs (cancel `Command/Reason` = the same code); the order ends complete by
+  exception (D-017). `reason` is an extensible enum (OES
+  `HandoffExceptionReason`, MiniTOS `ExceptionReason`); MiniTOS rejects a
+  missing reason (`reason_required`) or an unknown one (`reason_unknown`).
+  `detail` is optional free text. A rejected result is stored with a reason and logged, never rolled
   back into the DDATA.
 - **Aborted hand-offs.** A failed or cancelled leg cancels its pending
   hand-off and the counterpart leg (cancel DCMD). Stopping, a runner

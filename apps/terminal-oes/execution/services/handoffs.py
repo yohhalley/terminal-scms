@@ -2,13 +2,15 @@
 
 OES is the single writer of the hand-off record. Godot owns the timing: it
 reports ``handoff_completed`` (both sides, Q21) and, on a D-013 no-show,
-``handoff_timed_out`` (the QC, after 300 s sim time). Every function here is
+``handoff_timed_out`` (the QC, after the configured no-show timeout, 300 s sim
+time by default). Every function here is
 idempotent; a result that cannot be applied raises ``ResultRejected`` so the
 caller stores a rejected receipt instead of rolling back the DDATA.
 """
 
 import logging
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import F, Q
 from django.utils import timezone
@@ -34,11 +36,29 @@ from execution.services.events import finalize_outbox_event, queue_execution_eve
 
 logger = logging.getLogger(__name__)
 
-# Assumption A-1 (TL interim call, pending Yael): a TT no-show completes the
-# order *by exception* (failure_reason NO_TT_TIMEOUT); both legs stay cancelled
-# per T-007. Flip to ExecutionOrder.CANCELLED here (and NO_SHOW_ORDER_STATUS in
-# MiniTOS order_execution.py) if Yael decides no-show cancels the order.
+# D-017 (Yael, 2026-10-27; closes A-1): a TT no-show completes the order *by
+# exception* with reason SIMULATOR_FAILURE; both legs stay cancelled per T-007.
 NO_SHOW_ORDER_STATUS = ExecutionOrder.COMPLETE
+NO_SHOW_REASON = Handoff.ExceptionReason.SIMULATOR_FAILURE
+# Godot's default (DEFAULT_TT_NO_SHOW_TIMEOUT_S) when SIMULATOR_TT_NO_SHOW_TIMEOUT_S is unset.
+DEFAULT_TT_NO_SHOW_TIMEOUT_S = 300
+
+
+def tt_no_show_timeout_s():
+    """The configured no-show timeout: the value OES passes to the simulator (D-013)."""
+    configured = getattr(settings, "SIMULATOR_SIM_SETTINGS", {}).get(
+        "SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "",
+    )
+    try:
+        seconds = int(str(configured).strip())
+    except ValueError:
+        return DEFAULT_TT_NO_SHOW_TIMEOUT_S
+    return seconds if seconds > 0 else DEFAULT_TT_NO_SHOW_TIMEOUT_S
+
+
+def no_show_detail():
+    """D-017: the trigger travels as a detail next to the reason code."""
+    return f"no TT within {tt_no_show_timeout_s()} s"
 
 
 class ResultRejected(ValidationError):
@@ -238,12 +258,14 @@ def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
         )
         raise ResultRejected("handoff_not_pending")
     _check_container(handoff, metrics)
-    reason = Handoff.NO_TT_TIMEOUT
+    reason = NO_SHOW_REASON.value
+    detail = no_show_detail()
     handoff.status = Handoff.EXCEPTION
     handoff.exception_reason = reason
+    handoff.exception_detail = detail
     handoff.exception_event_ms = int(event_ms) if event_ms is not None else None
     handoff.save(update_fields=[
-        "status", "exception_reason", "exception_event_ms", "updated_at",
+        "status", "exception_reason", "exception_detail", "exception_event_ms", "updated_at",
     ])
 
     order = ExecutionOrder.objects.select_for_update().get(pk=handoff.order_id)
@@ -266,6 +288,7 @@ def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
         extra={
             "handoff_id": str(handoff.handoff_id),
             "reason": reason,
+            "detail": detail,
             "from_che_id": handoff.giver_equipment.tos_che_id,
             "to_che_id": handoff.receiver_equipment.tos_che_id,
             "from_che_name": handoff.giver_equipment.name,

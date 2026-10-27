@@ -89,6 +89,7 @@ class Migration(migrations.Migration):
                 ('transferred_event_ms', models.BigIntegerField(blank=True, null=True)),
                 ('exception_event_ms', models.BigIntegerField(blank=True, null=True)),
                 ('exception_reason', models.CharField(blank=True, max_length=40)),
+                ('exception_detail', models.CharField(blank=True, max_length=200)),
                 ('conflict_count', models.PositiveIntegerField(default=0)),
                 ('last_conflict', models.CharField(blank=True, max_length=200)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
