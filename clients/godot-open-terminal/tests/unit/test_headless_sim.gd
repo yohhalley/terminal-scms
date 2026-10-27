@@ -185,7 +185,7 @@ func _test_qc_state_machine_tt_late():
 	_assert(QcDischarge.step(command, 45000, 0).is_empty(), "QC keeps waiting while no TT is ready")
 	events = QcDischarge.step(command, 45100, 9)
 	_assert(_names(events) == ["handoff_completed", "completed"], "Deposit as soon as the late TT is ready")
-	_assert(int(events[2].counterpart_che_id) == 9, "Completion names the TT")
+	_assert(int(events[1].counterpart_che_id) == 9, "Completion names the TT")
 
 
 func _test_qc_state_machine_no_show_and_cancel():
