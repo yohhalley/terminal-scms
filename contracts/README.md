@@ -54,7 +54,13 @@ optional free string in the schema. The detail behaviour arrives with TCL-028
 `execution/test_contract_failure_events.py`: the with-detail check is skipped while
 TCL-028 is not merged and fails under `SCMS_CONTRACT_STRICT=1`. Consumer test
 `minitos_core/test_contract_failure_events.py` replays `leg_dispatched`,
-`leg_started` and each `leg_failed` through MiniTOS. Regenerate (on a branch with
+`leg_started` and each failure golden through MiniTOS. Added for TCL-028 8d4ecee
+(Tech Lead decisions): `03_leg_failed_unspecified_reason` (a failed result without
+a reason gives `reason` "UNSPECIFIED"; `data.reason` stays a free string, only
+`handoff_exception` restricts it) and `04_order_cancelled_container_mismatch` (a
+cancelled result naming another container is applied, with the mismatch note in
+`data.detail`). Their producer checks also skip until TCL-028 is merged and fail
+under strict mode. Regenerate (on a branch with
 TCL-028) with
 `SCMS_UPDATE_GOLDEN=1 python manage.py test execution.test_contract_failure_events`.
 

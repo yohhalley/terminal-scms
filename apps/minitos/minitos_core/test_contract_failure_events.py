@@ -36,7 +36,7 @@ class GoldenLegFailedConsumerTests(one_leg.GoldenExecutionEventConsumerTests):
     test_golden_envelopes_carry_terminal_id = None
     test_golden_leg_applies_through_real_consumer = None
 
-    def replay_failure(self, failure_name):
+    def replay_failure(self, failure_name, leg_status=OrderLeg.FAILED, order_status=Order.FAILED):
         documents = [
             ('01_leg_dispatched.json', load(GOLDEN_DIR / '01_leg_dispatched.json')),
             ('02_leg_started.json', load(GOLDEN_DIR / '02_leg_started.json')),
@@ -50,8 +50,8 @@ class GoldenLegFailedConsumerTests(one_leg.GoldenExecutionEventConsumerTests):
                 self.fail(f'{name} rejected by apply_execution_message: {exc}')
         self.order.refresh_from_db()
         self.leg.refresh_from_db()
-        self.assertEqual(self.leg.status, OrderLeg.FAILED)
-        self.assertEqual(self.order.status, Order.FAILED)
+        self.assertEqual(self.leg.status, leg_status)
+        self.assertEqual(self.order.status, order_status)
         self.assertEqual(
             IntegrationInbox.objects.filter(
                 source='terminal-oes', status=IntegrationInbox.PROCESSED,
@@ -67,3 +67,14 @@ class GoldenLegFailedConsumerTests(one_leg.GoldenExecutionEventConsumerTests):
     def test_leg_failed_without_detail_is_accepted(self):
         document = self.replay_failure('02_leg_failed_without_detail.json')
         self.assertNotIn('detail', document['payload']['data'])
+
+    def test_leg_failed_with_unspecified_reason_is_accepted(self):
+        document = self.replay_failure('03_leg_failed_unspecified_reason.json')
+        self.assertEqual(document['payload']['data']['reason'], 'UNSPECIFIED')
+
+    def test_order_cancelled_with_container_mismatch_note_is_accepted(self):
+        document = self.replay_failure(
+            '04_order_cancelled_container_mismatch.json',
+            leg_status=OrderLeg.CANCELLED, order_status=Order.CANCELLED,
+        )
+        self.assertIn('container mismatch', document['payload']['data']['detail'])

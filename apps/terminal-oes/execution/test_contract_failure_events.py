@@ -11,8 +11,14 @@ arrives, and captured from the real outbox publisher. Goldens:
 ``<repo>/contracts/golden/scms.execution.event.v1/failure/``. MiniTOS replays them
 in ``minitos_core/test_contract_failure_events.py``.
 
-Until TCL-028 is merged the detail-emitting check is skipped (feature absent:
-``apply_command_event`` has no ``detail`` parameter); with
+TCL-028 8d4ecee (Tech Lead decisions) adds two more goldens: a failed result
+without a reason gives ``leg_failed`` with ``reason`` "UNSPECIFIED", and a
+cancelled result with a mismatching container number is applied, with the note
+in ``order_cancelled`` ``data.detail``.
+
+Until TCL-028 is merged these checks are skipped (feature absent:
+``apply_command_event`` has no ``detail`` parameter, no
+``DEFAULT_FAILURE_REASON``, ``cancelled`` not in ``MISMATCH_APPLIED_EVENTS``); with
 ``SCMS_CONTRACT_STRICT=1`` it fails instead, so strict runs flag the gap. Once
 TCL-028 lands it runs as a normal test; no marker has to be removed.
 
@@ -27,6 +33,9 @@ import uuid
 
 from django.test import override_settings
 
+from .models import ExecutionOrder
+from .services import dispatch as dispatch_service
+from .services import sparkplug_runtime
 from .services.dispatch import apply_command_event, dispatch_next_operation
 from .services.sparkplug_runtime import _apply_command_result
 from . import test_contract_execution_events as one_leg
@@ -41,12 +50,22 @@ from .test_contract_execution_events import (
 FAILURE_GOLDEN_DIR = GOLDEN_DIR / "failure"
 WITH_DETAIL = "01_leg_failed_with_detail"
 WITHOUT_DETAIL = "02_leg_failed_without_detail"
+UNSPECIFIED_REASON = "03_leg_failed_unspecified_reason"
+CANCELLED_MISMATCH = "04_order_cancelled_container_mismatch"
+ORDER_CONTAINER = "MSCU1234567"  # the MiniTOS consumer fixture's box number
+REPORTED_CONTAINER = "TGHU0000000"
 GODOT_REASON = "che_busy"
 GODOT_DETAIL = "CHE already has an active command"
 RESULT_NS = uuid.UUID("5c0a1b2e-7d6f-4e3a-9b8c-0d1e2f3a4b5c")
 
 # TCL-028 adds ``detail`` to apply_command_event (and the Sparkplug result path).
 TCL028_FAILURE_DETAIL = "detail" in inspect.signature(apply_command_event).parameters
+# TCL-028 8d4ecee (TL): a failed result without a reason becomes "UNSPECIFIED",
+# and a cancelled result with a mismatching container number is applied.
+TCL028_DEFAULT_REASON = getattr(dispatch_service, "DEFAULT_FAILURE_REASON", None)
+TCL028_CANCEL_MISMATCH = "cancelled" in getattr(
+    sparkplug_runtime, "MISMATCH_APPLIED_EVENTS", (),
+)
 
 
 @override_settings(OES_API_TOKEN="contract-test-token")
@@ -57,13 +76,11 @@ class LegFailedContractTests(one_leg.ExecutionEventContractTests):
     test_every_execution_event_carries_terminal_id = None
     test_produced_events_validate_against_contract_schema = None
 
-    def require_tcl028(self):
-        if TCL028_FAILURE_DETAIL:
+    def require_tcl028(self, present=None, what="OES does not copy Command/Result/Detail "
+                       "into leg_failed data.detail yet"):
+        if TCL028_FAILURE_DETAIL if present is None else present:
             return
-        message = (
-            "TCL-028 not merged: OES does not copy Command/Result/Detail into "
-            "leg_failed data.detail yet"
-        )
+        message = f"TCL-028 not merged: {what}"
         if os.environ.get("SCMS_CONTRACT_STRICT"):
             self.fail(message)
         self.skipTest(message)
@@ -79,18 +96,19 @@ class LegFailedContractTests(one_leg.ExecutionEventContractTests):
         metrics.update(extra)
         return _apply_command_result(metrics, self.session)
 
-    def failed_leg_event(self, **failure_metrics):
+    def failed_leg_event(self, result_event="failed", business_event="leg_failed",
+                         **failure_metrics):
         """dispatch -> acknowledged -> started -> failed (Godot result); the leg_failed doc."""
         command = dispatch_next_operation(self.order.pk).commands.get()
         self.godot_result(command, "acknowledged", 1)
         self.godot_result(command, "started", 2)
-        receipt = self.godot_result(command, "failed", 3, **failure_metrics)
+        receipt = self.godot_result(command, result_event, 3, **failure_metrics)
         self.assertEqual(receipt.status, "applied", receipt.reason)
         documents = [
             doc for doc in self.publish_and_capture_execution()
-            if doc["payload"]["data"]["event"] == "leg_failed"
+            if doc["payload"]["data"]["event"] == business_event
         ]
-        self.assertEqual(len(documents), 1, "expected exactly one leg_failed")
+        self.assertEqual(len(documents), 1, f"expected exactly one {business_event}")
         return documents[0]
 
     def publish_and_capture_execution(self):
@@ -129,6 +147,11 @@ class LegFailedContractTests(one_leg.ExecutionEventContractTests):
         if not SCHEMA_PATH.exists() or not FAILURE_GOLDEN_DIR.is_dir():
             self.skipTest("contracts/ is not available (app-only Docker image)")
         schema = json.loads(SCHEMA_PATH.read_text())
+        for name in (UNSPECIFIED_REASON, CANCELLED_MISMATCH):
+            golden = json.loads((FAILURE_GOLDEN_DIR / f"{name}.json").read_text())
+            self.assertEqual(check_schema(golden["payload"], schema), [], name)
+        unspecified = json.loads((FAILURE_GOLDEN_DIR / f"{UNSPECIFIED_REASON}.json").read_text())
+        self.assertEqual(unspecified["payload"]["data"]["reason"], "UNSPECIFIED")
         with_detail = json.loads((FAILURE_GOLDEN_DIR / f"{WITH_DETAIL}.json").read_text())
         without_detail = json.loads((FAILURE_GOLDEN_DIR / f"{WITHOUT_DETAIL}.json").read_text())
         self.assertEqual(with_detail["payload"]["data"]["event"], "leg_failed")
@@ -171,3 +194,37 @@ class LegFailedContractTests(one_leg.ExecutionEventContractTests):
     def test_leg_failed_without_detail_metric_omits_detail(self):
         document = self.failed_leg_event(**{"Command/Result/Reason": GODOT_REASON})
         self.assertNotIn("detail", document["payload"]["data"])
+
+    def test_leg_failed_without_reason_is_unspecified(self):
+        """TCL-028 (TL): no Command/Result/Reason -> data.reason "UNSPECIFIED"; the
+        schema keeps data.reason a free string on leg_failed (only handoff_exception
+        has an enum)."""
+        self.require_tcl028(
+            TCL028_DEFAULT_REASON is not None,
+            "a failed result without a reason does not default to UNSPECIFIED yet",
+        )
+        document = self.failed_leg_event()
+        data = document["payload"]["data"]
+        self.assertEqual(data["reason"], "UNSPECIFIED")
+        self.assertNotIn("detail", data)
+        self.assert_schema_valid(document["payload"])
+        self.assert_matches_golden(UNSPECIFIED_REASON, document)
+
+    def test_cancelled_result_with_container_mismatch_is_applied_and_flagged(self):
+        """TCL-028 (TL): a cancelled result naming another container is applied;
+        order_cancelled carries the mismatch note in data.detail."""
+        self.require_tcl028(
+            TCL028_CANCEL_MISMATCH,
+            "a cancelled result with a mismatching container number is still rejected",
+        )
+        ExecutionOrder.objects.filter(pk=self.order.pk).update(container_number=ORDER_CONTAINER)
+        document = self.failed_leg_event(
+            "cancelled", "order_cancelled",
+            **{"Command/Result/ContainerNumber": REPORTED_CONTAINER},
+        )
+        self.assertEqual(
+            document["payload"]["data"]["detail"],
+            f"container mismatch: reported {REPORTED_CONTAINER}, expected {ORDER_CONTAINER}",
+        )
+        self.assert_schema_valid(document["payload"])
+        self.assert_matches_golden(CANCELLED_MISMATCH, document)
