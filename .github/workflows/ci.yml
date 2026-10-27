@@ -100,6 +100,8 @@ jobs:
         run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_terminal_integration.gd
       - name: test_che_rails.gd
         run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_che_rails.gd
+      - name: test_cancel_regression.gd
+        run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_cancel_regression.gd
 
   # Optional: live MQTT lifecycle against HiveMQ CE (same image as compose.yaml).
   # It does not block the workflow; promote it once it has proven stable.
