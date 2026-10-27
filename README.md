@@ -89,6 +89,11 @@ use the OES simulation console at `http://localhost:8010/simulations/` to start
 that Site. Godot bootstraps only from OES and communicates at runtime through
 Sparkplug B.
 
+To rerun the Sprint 1 demo from a known state, `make scenario-reset` wipes and
+reseeds both databases with the `import_v1` scenario and republishes the Site;
+`make scenario-step STEP=release-discharge` releases its discharge order. See
+[docs/SCENARIO_RESET.md](docs/SCENARIO_RESET.md).
+
 `make down` retains named database, broker, and simulator session volumes. Do not add `--volumes`
 unless the stored development data is intentionally disposable.
 
