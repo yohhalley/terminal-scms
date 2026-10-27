@@ -31,6 +31,9 @@ class FakeSparkplugManager:
 	extends Node
 	var calls: Array = []
 	var connected := true
+	## QoS 1 packet ids as the real manager hands them out (PUBACK simulated by the test).
+	var last_packet_id := 0
+	var _next_packet_id := 0
 
 	func is_broker_connected():
 		return connected
@@ -44,7 +47,11 @@ class FakeSparkplugManager:
 		return true
 
 	func publish_device_result(device_id: String, metrics: Array):
-		calls.append(["RESULT", device_id, metrics])
+		if not connected:
+			return false
+		_next_packet_id = _next_packet_id % 65535 + 1
+		last_packet_id = _next_packet_id
+		calls.append(["RESULT", device_id, metrics, last_packet_id])
 		return true
 
 	func publish_device_death(device_id: String):
@@ -70,6 +77,8 @@ func _initialize():
 	_test_sim_tt_no_show_then_cancel()
 	_test_configurable_qc_waits()
 	_test_result_outbox_replays_in_order()
+	_test_results_pending_until_puback()
+	_test_duplicate_dcmd_replays_same_result()
 	_test_device_id_mapping()
 	_test_mqtt_packet_id_wraps()
 	_cleanup_state_file()
@@ -683,11 +692,119 @@ func _test_result_outbox_replays_in_order():
 	for item in _results(simulator):
 		events.append(str(item.m["Command/Result/Event"]))
 		seqs.append(int(item.m["Sim/EventSeq"]))
-	_assert(events.size() == buffered and simulator._result_outbox.is_empty(), "Every pending result is replayed after reconnect")
+	_assert(events.size() == buffered and simulator.pending_result_count() == buffered, "Every pending result is replayed after reconnect and stays pending until PUBACK")
+	_ack_all(simulator)
+	_assert(simulator.pending_result_count() == 0 and simulator._result_outbox.size() == buffered, "PUBACKs clear the pending set; the journal keeps acked entries")
 	_assert(events.slice(0, 4) == ["acknowledged", "started", "container_picked_up", "waiting_for_handoff"], "Replay keeps publish order: %s" % [events])
 	var sorted_seqs = seqs.duplicate()
 	sorted_seqs.sort()
 	_assert(seqs == sorted_seqs, "Replayed results keep their EventSeq order")
+	_free_simulator(simulator)
+
+
+## Test PUBACK: acks every in-flight journal entry.
+func _ack_all(simulator):
+	for item in simulator._result_outbox.duplicate():
+		if not bool(item.get("acked", false)) and int(item.get("packet_id", 0)) > 0:
+			simulator._on_result_acknowledged(int(item.packet_id))
+
+
+## B15-2: a result written to the socket is not delivered until its PUBACK. A
+## disconnect before the PUBACK resends it (same Result/Id) after reconnect, in
+## Sim/EventSeq order, together with results produced while offline.
+func _test_results_pending_until_puback():
+	var simulator = _new_simulator(2, QC_LAT)
+	var fake = simulator._mqtt._manager
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	var first = _results(simulator)
+	_assert(first.size() == 3, "acknowledged, started, container_picked_up go out at once (%s)" % first.size())
+	_assert(simulator.pending_result_count() == 3, "Results written to the socket stay pending until PUBACK")
+	simulator._on_result_acknowledged(int(fake.calls[-2][3]))
+	_assert(simulator.pending_result_count() == 2, "A PUBACK acks exactly its own entry")
+	simulator._on_result_acknowledged(999)
+	_assert(simulator.pending_result_count() == 2, "An unknown packet id acks nothing")
+	var acked_ids := {}
+	for item in simulator._result_outbox:
+		if bool(item.acked):
+			acked_ids[str(item.result_id)] = true
+	# Connection drops before the other two PUBACKs arrive.
+	fake.connected = false
+	simulator._on_broker_lost()
+	for item in simulator._result_outbox:
+		if not bool(item.acked):
+			_assert(int(item.packet_id) == 0, "Unacked entries are re-queued on disconnect")
+	var before = _results(simulator).size()
+	_run_steps(simulator, 400)
+	_assert(_results(simulator).size() == before, "Nothing is sent while disconnected")
+	var pending = simulator.pending_result_count()
+	_assert(pending >= 3, "Offline results join the pending set (%s)" % pending)
+	# Restart while offline: the journal and its pending state survive.
+	var restarted = HeadlessSimulator.new()
+	restarted._session_id = SESSION_ID
+	restarted._site_id = SITE_ID
+	restarted._configuration_revision = 7
+	restarted._configuration_checksum = "checksum-7"
+	restarted._ches = {QC_ID: _che(QC_ID, "QC01", QC_LAT, QC_LON)}
+	restarted._load_runtime_state()
+	restarted._restore_runtime_state()
+	_assert(restarted.pending_result_count() == pending, "Pending results survive a restart")
+	var all_unsent := true
+	for item in restarted._result_outbox:
+		if not bool(item.acked) and int(item.packet_id) != 0:
+			all_unsent = false
+	_assert(all_unsent, "After a restart every unacked entry is resent")
+	restarted._mqtt.free()
+	restarted._bootstrap.free()
+	restarted.free()
+	# Reconnect: everything unacked goes out again, in EventSeq order.
+	fake.connected = true
+	simulator._mqtt_connected = true
+	simulator._flush_result_outbox()
+	var resent = _results(simulator).slice(before)
+	var seqs: Array = []
+	var resent_ids := {}
+	for item in resent:
+		seqs.append(int(item.m["Sim/EventSeq"]))
+		resent_ids[str(item.m["Command/Result/Id"])] = true
+	var sorted_seqs = seqs.duplicate()
+	sorted_seqs.sort()
+	_assert(resent.size() == pending and seqs == sorted_seqs, "Every unacked result is resent in EventSeq order: %s" % [seqs])
+	for result_id in acked_ids:
+		_assert(not resent_ids.has(result_id), "An acked result is not resent")
+	for item in first:
+		var id = str(item.m["Command/Result/Id"])
+		if not acked_ids.has(id):
+			_assert(resent_ids.has(id), "An unacked result is resent with the same Result/Id")
+	simulator._flush_result_outbox()
+	_assert(_results(simulator).size() == before + pending, "In-flight entries are not sent twice on one connection")
+	_ack_all(simulator)
+	_assert(simulator.pending_result_count() == 0, "All PUBACKs clear the pending set")
+	simulator._on_broker_lost()
+	fake.connected = true
+	simulator._mqtt_connected = true
+	simulator._flush_result_outbox()
+	_assert(_results(simulator).size() == before + pending, "Acked results are not resent after another reconnect")
+	_free_simulator(simulator)
+
+
+## N15-3: a redelivered DCMD replays the recorded result with the same Result/Id
+## and Sim/EventSeq, and it is tracked until PUBACK like any other.
+func _test_duplicate_dcmd_replays_same_result():
+	var simulator = _new_simulator(2, QC_LAT)
+	var metrics = _command(QC_ID, _qc_metrics())
+	_send(simulator, QC_ID, metrics)
+	_ack_all(simulator)
+	var last = _last_result(simulator)
+	var count = _results(simulator).size()
+	var seq_before = simulator._event_seq
+	_send(simulator, QC_ID, metrics)
+	var replay = _last_result(simulator)
+	_assert(_results(simulator).size() == count + 1, "A redelivered DCMD sends exactly one replay")
+	_assert(str(replay["Command/Result/Id"]) == str(last["Command/Result/Id"]), "The replay keeps the Result/Id")
+	_assert(int(replay["Sim/EventSeq"]) == int(last["Sim/EventSeq"]) and simulator._event_seq == seq_before, "The replay keeps its EventSeq and allocates none")
+	_assert(simulator.pending_result_count() == 1, "The replay is pending until its PUBACK")
+	_ack_all(simulator)
+	_assert(simulator.pending_result_count() == 0, "The replay's PUBACK acks it")
 	_free_simulator(simulator)
 
 

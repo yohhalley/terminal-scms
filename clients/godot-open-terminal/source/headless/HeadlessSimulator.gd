@@ -39,8 +39,13 @@ var _mqtt_retry_pending := false
 var _ches := {}
 var _active_commands := {}
 var _command_outcomes := {}
-## Command results not yet handed to the MQTT client, in publish order. Buffered
-## while disconnected and replayed in order after reconnect and rebirth.
+## Result journal (contract §5.2, B4): every result in Sim/EventSeq order, persisted.
+## Entry: {seq, che_id, result_id, metrics, packet_id, acked}. An entry stays
+## pending until the broker's PUBACK for its packet id arrives; packet_id 0 means
+## "not sent on the current connection". After a disconnect or restart every
+## pending entry is resent, in Sim/EventSeq order, with the same Result/Id.
+## Acked entries are kept until session end/reset (Q20). Full-session replay
+## after an OES rebirth request is S2 (Tech Lead review B15-2), not done here.
 var _result_outbox: Array = []
 var _persisted_runtime_state := {}
 var _last_publish_ms := {}
@@ -77,6 +82,7 @@ func _ready():
 	_mqtt.broker_checked.connect(_on_broker_checked)
 	_mqtt.sparkplug_command_received.connect(_on_sparkplug_command)
 	_mqtt.message_rejected.connect(_on_message_rejected)
+	_mqtt.publish_acknowledged.connect(_on_result_acknowledged)
 	_load_bootstrap()
 	print("HEADLESS simulator requesting OES session %s for Site %s" % [_session_id, _site_id])
 
@@ -306,6 +312,7 @@ func _connect_mqtt():
 func _on_broker_checked(ok: bool, message: String):
 	_mqtt_connected = ok
 	if not ok:
+		_on_broker_lost()
 		push_warning(message)
 		_schedule_mqtt_retry()
 		return
@@ -750,7 +757,10 @@ func _publish_command_result(
 		"che_id": che_id, "event": event, "position_id": position_id,
 		"reason": reason, "result_id": result_id, "metrics": metrics,
 	}
-	_result_outbox.append({"che_id": che_id, "metrics": metrics})
+	_result_outbox.append({
+		"seq": _event_seq, "che_id": che_id, "result_id": result_id,
+		"metrics": metrics, "packet_id": 0, "acked": false,
+	})
 	_save_runtime_state()
 	_flush_result_outbox()
 
@@ -782,25 +792,99 @@ func _result_context_metrics(context: Dictionary) -> Array:
 	return metrics
 
 
+## Sends every pending journal entry not yet sent on this connection, in
+## Sim/EventSeq order. Nothing is removed here: an entry stays pending until its
+## PUBACK (_on_result_acknowledged). Stops at the first failed publish.
 func _flush_result_outbox():
-	var sent := 0
+	if not _mqtt_connected:
+		return
 	_mqtt.sim_time_ms = _clock.now_ms
-	while not _result_outbox.is_empty() and _mqtt_connected:
-		var item: Dictionary = _result_outbox[0]
+	var sent := 0
+	for item in _pending_results_in_order():
+		if int(item.get("packet_id", 0)) != 0:
+			continue
 		var che_id = int(item.get("che_id", 0))
 		var che: Dictionary = _ches.get(che_id, {"pk": che_id})
 		if not _mqtt.publish_command_result(che, item.get("metrics", [])):
 			break
-		_result_outbox.pop_front()
+		var packet_id = int(_mqtt.last_result_packet_id)
+		if packet_id <= 0:
+			# Transport without PUBACK (QoS 0): nothing more to wait for.
+			item["acked"] = true
+		else:
+			# A wrapped packet id still held by an older unacked entry: that
+			# entry's PUBACK can no longer be told apart, so resend it later.
+			for other in _result_outbox:
+				if not is_same(other, item) and not bool(other.get("acked", false)) and int(other.get("packet_id", 0)) == packet_id:
+					other["packet_id"] = 0
+			item["packet_id"] = packet_id
 		sent += 1
 	if sent > 0:
 		_save_runtime_state()
 
 
+## Unacked journal entries sorted by Sim/EventSeq (stable for equal seq).
+func _pending_results_in_order() -> Array:
+	var pending: Array = []
+	for item in _result_outbox:
+		if not bool(item.get("acked", false)):
+			pending.append(item)
+	pending.sort_custom(func(a, b): return int(a.get("seq", 0)) < int(b.get("seq", 0)))
+	return pending
+
+
+func pending_result_count() -> int:
+	return _pending_results_in_order().size()
+
+
+## PUBACK from the broker: the matching in-flight entry is acked.
+func _on_result_acknowledged(packet_id: int):
+	if packet_id <= 0:
+		return
+	for item in _result_outbox:
+		if not bool(item.get("acked", false)) and int(item.get("packet_id", 0)) == packet_id:
+			item["acked"] = true
+			_save_runtime_state()
+			return
+
+
+func _on_broker_lost():
+	_mqtt_connected = false
+	_requeue_unacked_results()
+
+
+## Connection lost (or process restarted): in-flight entries never got a PUBACK
+## on that connection, so they are resent after the next connect.
+func _requeue_unacked_results():
+	var changed := false
+	for item in _result_outbox:
+		if not bool(item.get("acked", false)) and int(item.get("packet_id", 0)) != 0:
+			item["packet_id"] = 0
+			changed = true
+	if changed:
+		_save_runtime_state()
+
+
+## A redelivered DCMD replays the recorded result with the same Result/Id and
+## Sim/EventSeq: its journal entry goes back to pending.
 func _replay_command_result(command_id: String):
 	var outcome: Dictionary = _command_outcomes[command_id]
 	if outcome.get("metrics") is Array:
-		_result_outbox.append({"che_id": int(outcome.get("che_id", 0)), "metrics": outcome.metrics})
+		var result_id = str(outcome.get("result_id", ""))
+		var entry = null
+		for item in _result_outbox:
+			if str(item.get("result_id", "")) == result_id and not result_id.is_empty():
+				entry = item
+				break
+		if entry == null:
+			entry = {
+				"seq": _metric_value(outcome.metrics, "Sim/EventSeq", 0), "che_id": int(outcome.get("che_id", 0)),
+				"result_id": result_id, "metrics": outcome.metrics, "packet_id": 0, "acked": false,
+			}
+			_result_outbox.append(entry)
+		entry["acked"] = false
+		entry["packet_id"] = 0
+		_save_runtime_state()
 		_flush_result_outbox()
 		return
 	_publish_command_result(
@@ -808,6 +892,13 @@ func _replay_command_result(command_id: String):
 		int(outcome.get("position_id", 0)), str(outcome.get("reason", "")),
 		str(outcome.get("result_id", ""))
 	)
+
+
+static func _metric_value(metrics: Array, name: String, fallback):
+	for metric in metrics:
+		if metric is Dictionary and str(metric.get("name", "")) == name:
+			return metric.get("value", fallback)
+	return fallback
 
 
 func _load_runtime_state():
@@ -855,7 +946,17 @@ func _restore_runtime_state():
 		_command_outcomes = saved_outcomes
 	var saved_outbox = _persisted_runtime_state.get("result_outbox", [])
 	if saved_outbox is Array:
-		_result_outbox = saved_outbox
+		_result_outbox = []
+		for saved in saved_outbox:
+			if not saved is Dictionary:
+				continue
+			var item: Dictionary = saved
+			# JSON turns ints into floats; nothing was acked on the new connection.
+			item["seq"] = int(item.get("seq", _metric_value(item.get("metrics", []), "Sim/EventSeq", 0)))
+			item["che_id"] = int(item.get("che_id", 0))
+			item["acked"] = bool(item.get("acked", false))
+			item["packet_id"] = 0
+			_result_outbox.append(item)
 	_persisted_runtime_state.clear()
 
 

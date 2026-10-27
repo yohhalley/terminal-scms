@@ -5,6 +5,8 @@ signal broker_checked(ok: bool, message: String)
 signal message_published(message_type: String, device_id: String)
 signal message_rejected(message_type: String, device_id: String, reason: String)
 signal sparkplug_command_received(topic: String, message_type: String, device_id: String, metrics: Dictionary)
+## PUBACK for a QoS 1 publish (packet id as returned by the last publish).
+signal publish_acknowledged(packet_id: int)
 
 const SPARKPLUG_MANAGER = preload("res://source/sparkplugB/SparkPlugMQTTManager.gd")
 const SIM_IDS = preload("res://source/headless/SimIds.gd")
@@ -21,6 +23,9 @@ var session_id := ""
 ## Headless sessions set the sim clock (ms) before each publish; it is added
 ## as Sim/TimeMs to DBIRTH/DDATA so OES has a sim-time source. -1 = not set.
 var sim_time_ms := -1
+## MQTT packet id of the last successful publish_command_result (QoS 1), 0 when
+## the transport gives none. The caller keeps the result until that PUBACK.
+var last_result_packet_id := 0
 
 
 func _ready():
@@ -32,6 +37,7 @@ func _ready():
 	_manager.broker_connection_failed.connect(_on_connection_failed)
 	_manager.publish_failed.connect(_on_publish_failed)
 	_manager.message_received.connect(_on_message_received)
+	_manager.publish_acknowledged.connect(_on_publish_acknowledged)
 	_connect_timeout = Timer.new()
 	_connect_timeout.one_shot = true
 	_connect_timeout.wait_time = CONNECT_TIMEOUT_SECONDS
@@ -151,6 +157,7 @@ func publish_che_data(che: Dictionary) -> bool:
 
 
 func publish_command_result(che: Dictionary, metrics: Array) -> bool:
+	last_result_packet_id = 0
 	var device_id = _device_id(che)
 	if not _can_publish("DDATA", device_id):
 		return false
@@ -163,8 +170,14 @@ func publish_command_result(che: Dictionary, metrics: Array) -> bool:
 	)
 	if not published:
 		return false
+	var packet_id = _manager.get("last_packet_id")
+	last_result_packet_id = int(packet_id) if packet_id != null else 0
 	message_published.emit("DDATA", device_id)
 	return true
+
+
+func _on_publish_acknowledged(packet_id: int):
+	publish_acknowledged.emit(packet_id)
 
 
 func publish_che_death(che: Dictionary) -> bool:
