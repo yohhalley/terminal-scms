@@ -331,6 +331,7 @@ class EquipmentCommandViewSet(
                 serializer.validated_data["event"],
                 position_id=serializer.validated_data.get("position_id"),
                 reason=serializer.validated_data.get("reason", ""),
+                notify_che=True,
             )
         except DjangoValidationError as exc:
             raise ValidationError(_service_error(exc)) from exc

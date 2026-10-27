@@ -21,6 +21,21 @@ ALLOWED_ENVIRONMENT = {
     "SIMULATOR_CONFIG_CHECKSUM",
     "SIMULATOR_VERSION",
     "SIMULATOR_TIME_SCALE",
+    "SIMULATOR_DEFAULT_SPEED_MPS",
+    # Deterministic simulation settings read by the headless Godot simulator
+    # (TCL-014a). Explicit names keep the allowlist closed; SIM_* aliases are
+    # for local runs only and are not passed through.
+    "SIMULATOR_SEED",
+    "SIMULATOR_RUN_ID",
+    "SIMULATOR_FIXED_STEP_MS",
+    "SIMULATOR_START_EPOCH_MS",
+    "SIMULATOR_DEVICE_ID_MODE",
+    "SIMULATOR_QC_WAIT_MIN_S",
+    "SIMULATOR_QC_WAIT_MAX_S",
+    "SIMULATOR_QC_HOLD_WAIT_MIN_S",
+    "SIMULATOR_QC_HOLD_WAIT_MAX_S",
+    "SIMULATOR_TT_NO_SHOW_TIMEOUT_S",
+    "SIMULATOR_COMMAND_TTL_S",
     "MQTT_HOST",
     "MQTT_PORT",
     "MQTT_USERNAME",

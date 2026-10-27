@@ -170,6 +170,17 @@ class SimulationSession(models.Model):
     sparkplug_bdseq = models.PositiveBigIntegerField(blank=True, null=True)
     sparkplug_last_sequence = models.PositiveSmallIntegerField(blank=True, null=True)
     sequence_gap_count = models.PositiveIntegerField(default=0)
+    # TCL-003a/TCL-028: run identity from NBIRTH (D-014 tie-break, contract §2.1, R4.4).
+    seed = models.BigIntegerField(blank=True, null=True)
+    start_epoch_ms = models.BigIntegerField(blank=True, null=True)
+    # Highest Sim/TimeMs seen on any NDATA/DDATA (results and periodic telemetry);
+    # anchor for sim-time command expiry.
+    last_sim_time_ms = models.BigIntegerField(default=0)
+    # Sim/Timing/CommandTtlS from NBIRTH (env SIMULATOR_COMMAND_TTL_S on the simulator).
+    command_ttl_s = models.PositiveIntegerField(blank=True, null=True)
+    # Sim/Timing/TtNoShowTimeoutS from NBIRTH (Godot owns the no-show timing, T-006).
+    tt_no_show_timeout_s = models.PositiveIntegerField(blank=True, null=True)
+    stale_message_count = models.PositiveIntegerField(default=0)
     last_node_birth_at = models.DateTimeField(blank=True, null=True)
     last_node_death_at = models.DateTimeField(blank=True, null=True)
     failure_reason = models.TextField(blank=True)
@@ -224,6 +235,7 @@ class ExecutionOrder(models.Model):
         validators=[MinValueValidator(1), MaxValueValidator(999)],
     )
     container_visit_id = models.PositiveBigIntegerField(blank=True, null=True)
+    container_number = models.CharField(max_length=11, blank=True)
     from_position_id = models.PositiveBigIntegerField(blank=True, null=True)
     to_position_id = models.PositiveBigIntegerField(blank=True, null=True)
     released_at = models.DateTimeField()
@@ -365,6 +377,8 @@ class EquipmentState(models.Model):
     last_birth_at = models.DateTimeField(blank=True, null=True)
     last_death_at = models.DateTimeField(blank=True, null=True)
     raw_state = models.JSONField(default=dict)
+    # D-014/T-007: Event/TimeMs (sim-based epoch ms) at which the CHE last became free of orders.
+    idle_since_event_ms = models.BigIntegerField(blank=True, null=True)
 
     class Meta:
         ordering = ["site_id", "name"]
@@ -441,6 +455,8 @@ class EquipmentCommand(models.Model):
     payload = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(blank=True, null=True)
+    # TCL-028: Command/ExpiresAtMs on the Sim/TimeMs clock (deterministic on rerun).
+    expires_at_sim_ms = models.BigIntegerField(blank=True, null=True)
     published_at = models.DateTimeField(blank=True, null=True)
     acknowledged_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)
@@ -464,13 +480,113 @@ class OutboxEvent(models.Model):
 
 
 class CommandResultReceipt(models.Model):
+    APPLIED = "applied"
+    INFORMATIONAL = "informational"
+    REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (APPLIED, "Applied"),
+        (INFORMATIONAL, "Informational"),
+        (REJECTED, "Rejected"),
+    ]
+
     result_id = models.UUIDField(primary_key=True, editable=False)
     command = models.ForeignKey(
         EquipmentCommand, related_name="result_receipts", on_delete=models.CASCADE,
     )
+    simulation_session = models.ForeignKey(
+        SimulationSession,
+        related_name="result_receipts",
+        on_delete=models.PROTECT,
+        blank=True,
+        null=True,
+    )
     event = models.CharField(max_length=40)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=APPLIED)
+    reason = models.CharField(max_length=120, blank=True)
+    event_seq = models.BigIntegerField(blank=True, null=True)
+    sim_time_ms = models.BigIntegerField(blank=True, null=True)
     raw_metrics = models.JSONField(default=dict)
     received_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["received_at"]
+
+
+class HandoffExceptionReason(models.TextChoices):
+    """D-017: why a hand-off ended by exception. Extend by adding members.
+
+    ``Handoff.exception_reason`` also stores the B-2 cancel reasons
+    (LEG_FAILED, SESSION_STOPPED, ...) for ``cancelled`` hand-offs, so the
+    field itself carries no ``choices``.
+    """
+
+    SIMULATOR_FAILURE = "SIMULATOR_FAILURE", "Simulator failure"
+
+
+class Handoff(models.Model):
+    """One CHE-to-CHE container transfer (T-006, contract rev 6 Q18/Q21).
+
+    OES is the single writer. The giver and receiver both report
+    ``handoff_completed``; the first valid report transfers custody, repeats
+    are idempotent and contradicting reports are flagged, never re-applied.
+    """
+
+    PENDING = "pending"
+    TRANSFERRED = "transferred"
+    EXCEPTION = "exception"
+    CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (PENDING, "Pending"),
+        (TRANSFERRED, "Transferred"),
+        (EXCEPTION, "Exception"),
+        (CANCELLED, "Cancelled"),
+    ]
+    ACTIVE_STATES = [PENDING]
+    ExceptionReason = HandoffExceptionReason
+
+    GIVER = "giver"
+    RECEIVER = "receiver"
+
+    handoff_id = models.UUIDField(primary_key=True, editable=False)
+    simulation_session = models.ForeignKey(
+        SimulationSession, related_name="handoffs", on_delete=models.PROTECT,
+    )
+    order = models.ForeignKey(ExecutionOrder, related_name="handoffs", on_delete=models.CASCADE)
+    giver_operation = models.ForeignKey(
+        ExecutionOperation, related_name="outgoing_handoffs", on_delete=models.CASCADE,
+    )
+    receiver_operation = models.ForeignKey(
+        ExecutionOperation, related_name="incoming_handoffs", on_delete=models.CASCADE,
+    )
+    giver_equipment = models.ForeignKey(
+        EquipmentState, related_name="given_handoffs", on_delete=models.RESTRICT,
+    )
+    receiver_equipment = models.ForeignKey(
+        EquipmentState, related_name="received_handoffs", on_delete=models.RESTRICT,
+    )
+    container_visit_id = models.PositiveBigIntegerField(blank=True, null=True)
+    container_number = models.CharField(max_length=11, blank=True)
+    transfer_position_id = models.PositiveBigIntegerField(blank=True, null=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=PENDING)
+    giver_result_id = models.UUIDField(blank=True, null=True)
+    receiver_result_id = models.UUIDField(blank=True, null=True)
+    transferred_event_ms = models.BigIntegerField(blank=True, null=True)
+    exception_event_ms = models.BigIntegerField(blank=True, null=True)
+    exception_reason = models.CharField(max_length=40, blank=True)
+    exception_detail = models.CharField(max_length=200, blank=True)
+    conflict_count = models.PositiveIntegerField(default=0)
+    last_conflict = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["giver_operation", "receiver_operation"],
+                name="one_handoff_per_operation_pair",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Handoff {self.handoff_id} ({self.status})"

@@ -78,6 +78,21 @@ class MQTTConnectionTests(SimpleTestCase):
             retain=True,
         )
 
+    @override_settings(MQTT_CLIENT_ID="oes")
+    @patch("execution.mqtt.mqtt.Client")
+    def test_consumer_session_is_persistent_mqtt311_with_fixed_client_id(self, client_class):
+        """TCL-028 / Q19: clean session false, fixed client id, MQTT 3.1.1."""
+        from paho.mqtt import client as paho
+
+        create_client("consumer", host_application=True, persistent_session=True)
+        kwargs = client_class.call_args.kwargs
+        self.assertEqual(kwargs["client_id"], "oes-consumer")
+        self.assertEqual(kwargs["protocol"], paho.MQTTv311)
+        self.assertIs(kwargs["clean_session"], False)
+
+        create_client("outbox")
+        self.assertIs(client_class.call_args.kwargs["clean_session"], True)
+
     @override_settings(SPARKPLUG_HOST_ID="PRIMARY-OES")
     @patch("execution.management.commands.run_mqtt_consumer.connect")
     @patch("execution.management.commands.run_mqtt_consumer.create_client")
@@ -94,7 +109,9 @@ class MQTTConnectionTests(SimpleTestCase):
         client.loop_forever.side_effect = run_loop
         call_command("run_mqtt_consumer", stdout=StringIO())
 
-        create.assert_called_once_with("consumer", host_application=True)
+        create.assert_called_once_with(
+            "consumer", host_application=True, persistent_session=True,
+        )
         connect.assert_called_once_with(client, retry=True)
         online, offline = client.publish.call_args_list
         self.assertEqual(online.args, ("spBv1.0/STATE/PRIMARY-OES", "ONLINE"))
@@ -285,9 +302,20 @@ class ExecutionServiceTests(TestCase):
         self.assertEqual(command.payload["data"]["destination_longitude"], -102.1494)
         self.assertEqual(command.simulation_session, self.session)
         self.assertTrue(command.topic.endswith("/DCMD/SCMS_ENTERPRISE_A_SITE_A/CHE_17"))
-        self.assertIsNotNone(command.expires_at)
+        # TCL-028: expiry on the Sim/TimeMs clock, default 600 s of sim time.
+        self.assertIsNone(command.expires_at)
+        self.assertEqual(command.expires_at_sim_ms, 600_000)
         self.assertTrue(OutboxEvent.objects.get(event_id=command.command_id).payload_bytes)
         self.assertEqual(OutboxEvent.objects.filter(event_id=command.command_id).count(), 1)
+
+    def test_execution_events_carry_terminal_id_for_minitos(self):
+        """B3 (TCL-005): MiniTOS rejects an execution event without terminal.id."""
+        dispatch_next_operation(self.order.pk)
+        event = OutboxEvent.objects.get(schema="scms.execution.event.v1")
+        self.assertEqual(
+            event.payload["terminal"],
+            {"id": self.site.source_location_id, "code": self.site.code},
+        )
 
     def test_command_events_complete_operation_and_release_equipment(self):
         assignment = dispatch_next_operation(self.order.pk)
@@ -799,6 +827,7 @@ class SparkplugRuntimeTests(TestCase):
             encode_payload([
                 {"name": "Identity/Id", "type": "Int64", "value": 17},
                 {"name": "Identity/Name", "type": "String", "value": "SC01"},
+                {"name": "Session/Id", "type": "String", "value": str(self.session.pk)},
                 {"name": "State/PoweredOn", "type": "Boolean", "value": True},
                 {"name": "State/Working", "type": "Boolean", "value": False},
                 {"name": "State/IsAvailable", "type": "Boolean", "value": True},
@@ -862,6 +891,7 @@ class SparkplugRuntimeTests(TestCase):
         process_sparkplug_message(
             self.device_topic_prefix.format("DDATA"),
             encode_payload([
+                {"name": "Session/Id", "type": "String", "value": str(self.session.pk)},
                 {"name": "State/PoweredOn", "type": "Boolean", "value": False},
                 {"name": "State/Working", "type": "Boolean", "value": False},
                 {"name": "State/IsAvailable", "type": "Boolean", "value": False},
@@ -881,6 +911,7 @@ class SparkplugRuntimeTests(TestCase):
         command = assignment.commands.get()
         result_id = uuid.uuid4()
         result_metrics = [
+            {"name": "Session/Id", "type": "String", "value": str(self.session.pk)},
             {"name": "State/PoweredOn", "type": "Boolean", "value": True},
             {"name": "State/Working", "type": "Boolean", "value": False},
             {"name": "State/IsAvailable", "type": "Boolean", "value": True},

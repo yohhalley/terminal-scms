@@ -8,11 +8,18 @@ from paho.mqtt import client as mqtt
 logger = logging.getLogger(__name__)
 
 
-def create_client(suffix, *, host_application=False):
+def create_client(suffix, *, host_application=False, persistent_session=False):
+    """Create a paho client with a fixed id ``<MQTT_CLIENT_ID>-<suffix>``.
+
+    TCL-028 / contract Q19 (rev 6.1): the consumer keeps a persistent MQTT 3.1.1
+    session (clean session false, fixed client id) so QoS 1 results published
+    while it is down are queued by the broker. MQTT 5 session expiry is backlog.
+    """
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"{settings.MQTT_CLIENT_ID}-{suffix}",
         protocol=mqtt.MQTTv311,
+        clean_session=not persistent_session,
     )
     if settings.MQTT_USERNAME:
         client.username_pw_set(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)

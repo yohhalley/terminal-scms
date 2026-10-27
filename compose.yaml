@@ -50,7 +50,13 @@ x-oes: &oes
     SPARKPLUG_HOST_ID: ${SPARKPLUG_HOST_ID:-TERMINAL-OES}
     SITE_UNS_ROOT: scms/v2
     EQUIPMENT_STALE_SECONDS: "60"
-    EQUIPMENT_COMMAND_TTL_SECONDS: "30"
+    # TL review S-7: command TTL is on the sim clock (ExpiresAtMs = Sim/TimeMs + TTL).
+    EQUIPMENT_COMMAND_TTL_SIM_SECONDS: ${EQUIPMENT_COMMAND_TTL_SIM_SECONDS:-600}
+    # D-015/D-016: device ids are CHE names, and a fixed seed and start epoch
+    # make a rerun reproducible. Override per run in .env.
+    SIMULATOR_DEVICE_ID_MODE: name
+    SIMULATOR_SEED: ${SIMULATOR_SEED:-1}
+    SIMULATOR_START_EPOCH_MS: ${SIMULATOR_START_EPOCH_MS:-1792886400000}
     RUN_MIGRATIONS: "true"
   depends_on:
     oes-db:

@@ -103,4 +103,28 @@ MINITOS_URL = os.getenv("MINITOS_URL", "http://localhost:8000")
 MINITOS_OES_TOKEN = os.getenv("MINITOS_OES_TOKEN", OES_API_TOKEN)
 MINITOS_HTTP_TIMEOUT_SECONDS = float(os.getenv("MINITOS_HTTP_TIMEOUT_SECONDS", "10"))
 EQUIPMENT_STALE_SECONDS = int(os.getenv("EQUIPMENT_STALE_SECONDS", "60"))
-EQUIPMENT_COMMAND_TTL_SECONDS = int(os.getenv("EQUIPMENT_COMMAND_TTL_SECONDS", "30"))
+# TCL-028: command expiry is measured on the simulator clock (Sim/TimeMs), not wall time.
+# Fallback only: the simulator's NBIRTH Sim/Timing/CommandTtlS wins when present.
+EQUIPMENT_COMMAND_TTL_SIM_SECONDS = int(os.getenv("EQUIPMENT_COMMAND_TTL_SIM_SECONDS", "600"))
+# TCL-028: deterministic simulator settings forwarded in the runner claim
+# environment when set on OES (non-secret tuning values only). Must stay a
+# subset of apps/simulator-runner/runner.py ALLOWED_ENVIRONMENT.
+SIMULATOR_SIM_SETTING_NAMES = (
+    "SIMULATOR_SEED",
+    "SIMULATOR_RUN_ID",
+    "SIMULATOR_FIXED_STEP_MS",
+    "SIMULATOR_START_EPOCH_MS",
+    "SIMULATOR_DEVICE_ID_MODE",
+    "SIMULATOR_QC_WAIT_MIN_S",
+    "SIMULATOR_QC_WAIT_MAX_S",
+    "SIMULATOR_QC_HOLD_WAIT_MIN_S",
+    "SIMULATOR_QC_HOLD_WAIT_MAX_S",
+    "SIMULATOR_TT_NO_SHOW_TIMEOUT_S",
+    "SIMULATOR_COMMAND_TTL_S",
+    "SIMULATOR_DEFAULT_SPEED_MPS",
+)
+SIMULATOR_SIM_SETTINGS = {
+    name: os.environ[name].strip()
+    for name in SIMULATOR_SIM_SETTING_NAMES
+    if os.environ.get(name, "").strip()
+}
