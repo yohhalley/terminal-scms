@@ -54,6 +54,9 @@ DISPATCH_OPERATION_NOT_PLANNABLE = "operation_not_plannable"
 DISPATCH_NO_SIMULATION = "no_simulation"
 DISPATCH_NO_EQUIPMENT = "no_equipment"
 DISPATCH_EQUIPMENT_INVALID = "equipment_invalid"
+# TL TCL-028: the failure_reason / leg_failed ``reason`` of a failed leg whose
+# result carries no Command/Result/Reason (missing, null or blank).
+DEFAULT_FAILURE_REASON = "UNSPECIFIED"
 # QA M1: a request body that fails validation (HTTP 400, with DRF ``errors``).
 DISPATCH_INVALID_REQUEST = "invalid_request"
 # TL review S-1: a leg is in flight, but its session is stopped or offline, so
@@ -790,6 +793,11 @@ def apply_command_event(
 
     failed = event == "failed"
     cancelled = event == "cancelled"
+    # §3.2c: the code is kept as sent (not stripped); only a missing, null or
+    # blank code on a failure becomes the default.
+    reason = "" if reason is None else str(reason)
+    if failed and not reason.strip():
+        reason = DEFAULT_FAILURE_REASON
     if cancelled and notify_che and command.simulation_session_id:
         queue_cancel_dcmd(command, reason=reason)
     command.status = (

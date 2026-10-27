@@ -90,6 +90,16 @@ Body shapes:
 - 409 and 400 `equipment_invalid`: `{"code": "...", "detail": "..."}`.
 - 400 `invalid_request`: `{"code": "invalid_request", "detail": "Invalid request body: <field>: <message>", "errors": {"<field>": ["<message>"]}}`.
 
+### Godot result handling (contract rev 9.3 §3.2c)
+
+| Result | OES behaviour |
+|---|---|
+| `failed`, any `Command/Result/Reason` | Generic leg failure. The code is stored as sent in `failure_reason` and sent as `leg_failed` `data.reason`; unknown codes are not rejected. |
+| `failed`, Reason missing, null or blank | Same, with the default code **`UNSPECIFIED`**. |
+| Any result with `Command/Result/Detail` | Stored as `failure_detail` (failed or cancelled legs only) and sent as `data.detail`. A null or whitespace-only Detail is empty and left out. |
+| `failed` or `cancelled` with a mismatching `Command/Result/ContainerNumber` | Applied (the leg fails or is cancelled, so the command doesn't stay live). The reported number stays in the receipt's `raw_metrics`, `; container mismatch: reported X, expected Y` is appended to `failure_detail`, and a warning is logged. |
+| Any other result with a mismatching number (`acknowledged`, `started`, `completed`, `handoff_completed`, …) | Rejected as `container_number_mismatch`; nothing changes. |
+
 See [docs/UNS_CONTRACT.md](docs/UNS_CONTRACT.md) for MQTT topics and payloads.
 
 Manual console changes are recorded as debug overrides. A subsequent simulator

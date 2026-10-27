@@ -160,6 +160,11 @@ def _optional_int(metrics, name):
         return None
 
 
+# Terminal results applied despite a container-number mismatch (flagged in
+# failure_detail); every other result with a mismatch is rejected.
+MISMATCH_APPLIED_EVENTS = frozenset({"failed", "cancelled"})
+
+
 def _route_result(command, event, metrics, result_id):
     """Apply one result. Returns the receipt status; raises ``ValidationError`` to reject."""
     event_ms = _optional_int(metrics, "Event/TimeMs")
@@ -178,16 +183,17 @@ def _route_result(command, event, metrics, result_id):
     # QA M2: a Sparkplug null is None, not "None"; whitespace-only is empty.
     detail = str(metrics.get("Command/Result/Detail") or "").strip()
     if expected_number and reported_number and reported_number != expected_number:
-        if event != "failed":
-            # TL review N-4: this includes ``cancelled``. A cancel is terminal and
-            # Godot won't resend it, so a mismatching one leaves the command live
-            # in OES until it expires (agreed rule for S1: only ``failed`` passes).
+        if event not in MISMATCH_APPLIED_EVENTS:
+            # acknowledged / started / completed / handoff_completed / ... stay
+            # strictly rejected: a success must be about the order's container.
             raise ResultRejected("container_number_mismatch")
-        # TL TCL-028: a failure is still a failure. Apply it, keep the reported
+        # TL TCL-028: a failure is still a failure. TL review N-4: so is a
+        # cancel, which is terminal and never resent; rejecting it would leave
+        # the command live in OES until expiry. Apply it, keep the reported
         # number (receipt raw_metrics + failure_detail) and flag the mismatch.
         logger.warning(
-            "Failed result %s for command %s reports container %s, order expects %s.",
-            result_id, command.pk, reported_number, expected_number,
+            "%s result %s for command %s reports container %s, order expects %s.",
+            event.capitalize(), result_id, command.pk, reported_number, expected_number,
         )
         note = f"container mismatch: reported {reported_number}, expected {expected_number}"
         detail = f"{detail}; {note}" if detail else note
@@ -208,7 +214,7 @@ def _route_result(command, event, metrics, result_id):
         command.pk,
         event,
         position_id=position_id or None,
-        reason=str(metrics.get("Command/Result/Reason", "")),
+        reason=str(metrics.get("Command/Result/Reason") or ""),
         detail=detail,
         event_ms=event_ms,
         source=metrics.get("Command/Result/Source") or None,

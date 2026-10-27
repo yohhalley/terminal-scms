@@ -442,6 +442,31 @@ class GodotFailureCodeTests(DispatchNextApiTestBase):
         failed = OutboxEvent.objects.get(payload__data__event="leg_failed")
         self.assertEqual(failed.payload["data"]["detail"], "crane fault")
 
+    def test_failed_without_reason_gets_the_unspecified_default(self):
+        # TL TCL-028: missing, null or blank Command/Result/Reason → UNSPECIFIED.
+        for order_id, extra in ((61, {}), (62, {"Command/Result/Reason": None}),
+                                (63, {"Command/Result/Reason": "  "})):
+            with self.subTest(reason=repr(extra.get("Command/Result/Reason", "<missing>"))):
+                OutboxEvent.objects.all().delete()
+                order = self.release(order_id)
+                self.assertEqual(self.post(order.pk).status_code, 201)
+                receipt = self.result(self.command_for(self.qc), "failed", 0, **extra)
+                self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+                operation = order.operations.get(sequence=1)
+                self.assertEqual(operation.failure_reason, "UNSPECIFIED")
+                self.assertEqual(operation.assignment.failure_reason, "UNSPECIFIED")
+                order.refresh_from_db()
+                self.assertEqual(order.failure_reason, "UNSPECIFIED")
+                failed = OutboxEvent.objects.get(payload__data__event="leg_failed")
+                self.assertEqual(failed.payload["data"]["reason"], "UNSPECIFIED")
+
+    def test_given_reason_is_kept_as_sent(self):
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        self.result(self.command_for(self.qc), "failed", 0, **{
+            "Command/Result/Reason": " Che_Busy-X ",
+        })
+        self.assertEqual(self.order.operations.get(sequence=1).failure_reason, " Che_Busy-X ")
+
     def test_operator_failed_event_via_api_records_detail(self):
         self.assertEqual(self.post(self.order.pk).status_code, 201)
         qc_cmd = self.command_for(self.qc)
@@ -534,6 +559,35 @@ class FailedResultContainerMismatchTests(DispatchNextApiTestBase):
             self.order.operations.get(sequence=1).failure_detail,
             f"container mismatch: reported TGHU0000000, expected {CONTAINER}",
         )
+
+    def test_cancelled_result_with_mismatching_number_is_applied_and_flagged(self):
+        # TL TCL-028 (review N-4): a cancel is terminal like a failure; apply it.
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        tt_cmd = self.command_for(self.chosen_tt())
+        with self.assertLogs("execution", level="WARNING") as logs:
+            receipt = self.result(tt_cmd, "cancelled", 3_000, **{
+                "Command/Result/Reason": "operator_abort",
+                "Command/Result/Detail": "aborted",
+                "Command/Result/ContainerNumber": "TGHU0000000",
+            })
+        self.assertTrue(any(
+            "Cancelled result" in line and "TGHU0000000" in line for line in logs.output
+        ))
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        self.assertEqual(receipt.raw_metrics["Command/Result/ContainerNumber"], "TGHU0000000")
+        tt_cmd.refresh_from_db()
+        self.assertEqual(tt_cmd.status, EquipmentCommand.CANCELLED)  # not left live
+        expected = f"aborted; container mismatch: reported TGHU0000000, expected {CONTAINER}"
+        operation = self.order.operations.get(sequence=2)
+        self.assertEqual(operation.status, ExecutionOperation.CANCELLED)
+        self.assertEqual(operation.failure_detail, expected)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, ExecutionOrder.CANCELLED)
+        self.assertEqual(self.order.failure_detail, expected)
+        cancelled = OutboxEvent.objects.get(payload__data__event="order_cancelled")
+        self.assertEqual(cancelled.payload["data"]["detail"], expected)
+        # The paired QC leg is cancelled with the hand-off (TL review B-2).
+        self.assertEqual(Handoff.objects.get().status, Handoff.CANCELLED)
 
     def test_success_results_with_mismatching_number_stay_rejected(self):
         self.assertEqual(self.post(self.order.pk).status_code, 201)
