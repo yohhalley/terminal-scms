@@ -10,19 +10,20 @@ extends SceneTree
 # (Command/Type = "cancel", Command/CancelCommandId); the shape is NOT agreed yet
 # (BE review B4), so update it here when the contract is fixed.
 #
-# Known-bug convention (same as the Python known_bug marker):
-# - the B10 checks fail today -> prints EXPECTED FAILURE and exits 0, so
-#   `make test-godot` stays green on main;
-# - the B10 checks pass       -> prints UNEXPECTED SUCCESS and exits 1: remove
-#   KNOWN_BUG below in the change that fixes B10;
-# - a precondition fails or the script errors -> exits 1 as usual.
-# Set SCMS_CONTRACT_STRICT=1 to treat the known bug as a plain failure.
+# B10 is fixed by TCL-014a (#15, HeadlessSimulator._handle_cancel). The checks
+# below are plain assertions: any B10 regression prints "B10 regression: ..." and
+# exits 1.
+#
+# The DCMDs are addressed by the CHE name (SC01): #15 matches the topic's device
+# id against SimIds.device_id() (name mode, the default). The old CHE_17 form was
+# rejected with unknown_command_target before the cancel was ever exercised.
 
 const HeadlessSimulator = preload("res://source/headless/HeadlessSimulator.gd")
-const KNOWN_BUG := "B10: Godot keeps a cancelled command, so the CHE rejects its next command"
+const SimIds = preload("res://source/headless/SimIds.gd")
+const CHE_ID := 17
+const CHE_NAME := "SC01"
 
 var _failed := false
-var _known_bug_failures: Array = []
 
 
 class FakeSparkplugManager:
@@ -57,25 +58,14 @@ func _initialize():
 func _exit_code() -> int:
 	if _failed:
 		return 1
-	var strict = not OS.get_environment("SCMS_CONTRACT_STRICT").is_empty()
-	if KNOWN_BUG.is_empty():
-		if not _known_bug_failures.is_empty():
-			return 1
-		print("Cancel regression checks passed")
-		return 0
-	if _known_bug_failures.is_empty():
-		push_error("UNEXPECTED SUCCESS: %s is fixed; remove KNOWN_BUG in test_cancel_regression.gd" % KNOWN_BUG)
-		return 1
-	if strict:
-		return 1
-	print("EXPECTED FAILURE (KNOWN BUG %s): %s" % [KNOWN_BUG, "; ".join(_known_bug_failures)])
+	print("Cancel regression checks passed")
 	return 0
 
 
 func _command(simulator, command_id: String, extra: Dictionary) -> Dictionary:
 	var metrics = {
 		"Command/Id": command_id,
-		"Command/CheId": 17,
+		"Command/CheId": CHE_ID,
 		"Command/SessionId": simulator._session_id,
 		"Command/SiteId": simulator._site_id,
 		"Command/ConfigurationRevision": 7,
@@ -103,34 +93,50 @@ func _test_next_command_after_cancel_is_accepted():
 	simulator._mqtt._manager = fake
 	simulator._mqtt._connected = true
 	simulator._mqtt_connected = true
-	simulator._ches = {17: {
-		"pk": 17, "name": "SC01", "powered_on": true, "working": false,
+	simulator._ches = {CHE_ID: {
+		"pk": CHE_ID, "name": CHE_NAME, "powered_on": true, "working": false,
 		"is_available": true, "is_dispatched": false, "is_in_maintenance": false,
 		"latitude": 41.35, "longitude": 2.17,
 	}}
-	var topic = "spBv1.0/GROUP/DCMD/NODE/CHE_17"
+	# Name-based device id (#15 default), set explicitly so the test doesn't
+	# depend on SIMULATOR_DEVICE_ID_MODE in the environment.
+	var previous_name_mode = SimIds.use_che_name
+	SimIds.use_che_name = true
+	var device_id = SimIds.device_id_for(CHE_ID, simulator._ches)
+	_assert(device_id == CHE_NAME, "Precondition: device id is the CHE name %s, got %s" % [CHE_NAME, device_id])
+	var topic = "spBv1.0/GROUP/DCMD/NODE/%s" % device_id
 
 	var first_id = "33333333-3333-4333-8333-333333333333"
-	simulator._on_sparkplug_command(topic, "DCMD", "CHE_17", _command(simulator, first_id, _leg()))
-	_assert(simulator._active_commands.has(17), "Precondition: command A must become active on CHE 17")
+	simulator._on_sparkplug_command(topic, "DCMD", device_id, _command(simulator, first_id, _leg()))
+	_assert(simulator._active_commands.has(CHE_ID), "Precondition: command A must become active on %s" % CHE_NAME)
 
 	var cancel_id = "77777777-7777-4777-8777-777777777777"
-	simulator._on_sparkplug_command(topic, "DCMD", "CHE_17", _command(simulator, cancel_id, {
+	simulator._on_sparkplug_command(topic, "DCMD", device_id, _command(simulator, cancel_id, {
 		"Command/Type": "cancel", "Command/CancelCommandId": first_id,
 	}))
 
+	var cancelled: Dictionary = simulator._command_outcomes.get(first_id, {})
+	_b10_check(
+		str(cancelled.get("event", "")) == "cancelled" and not (
+			simulator._active_commands.has(CHE_ID)
+			and str(simulator._active_commands[CHE_ID].command_id) == first_id
+		),
+		"cancelled command %s was not dropped: event=%s" % [first_id, cancelled.get("event", "")]
+	)
+
 	var second_id = "55555555-5555-4555-8555-555555555555"
-	simulator._on_sparkplug_command(topic, "DCMD", "CHE_17", _command(simulator, second_id, _leg()))
+	simulator._on_sparkplug_command(topic, "DCMD", device_id, _command(simulator, second_id, _leg()))
 	var outcome: Dictionary = simulator._command_outcomes.get(second_id, {})
-	_known_bug_check(
+	_b10_check(
 		str(outcome.get("event", "")) != "failed",
 		"next DCMD after a cancel is rejected: event=%s reason=%s" % [outcome.get("event", ""), outcome.get("reason", "")]
 	)
-	_known_bug_check(
-		simulator._active_commands.has(17) and str(simulator._active_commands[17].command_id) == second_id,
-		"CHE 17 still holds cancelled command %s" % first_id
+	_b10_check(
+		simulator._active_commands.has(CHE_ID) and str(simulator._active_commands[CHE_ID].command_id) == second_id,
+		"%s still holds cancelled command %s" % [CHE_NAME, first_id]
 	)
 
+	SimIds.use_che_name = previous_name_mode
 	DirAccess.remove_absolute(state_path)
 	simulator._mqtt.free()
 	simulator._bootstrap.free()
@@ -138,9 +144,8 @@ func _test_next_command_after_cancel_is_accepted():
 	fake.free()
 
 
-func _known_bug_check(condition: bool, message: String):
-	if not condition:
-		_known_bug_failures.append(message)
+func _b10_check(condition: bool, message: String):
+	_assert(condition, "B10 regression: %s" % message)
 
 
 func _assert(condition: bool, message: String):
