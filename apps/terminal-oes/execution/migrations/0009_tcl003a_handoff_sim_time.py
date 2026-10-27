@@ -58,6 +58,11 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name='simulationsession',
+            name='tt_no_show_timeout_s',
+            field=models.PositiveIntegerField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='simulationsession',
             name='last_sim_time_ms',
             field=models.BigIntegerField(default=0),
         ),

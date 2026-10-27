@@ -178,6 +178,8 @@ class SimulationSession(models.Model):
     last_sim_time_ms = models.BigIntegerField(default=0)
     # Sim/Timing/CommandTtlS from NBIRTH (env SIMULATOR_COMMAND_TTL_S on the simulator).
     command_ttl_s = models.PositiveIntegerField(blank=True, null=True)
+    # Sim/Timing/TtNoShowTimeoutS from NBIRTH (Godot owns the no-show timing, T-006).
+    tt_no_show_timeout_s = models.PositiveIntegerField(blank=True, null=True)
     stale_message_count = models.PositiveIntegerField(default=0)
     last_node_birth_at = models.DateTimeField(blank=True, null=True)
     last_node_death_at = models.DateTimeField(blank=True, null=True)

@@ -304,6 +304,8 @@ def _handle_nbirth(session, document, metrics):
         session.start_epoch_ms = start_epoch
     command_ttl_s = _optional_int(metrics, "Sim/Timing/CommandTtlS")
     session.command_ttl_s = command_ttl_s if command_ttl_s and command_ttl_s > 0 else None
+    no_show_s = _optional_int(metrics, "Sim/Timing/TtNoShowTimeoutS")
+    session.tt_no_show_timeout_s = no_show_s if no_show_s and no_show_s > 0 else None
     session.save()
     # TL review B-2: hand-offs left pending by an abandoned earlier session of
     # this site are closed, so they never lock a CHE out of this run.

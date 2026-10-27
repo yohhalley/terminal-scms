@@ -40,12 +40,19 @@ logger = logging.getLogger(__name__)
 # exception* with reason SIMULATOR_FAILURE; both legs stay cancelled per T-007.
 NO_SHOW_ORDER_STATUS = ExecutionOrder.COMPLETE
 NO_SHOW_REASON = Handoff.ExceptionReason.SIMULATOR_FAILURE
-# Godot's default (DEFAULT_TT_NO_SHOW_TIMEOUT_S) when SIMULATOR_TT_NO_SHOW_TIMEOUT_S is unset.
+# Godot's default (DEFAULT_TT_NO_SHOW_TIMEOUT_S), the last fallback.
 DEFAULT_TT_NO_SHOW_TIMEOUT_S = 300
 
 
-def tt_no_show_timeout_s():
-    """The configured no-show timeout: the value OES passes to the simulator (D-013)."""
+def tt_no_show_timeout_s(session=None):
+    """The no-show timeout Godot used (T-006: Godot owns the timing).
+
+    NBIRTH ``Sim/Timing/TtNoShowTimeoutS`` of this session, else OES's
+    ``SIMULATOR_TT_NO_SHOW_TIMEOUT_S`` (the value it passes to the simulator),
+    else 300 s.
+    """
+    if session is not None and session.tt_no_show_timeout_s:
+        return int(session.tt_no_show_timeout_s)
     configured = getattr(settings, "SIMULATOR_SIM_SETTINGS", {}).get(
         "SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "",
     )
@@ -56,9 +63,9 @@ def tt_no_show_timeout_s():
     return seconds if seconds > 0 else DEFAULT_TT_NO_SHOW_TIMEOUT_S
 
 
-def no_show_detail():
+def no_show_detail(session=None):
     """D-017: the trigger travels as a detail next to the reason code."""
-    return f"no TT within {tt_no_show_timeout_s()} s"
+    return f"no TT within {tt_no_show_timeout_s(session)} s"
 
 
 class ResultRejected(ValidationError):
@@ -259,7 +266,7 @@ def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
         raise ResultRejected("handoff_not_pending")
     _check_container(handoff, metrics)
     reason = NO_SHOW_REASON.value
-    detail = no_show_detail()
+    detail = no_show_detail(handoff.simulation_session)
     handoff.status = Handoff.EXCEPTION
     handoff.exception_reason = reason
     handoff.exception_detail = detail

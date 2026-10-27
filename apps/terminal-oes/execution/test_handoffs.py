@@ -388,8 +388,9 @@ class NoShowTests(HandoffTestBase):
         self.assertEqual(OutboxEvent.objects.count(), count)
         self.assertEqual(Handoff.objects.get().status, Handoff.EXCEPTION)
 
-    def test_no_show_detail_uses_the_configured_timeout(self):
-        """D-017: the 5-min trigger is a detail, derived from SIMULATOR_TT_NO_SHOW_TIMEOUT_S."""
+    def test_no_show_detail_falls_back_to_the_oes_setting(self):
+        """D-017/A-17: no NBIRTH Sim/Timing/TtNoShowTimeoutS -> SIMULATOR_TT_NO_SHOW_TIMEOUT_S."""
+        self.assertIsNone(self.session.tt_no_show_timeout_s)
         qc_cmd, tt, tt_cmd = self.run_h1(tt_ready_ms=10**9)
         with self.settings(SIMULATOR_SIM_SETTINGS={"SIMULATOR_TT_NO_SHOW_TIMEOUT_S": "120"}):
             self.result(qc_cmd, "handoff_timed_out", 140_000)
@@ -629,6 +630,20 @@ class SimTimeExpiryTests(HandoffTestBase):
         self.assertEqual(expires, 42_000 + 600_000)
         # Not a wall-clock epoch value (which Godot would read as ~55 years ahead).
         self.assertLess(expires, 10**10)
+
+    def test_no_show_detail_uses_the_nbirth_timeout_of_the_session(self):
+        """A-17 (T-006): Godot's reported Sim/Timing/TtNoShowTimeoutS wins over the OES setting."""
+        self.nbirth([{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": 180}])
+        self.assertEqual(self.session.tt_no_show_timeout_s, 180)
+        qc_cmd, tt, tt_cmd = self.run_h1(tt_ready_ms=10**9)
+        with self.settings(SIMULATOR_SIM_SETTINGS={"SIMULATOR_TT_NO_SHOW_TIMEOUT_S": "120"}):
+            self.result(qc_cmd, "handoff_timed_out", 200_000)
+        self.assertEqual(Handoff.objects.get().exception_detail, "no TT within 180 s")
+        data = OutboxEvent.objects.get(payload__data__event="handoff_exception").payload["data"]
+        self.assertEqual(data["detail"], "no TT within 180 s")
+        # An invalid value on a rebirth is not kept (falls back like CommandTtlS).
+        self.nbirth([{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": 0}])
+        self.assertIsNone(self.session.tt_no_show_timeout_s)
 
     def test_ttl_comes_from_nbirth_with_600_s_fallback(self):
         self.nbirth([{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": 90}])
