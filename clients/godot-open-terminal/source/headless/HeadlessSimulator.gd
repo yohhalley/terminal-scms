@@ -21,6 +21,9 @@ const DEFAULT_COMMAND_TTL_S := 600
 ## Sim time is checkpointed at least this often, so a restart loses at most this much.
 const SIM_TIME_CHECKPOINT_MS := 1000
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
+## NBIRTH Contract/Version (TCL-002 §3.1, S2): "tcl-002.<minor>". OES refuses an
+## unsupported major version.
+const CONTRACT_VERSION := "tcl-002.1"
 
 var _bootstrap := OESBootstrapClient.new()
 var _mqtt := MQTTNodeClient.new()
@@ -54,6 +57,8 @@ var _clock := SimClock.new()
 var _random := SimRandom.new()
 var _event_seq := 0
 var _start_epoch_ms := 0
+## NBIRTH Sim/ScenarioId: OES bootstrap session.scenario_id, else SIMULATOR_SCENARIO_ID.
+var _scenario_id := ""
 var _last_checkpoint_sim_ms := 0
 ## Whole seconds, inclusive, per QC wait step. D-012: only the hold wait exists.
 var _qc_wait_s := {
@@ -98,6 +103,7 @@ func _configure_simulation():
 	var time_scale = float(_env_any(["SIMULATOR_TIME_SCALE", "SIM_TIME_SCALE"], "1.0"))
 	_clock = SimClock.new(step_ms, time_scale)
 	_start_epoch_ms = int(_env_any(["SIMULATOR_START_EPOCH_MS", "SIM_START_EPOCH_MS"], "0"))
+	_scenario_id = _env_any(["SIMULATOR_SCENARIO_ID", "SIM_SCENARIO_ID"], "")
 	SimIds.use_che_name = _env_any(["SIMULATOR_DEVICE_ID_MODE", "SIM_DEVICE_ID_MODE"], "name") != "legacy"
 	_mqtt.session_id = _session_id
 	var default_min = _env_any(["SIMULATOR_QC_WAIT_MIN_S", "SIM_QC_WAIT_MIN_S"], str(DEFAULT_QC_WAIT_MIN_S))
@@ -232,6 +238,9 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 	_mqtt.session_id = _session_id
 	if _start_epoch_ms <= 0:
 		_start_epoch_ms = int(session.get("start_epoch_ms", 0)) if session.get("start_epoch_ms") != null else 0
+	var scenario_id = session.get("scenario_id")
+	if scenario_id != null and not str(scenario_id).strip_edges().is_empty():
+		_scenario_id = str(scenario_id).strip_edges()
 	if session.has("seed") and session.get("seed") != null:
 		_random.run_seed = SimRandom.parse_seed(str(session.get("seed")), _random.run_seed)
 	_load_equipment(document)
@@ -241,7 +250,15 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		_start_epoch_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	_configuration_loaded = true
 	_bootstrap_retry_pending = false
-	_mqtt.set_node_birth_metrics([
+	_mqtt.set_node_birth_metrics(node_birth_metrics())
+	_connect_mqtt()
+	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
+
+
+## NBIRTH metrics (contract §1, §2.1, §3.1, §5.1).
+func node_birth_metrics() -> Array:
+	return [
+		{"name": "Contract/Version", "type": "String", "value": CONTRACT_VERSION},
 		{"name": "Session/Id", "type": "String", "value": _session_id},
 		{"name": "Site/Id", "type": "String", "value": _site_id},
 		{"name": "Configuration/Revision", "type": "Int64", "value": _configuration_revision},
@@ -250,14 +267,13 @@ func _on_bootstrap_loaded(ok: bool, document: Dictionary, message: String):
 		{"name": "Sim/RunId", "type": "String", "value": _random.run_id},
 		{"name": "Sim/TimeScale", "type": "Double", "value": _clock.time_scale},
 		{"name": "Sim/FixedStepMs", "type": "Int64", "value": _clock.step_ms},
-		{"name": "Sim/StartEpochMs", "type": "DateTime", "value": _start_epoch_ms},
+		{"name": "Sim/ScenarioId", "type": "String", "value": _scenario_id},
+		{"name": "Sim/StartEpochMs", "type": "Int64", "value": _start_epoch_ms},
 		{"name": "Sim/Timing/QcHoldMinS", "type": "Int64", "value": int(_qc_wait_s.hold[0])},
 		{"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": int(_qc_wait_s.hold[1])},
 		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
 		{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": _command_ttl_s},
-	])
-	_connect_mqtt()
-	print("HEADLESS loaded %s CHE records from OES revision %s" % [_ches.size(), _configuration_revision])
+	]
 
 
 func _fail_bootstrap(message: String):
@@ -764,7 +780,7 @@ func _publish_command_result(
 	metrics.append_array(_result_context_metrics(context))
 	metrics.append({"name": "Session/Id", "type": "String", "value": _session_id})
 	metrics.append({"name": "Sim/TimeMs", "type": "Int64", "value": _clock.now_ms})
-	metrics.append({"name": "Event/TimeMs", "type": "DateTime", "value": _start_epoch_ms + _clock.now_ms})
+	metrics.append({"name": "Event/TimeMs", "type": "Int64", "value": _start_epoch_ms + _clock.now_ms})
 	metrics.append({"name": "Sim/EventSeq", "type": "Int64", "value": _event_seq})
 	_command_outcomes[command_id] = {
 		"che_id": che_id, "event": event, "position_id": position_id,

@@ -81,6 +81,7 @@ func _initialize():
 	_test_duplicate_dcmd_replays_same_result()
 	_test_carrying_metric_name()
 	_test_handoff_completed_fields()
+	_test_node_birth_metrics()
 	_test_device_id_mapping()
 	_test_mqtt_packet_id_wraps()
 	_cleanup_state_file()
@@ -867,6 +868,32 @@ func _test_handoff_completed_fields():
 				other_events_clean = false
 		_assert(other_events_clean, "Only handoff_completed carries FromCheId/ToCheId")
 		_free_simulator(simulator)
+
+
+## S15-5: NBIRTH carries Contract/Version and Sim/ScenarioId; Sim/StartEpochMs and
+## Event/TimeMs are Int64 epoch ms (contract §2, §2.1), not Sparkplug DateTime.
+func _test_node_birth_metrics():
+	var simulator = _new_simulator(2, QC_LAT)
+	simulator._scenario_id = "import-discharge-ci"
+	var by_name := {}
+	for metric in simulator.node_birth_metrics():
+		by_name[str(metric.name)] = metric
+	_assert(by_name.has("Contract/Version") and str(by_name["Contract/Version"].value) == HeadlessSimulator.CONTRACT_VERSION, "NBIRTH has Contract/Version")
+	_assert(str(by_name["Contract/Version"].value).begins_with("tcl-002."), "Contract/Version is tcl-002.<minor>")
+	_assert(by_name.has("Sim/ScenarioId") and str(by_name["Sim/ScenarioId"].value) == "import-discharge-ci" and str(by_name["Sim/ScenarioId"].type) == "String", "NBIRTH has Sim/ScenarioId")
+	_assert(str(by_name["Sim/StartEpochMs"].type) == "Int64" and int(by_name["Sim/StartEpochMs"].value) == 1764583200000, "Sim/StartEpochMs is Int64 epoch ms")
+	for name in ["Session/Id", "Sim/Seed", "Sim/TimeScale", "Sim/Timing/TtNoShowTimeoutS"]:
+		_assert(by_name.has(name), "NBIRTH keeps %s" % name)
+	for metric in simulator.node_birth_metrics():
+		_assert(str(metric.type) != "DateTime", "No DateTime metric on NBIRTH: %s" % metric.name)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	for call in simulator._mqtt._manager.calls:
+		if str(call[0]) != "RESULT":
+			continue
+		for metric in call[2]:
+			if str(metric.name) == "Event/TimeMs":
+				_assert(str(metric.type) == "Int64", "Event/TimeMs is Int64")
+	_free_simulator(simulator)
 
 func _test_device_id_mapping():
 	var che = {"pk": 12, "name": "QC01"}
