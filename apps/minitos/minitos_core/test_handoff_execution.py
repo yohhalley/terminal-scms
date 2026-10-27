@@ -258,3 +258,21 @@ class HandoffExecutionTests(LayoutTestCase):
         ).filter(payload__data__order__id=self.order.pk).latest('pk').payload
         self.assertEqual(payload['data']['order']['container_unit_number'], 'MSCU1234565')
         self.assertEqual(payload['data']['order']['container_number'], self.visit.pk)
+
+    def test_custody_on_tt_then_leg_failed_with_an_unknown_code_is_accepted(self):
+        """TCL-028/§3.2c: custody reaches the TT; a leg_failed with a code MiniTOS
+        does not know is a generic failure (reason is free text on leg_failed)."""
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        self.event('container_transferred', leg=self.legs[1],
+                   from_che_id=self.qc.pk, to_che_id=self.tt.pk)
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status, ContainerVisit.ON_EQUIPMENT)
+        self.assertEqual(self.visit.current_che, self.tt)
+        self.event('leg_failed', leg=self.legs[1], che=self.tt,
+                   reason='brand_new_code_99', detail='added after rev 9.3')
+        self.legs[1].refresh_from_db()
+        self.order.refresh_from_db()
+        self.assertEqual(self.legs[1].status, OrderLeg.FAILED)
+        self.assertEqual(self.order.status, Order.FAILED)
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.current_che, self.tt)  # custody is not guessed

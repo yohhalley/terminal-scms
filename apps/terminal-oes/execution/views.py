@@ -33,7 +33,17 @@ from .serializers import (
     StartSimulationSerializer,
     SiteProjectionSerializer,
 )
-from .services.dispatch import apply_command_event, dispatch_next_operation
+from .services.dispatch import (
+    DISPATCH_EQUIPMENT_INVALID,
+    DISPATCH_IN_FLIGHT_CODES,
+    DISPATCH_INVALID_REQUEST,
+    DISPATCH_SIMULATION_NOT_RUNNING,
+    SIMULATION_NOT_RUNNING_MESSAGE,
+    apply_command_event,
+    dispatch_next_operation,
+    live_leg_session_running,
+    order_has_live_leg,
+)
 from .services.simulations import (
     bootstrap_document,
     claim_next_session,
@@ -281,22 +291,77 @@ class ExecutionOrderViewSet(ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="dispatch-next")
     def dispatch_next(self, request, pk=None):
+        """TCL-028: dispatch the order's next step as TCL-002 DCMDs.
+
+        201: new DCMDs queued. 200: the current step is still in flight in a
+        running, connected session; nothing new was sent (an idempotent re-call,
+        A-18). 409: the order is not released/active, has nothing left to
+        dispatch, no CHE/simulation is available, or a leg is in flight but its
+        session is stopped or offline (``simulation_not_running``, TL review S-1).
+        400: a bad request body (``invalid_request``, plus the DRF ``errors``) or
+        an unusable ``equipment_id`` (``equipment_invalid``). 404: unknown order,
+        checked before the body (QA M1). Every refusal carries ``code`` (machine)
+        and ``detail`` (human).
+        """
+        order = self.get_object()
         serializer = DispatchRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            # QA M1: same {code, detail} shape as every other refusal; ``errors``
+            # keeps DRF's field errors (additive).
+            return Response(
+                {
+                    "code": DISPATCH_INVALID_REQUEST,
+                    "detail": _first_error_message(serializer.errors),
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             assignment = dispatch_next_operation(
-                self.get_object().pk,
+                order.pk,
                 equipment_id=serializer.validated_data.get("equipment_id"),
             )
         except DjangoValidationError as exc:
-            raise ValidationError(_service_error(exc)) from exc
-        return Response(
-            ExecutionOrderSerializer(
-                assignment.operation.order,
-                context=self.get_serializer_context(),
-            ).data,
-            status=status.HTTP_201_CREATED,
-        )
+            code = getattr(exc, "code", None) or "dispatch_refused"
+            detail = "; ".join(exc.messages)
+            order.refresh_from_db()
+            if code in DISPATCH_IN_FLIGHT_CODES and order_has_live_leg(order):
+                if not live_leg_session_running(order):
+                    # TL review S-1: the leg is stuck, not in flight.
+                    return Response(
+                        {
+                            "code": DISPATCH_SIMULATION_NOT_RUNNING,
+                            "detail": SIMULATION_NOT_RUNNING_MESSAGE,
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                data = dict(ExecutionOrderSerializer(
+                    order, context=self.get_serializer_context(),
+                ).data)
+                data.update(dispatched=False, code=code, detail=detail)
+                return Response(data, status=status.HTTP_200_OK)
+            return Response(
+                {"code": code, "detail": detail},
+                status=(
+                    status.HTTP_400_BAD_REQUEST if code == DISPATCH_EQUIPMENT_INVALID
+                    else status.HTTP_409_CONFLICT
+                ),
+            )
+        data = dict(ExecutionOrderSerializer(
+            assignment.operation.order, context=self.get_serializer_context(),
+        ).data)
+        data["dispatched"] = True
+        return Response(data, status=status.HTTP_201_CREATED)
+
+
+def _first_error_message(errors):
+    """Short human text for a DRF error dict: ``field: first message``."""
+    for field, field_messages in errors.items():
+        message = field_messages
+        if isinstance(field_messages, list) and field_messages:
+            message = field_messages[0]
+        return f"Invalid request body: {field}: {message}"
+    return "Invalid request body."
 
 
 class EquipmentStateViewSet(ReadOnlyModelViewSet):
@@ -331,6 +396,7 @@ class EquipmentCommandViewSet(
                 serializer.validated_data["event"],
                 position_id=serializer.validated_data.get("position_id"),
                 reason=serializer.validated_data.get("reason", ""),
+                detail=serializer.validated_data.get("detail", ""),
                 notify_che=True,
             )
         except DjangoValidationError as exc:
