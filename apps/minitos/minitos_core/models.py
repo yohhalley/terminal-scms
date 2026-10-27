@@ -121,6 +121,12 @@ class ContainerUnit(models.Model):
         return self.container_number
 
 
+class ExceptionReason(models.TextChoices):
+    """D-017: why execution ended a move by exception. Extend by adding members."""
+
+    SIMULATOR_FAILURE = 'SIMULATOR_FAILURE', 'Simulator failure'
+
+
 ###################################
 class ContainerVisit(models.Model):
     IMPORT = 'I'
@@ -217,11 +223,15 @@ class ContainerVisit(models.Model):
         help_text='CHE temporarily carrying this container during an active move.',
     )
     exception_reason = models.CharField(
-        max_length=40, blank=True, default='',
+        max_length=40, blank=True, default='', choices=ExceptionReason.choices,
         help_text=(
-            'Set when execution moved the container by exception, e.g. NO_TT_TIMEOUT '
-            '(D-013/T-007 relocation to a dummy block slot). Blank for a normal move.'
+            'Set when execution moved the container by exception (D-013 relocation to a '
+            'BLOCK01 slot), e.g. SIMULATOR_FAILURE (D-017). Blank for a normal move.'
         ),
+    )
+    exception_detail = models.CharField(
+        max_length=200, blank=True, default='',
+        help_text='Free-text detail of the exception, e.g. "no TT within 300 s".',
     )
     last_updated = models.DateTimeField(auto_now=True)
 

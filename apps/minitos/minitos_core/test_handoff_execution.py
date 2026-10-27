@@ -13,6 +13,7 @@ from minitos_core.models import (
     ContainerUnit,
     ContainerVisit,
     EquipmentType,
+    ExceptionReason,
     IntegrationOutbox,
     ISOType,
     LayoutAsset,
@@ -117,7 +118,8 @@ class HandoffExecutionTests(LayoutTestCase):
         """T-007/D-013: handoff_exception → BLOCK01 slot, exception flag, legs cancelled."""
         self.event('container_picked_up', che=self.qc, source='VESSEL')
         details = {
-            'reason': 'NO_TT_TIMEOUT', 'from_che_id': self.qc.pk, 'to_che_id': self.tt.pk,
+            'reason': 'SIMULATOR_FAILURE', 'detail': 'no TT within 300 s',
+            'from_che_id': self.qc.pk, 'to_che_id': self.tt.pk,
             'destination_position_id': self.planned.pk,
         }
         self.event('handoff_exception', leg=self.legs[0], che=self.qc, **details)
@@ -125,11 +127,12 @@ class HandoffExecutionTests(LayoutTestCase):
         self.order.refresh_from_db()
         self.assertEqual(self.visit.status, ContainerVisit.AT_YARD)
         self.assertIsNone(self.visit.current_che)
-        self.assertEqual(self.visit.exception_reason, 'NO_TT_TIMEOUT')
+        self.assertEqual(self.visit.exception_reason, ExceptionReason.SIMULATOR_FAILURE)
+        self.assertEqual(self.visit.exception_detail, 'no TT within 300 s')
         slot = Position.objects.get(container_visit=self.visit)
         self.assertEqual(slot.pile.storage_grid.name, 'BLOCK01')
         self.assertEqual(slot, self.planned)
-        # A-1 (TL interim, pending Yael): completed by exception, visit flagged.
+        # D-017: completed by exception, visit flagged.
         self.assertEqual(self.order.status, Order.COMPLETE)
         self.assertIsNotNone(self.order.atc)
         self.assertEqual(
@@ -157,7 +160,7 @@ class HandoffExecutionTests(LayoutTestCase):
         sync_yard_grid(other_block)
         elsewhere = Position.objects.filter(pile__storage_grid=other_block, tier=1).first()
         self.event('container_picked_up', che=self.qc, source='VESSEL')
-        self.event('handoff_exception', leg=self.legs[0], che=self.qc, reason='NO_TT_TIMEOUT',
+        self.event('handoff_exception', leg=self.legs[0], che=self.qc, reason='SIMULATOR_FAILURE',
                    destination_position_id=elsewhere.pk)
         slot = Position.objects.get(container_visit=self.visit)
         self.assertEqual(slot.pile.storage_grid.name, 'BLOCK01')
@@ -172,6 +175,17 @@ class HandoffExecutionTests(LayoutTestCase):
             with self.assertRaises(ValidationError) as caught:
                 self.event('handoff_exception', leg=self.legs[0], che=self.qc, **details)
             self.assertEqual(caught.exception.code, 'reason_required')
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.current_che, self.qc)
+        self.assertEqual(self.visit.exception_reason, '')
+
+    def test_handoff_exception_with_unknown_reason_is_rejected(self):
+        """D-017: the reason is an enum; the superseded NO_TT_TIMEOUT is not accepted."""
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        with self.assertRaises(ValidationError) as caught:
+            self.event('handoff_exception', leg=self.legs[0], che=self.qc,
+                       reason='NO_TT_TIMEOUT', from_che_id=self.qc.pk, to_che_id=self.tt.pk)
+        self.assertEqual(caught.exception.code, 'reason_unknown')
         self.visit.refresh_from_db()
         self.assertEqual(self.visit.current_che, self.qc)
         self.assertEqual(self.visit.exception_reason, '')
@@ -208,7 +222,7 @@ class HandoffExecutionTests(LayoutTestCase):
         )
         self.planned.container_visit = other
         self.planned.save()
-        self.event('handoff_exception', leg=self.legs[0], che=self.qc, reason='NO_TT_TIMEOUT',
+        self.event('handoff_exception', leg=self.legs[0], che=self.qc, reason='SIMULATOR_FAILURE',
                    destination_position_id=self.planned.pk)
         slot = Position.objects.get(container_visit=self.visit)
         self.assertNotEqual(slot, self.planned)

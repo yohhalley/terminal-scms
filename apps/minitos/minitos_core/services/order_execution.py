@@ -9,6 +9,7 @@ from minitos_core.models import (
     Che,
     ContainerVisit,
     EquipmentType,
+    ExceptionReason,
     IntegrationOutbox,
     Order,
     OrderLeg,
@@ -39,10 +40,8 @@ VESSEL_SOURCE = 'VESSEL'
 EXCEPTION_BLOCK_NAME = 'BLOCK01'
 
 
-# Assumption A-1 (TL interim call, pending Yael): a TT no-show completes the
-# order *by exception*; the visit carries the exception reason. Flip to
-# Order.CANCELLED here (and NO_SHOW_ORDER_STATUS in OES handoffs.py) if Yael
-# decides no-show cancels the order.
+# D-017 (Yael, 2026-10-27; closes A-1): a TT no-show completes the order *by
+# exception*; the visit carries the exception reason (ExceptionReason) and detail.
 NO_SHOW_ORDER_STATUS = Order.COMPLETE
 
 
@@ -328,7 +327,9 @@ def _exception_slot(visit, preferred_position_id=None):
 
 
 @transaction.atomic
-def relocate_container_after_exception(container_visit_id, reason, preferred_position_id=None):
+def relocate_container_after_exception(
+    container_visit_id, reason, preferred_position_id=None, detail='',
+):
     """D-013/T-007: put the container straight into BLOCK01, flagged as an exception move.
 
     Idempotent: a visit already relocated for an exception is returned as is.
@@ -345,11 +346,13 @@ def relocate_container_after_exception(container_visit_id, reason, preferred_pos
     visit.current_che = None
     visit.status = ContainerVisit.AT_YARD
     visit.exception_reason = str(reason)[:40]
+    visit.exception_detail = str(detail or '')[:200]
     if hasattr(target, 'operational_position'):
         visit.latitude = target.operational_position.latitude
         visit.longitude = target.operational_position.longitude
     visit.save(update_fields=[
-        'current_che', 'status', 'exception_reason', 'latitude', 'longitude', 'last_updated',
+        'current_che', 'status', 'exception_reason', 'exception_detail',
+        'latitude', 'longitude', 'last_updated',
     ])
     if visit.container_number_id and not visit.container_number.is_in_terminal:
         visit.container_number.is_in_terminal = True
@@ -483,11 +486,17 @@ def apply_execution_event(
         if not reason:
             # The schema requires reason on handoff_exception; no silent default.
             raise ValidationError('handoff_exception requires reason.', code='reason_required')
+        if reason not in ExceptionReason.values:
+            # D-017: the reason is a closed, extensible list; unknown codes are rejected.
+            raise ValidationError(
+                f'Unknown handoff_exception reason {reason!r}.', code='reason_unknown',
+            )
         relocate_container_after_exception(
             order.container_number_id, reason, details.get('destination_position_id'),
+            detail=details.get('detail') or '',
         )
         if order.status not in {Order.COMPLETE, Order.CANCELLED}:
-            # A-1 (pending Yael): completed by exception; N-6: event time.
+            # D-017: completed by exception; N-6: event time.
             order.status = NO_SHOW_ORDER_STATUS
             order.completed_at = _event_time(occurred_at)
             update_fields = ['status', 'completed_at']
