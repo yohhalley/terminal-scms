@@ -1,4 +1,4 @@
-# Linux deployment at 192.168.1.8
+# Linux deployment
 
 This runbook deploys the proof-of-concept stack to the local Linux host. It
 assumes an x86-64 machine, SSH access and Docker Engine with the Compose plugin.
@@ -9,7 +9,7 @@ Keep the host on the trusted LAN; the current broker has no TLS or ACL policy.
 From the development computer:
 
 ```bash
-ssh <linux-user>@192.168.1.8
+ssh <linux-user>@<your-server-ip>
 uname -m
 docker version
 docker compose version
@@ -36,13 +36,15 @@ cp .env.example .env
 Edit `.env` before starting. At minimum replace all placeholder secrets and set:
 
 ```dotenv
-MINITOS_ALLOWED_HOSTS=localhost,127.0.0.1,minitos,192.168.1.8
-OES_ALLOWED_HOSTS=localhost,127.0.0.1,terminal-oes,192.168.1.8
+SCMS_SERVER_HOST=<your-server-ip>
 GODOT_PLATFORM=linux/amd64
 SIMULATOR_RUNNER_TOKEN=<strong-runner-token>
 SIMULATOR_OES_URL=http://terminal-oes:8000
 RUNNER_IDENTITY=linux-server-01
 ```
+
+Set `SCMS_SERVER_HOST` to the host's LAN address in your local `.env` only (it is
+gitignored); Compose appends it to both `ALLOWED_HOSTS` lists. Never commit the real address.
 
 Generate the runner token on the Linux host rather than using the placeholder:
 
@@ -96,7 +98,7 @@ docker compose exec terminal-oes python manage.py createsuperuser
 Create a terminal or inland-depot Location and its Site in MiniTOS. Publish a
 valid layout after defining routing and CHE configuration. The Site-created and
 configuration-published events make the corresponding OES projection ready.
-Verify it at `http://192.168.1.8:8010/simulations/`.
+Verify it at `http://<your-server-ip>:8010/simulations/`.
 
 ## 4. Build Godot and start the restricted runner
 
@@ -123,10 +125,10 @@ terminates only that Site's Godot process.
 
 ## 5. Access from the development computer
 
-- MiniTOS: `http://192.168.1.8:8000/`
-- OES equipment console: `http://192.168.1.8:8010/equipment/`
-- OES health: `http://192.168.1.8:8010/health/`
-- MQTT: `192.168.1.8:1883`
+- MiniTOS: `http://<your-server-ip>:8000/`
+- OES equipment console: `http://<your-server-ip>:8010/equipment/`
+- OES health: `http://<your-server-ip>:8010/health/`
+- MQTT: `<your-server-ip>:1883`
 
 Allow TCP ports `8000`, `8010` and `1883` through the Linux firewall only for
 the local subnet. Do not forward these ports from the internet.

@@ -8,7 +8,7 @@ x-minitos: &minitos
   environment: &minitos-environment
     DEBUG: "True"
     SECRET_KEY: ${MINITOS_SECRET_KEY:-local-minitos-secret}
-    ALLOWED_HOSTS: ${MINITOS_ALLOWED_HOSTS:-localhost,127.0.0.1,minitos,192.168.1.8}
+    ALLOWED_HOSTS: ${MINITOS_ALLOWED_HOSTS:-localhost,127.0.0.1,minitos},${SCMS_SERVER_HOST:-localhost}
     DB_NAME: ${MINITOS_DB_NAME:-minitos}
     DB_USER: ${MINITOS_DB_USER:-minitos}
     DB_PASSWORD: ${MINITOS_DB_PASSWORD:-minitos}
@@ -36,7 +36,7 @@ x-oes: &oes
   environment: &oes-environment
     DJANGO_DEBUG: "True"
     DJANGO_SECRET_KEY: ${OES_SECRET_KEY:-local-oes-secret}
-    DJANGO_ALLOWED_HOSTS: ${OES_ALLOWED_HOSTS:-localhost,127.0.0.1,terminal-oes,192.168.1.8}
+    DJANGO_ALLOWED_HOSTS: ${OES_ALLOWED_HOSTS:-localhost,127.0.0.1,terminal-oes},${SCMS_SERVER_HOST:-localhost}
     DATABASE_URL: postgresql://${OES_DB_USER:-terminal_oes}:${OES_DB_PASSWORD:-terminal_oes}@oes-db:5432/${OES_DB_NAME:-terminal_oes}
     OES_API_TOKEN: ${OES_API_TOKEN:-local-oes-token}
     SIMULATOR_RUNNER_TOKEN: ${SIMULATOR_RUNNER_TOKEN:?Set SIMULATOR_RUNNER_TOKEN in .env}
