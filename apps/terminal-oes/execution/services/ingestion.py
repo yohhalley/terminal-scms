@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import timezone as datetime_timezone
 
@@ -25,6 +26,17 @@ def _timestamp(value, *, required=False):
     if timezone.is_naive(parsed):
         parsed = timezone.make_aware(parsed, datetime_timezone.utc)
     return parsed
+
+
+CONTAINER_NUMBER_PATTERN = re.compile(r"^[A-Z]{3}[UJZ][0-9]{7}$")
+
+
+def _container_number(source_order):
+    """D-010: carry the ISO 6346 box number. OES checks the format only (R4.5)."""
+    value = str(source_order.get("container_unit_number") or "").strip()
+    if value and not CONTAINER_NUMBER_PATTERN.match(value):
+        raise ValidationError(f"Invalid container number format: {value}")
+    return value
 
 
 def _event_id(payload):
@@ -111,7 +123,9 @@ def ingest_released_order(topic, payload):
             order.site = site
             order.status = ExecutionOrder.RELEASED
             order.priority = int(source_order.get("priority", 100))
+            # Legacy key: "container_number" holds the MiniTOS ContainerVisit pk.
             order.container_visit_id = source_order.get("container_number")
+            order.container_number = _container_number(source_order)
             order.from_position_id = source_order.get("from_position")
             order.to_position_id = source_order.get("to_position")
             order.released_at = _timestamp(source_order.get("released_at"), required=True)

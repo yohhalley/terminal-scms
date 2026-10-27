@@ -58,6 +58,48 @@ Key endpoints:
 - `POST /api/simulation-sessions/{id}/stop/`
 - `POST /api/commands/{command_id}/event/`
 
+### `POST /api/orders/{id}/dispatch-next/` (TCL-028)
+
+Dispatches the order's next step as TCL-002 DCMDs (QC + TT paired on one
+HandoffId, then TT→RTG once that hand-off has transferred). Optional body:
+`{"equipment_id": <id>}` to name the CHE. Clients should branch on `code`,
+not on `detail`, which is human text.
+
+| Status | `code` | When |
+|---|---|---|
+| 201 | none | New DCMDs queued. |
+| 200 | `nothing_to_dispatch`, `already_dispatched`, `waiting_for_handoff`, `earlier_operation_incomplete` | No-op re-call: a leg of the order is still dispatched/working **and** its simulation session is running and node-connected. Nothing new is sent. |
+| 409 | `order_not_released` | The order is not released or in progress. |
+| 409 | `nothing_to_dispatch`, `already_dispatched`, `waiting_for_handoff`, `earlier_operation_incomplete` | The same codes as the 200 row, but no leg of the order is in flight. |
+| 409 | `simulation_not_running` | A leg is in flight, but its session is stopped or the Edge Node is offline (NDEATH), so the leg cannot progress. Restart or reset the simulation. |
+| 409 | `operation_not_plannable` | The next operation (or the hand-off receiver leg) is not planned, e.g. blocked. |
+| 409 | `no_simulation` | The Site has no running, connected simulation. |
+| 409 | `no_equipment` | No fresh, available CHE fits the operation. |
+| 409 | `dispatch_refused` | Any other service refusal without its own code. |
+| 400 | `equipment_invalid` | The named `equipment_id` is not a fresh, available CHE of the right type in the active session. |
+| 400 | `invalid_request` | Invalid body, e.g. `equipment_id: 0` or `"abc"`. Body: `{code, detail, errors}`, where `errors` is DRF's field errors. |
+| 404 | none | Unknown order (checked before the body, so an unknown order with a bad body is still 404). |
+| 401/403 | none | Missing or wrong `X-OES-Token`. |
+
+Body shapes:
+
+- 201: the order (as in `GET /api/orders/{id}/`) plus `"dispatched": true`.
+- 200: the order plus `"dispatched": false`, `"code"` and `"detail"`. Here
+  `detail` explains why nothing was sent; it is not an error. Check
+  `dispatched`, not the presence of `detail`.
+- 409 and 400 `equipment_invalid`: `{"code": "...", "detail": "..."}`.
+- 400 `invalid_request`: `{"code": "invalid_request", "detail": "Invalid request body: <field>: <message>", "errors": {"<field>": ["<message>"]}}`.
+
+### Godot result handling (contract rev 9.3 §3.2c)
+
+| Result | OES behaviour |
+|---|---|
+| `failed`, any `Command/Result/Reason` | Generic leg failure. The code is stored as sent in `failure_reason` and sent as `leg_failed` `data.reason`; unknown codes are not rejected. |
+| `failed`, Reason missing, null or blank | Same, with the default code **`UNSPECIFIED`**. |
+| Any result with `Command/Result/Detail` | Stored as `failure_detail` (failed or cancelled legs only) and sent as `data.detail`. A null or whitespace-only Detail is empty and left out. |
+| `failed` or `cancelled` with a mismatching `Command/Result/ContainerNumber` | Applied (the leg fails or is cancelled, so the command doesn't stay live). The reported number stays in the receipt's `raw_metrics`, `; container mismatch: reported X, expected Y` is appended to `failure_detail`, and a warning is logged. |
+| Any other result with a mismatching number (`acknowledged`, `started`, `completed`, `handoff_completed`, …) | Rejected as `container_number_mismatch`; nothing changes. |
+
 See [docs/UNS_CONTRACT.md](docs/UNS_CONTRACT.md) for MQTT topics and payloads.
 
 Manual console changes are recorded as debug overrides. A subsequent simulator

@@ -65,16 +65,6 @@ class PositionSerializer(serializers.ModelSerializer):
         model = Position
         fields = ['pk', '__str__', 'container_visit_id', 'is_reserved', 'is_occupied', 'tier', 'container']
        
-    def partial_update(self, instance, validated_data):
-        
-        position = Position.objects.get(pk=instance.id)
-        Position.objects.filter(pk=instance.id)\
-                           .update(**validated_data)
-        if position.container is Null:
-            position.is_occupied = True
-        else:
-            position.is_occupied = False
-        return position
         
 ####  Pile
 class PileSerializer(serializers.ModelSerializer):

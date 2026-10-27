@@ -1,0 +1,45 @@
+name: Set up Godot (headless)
+description: >-
+  Download, verify and cache the official Godot Linux x86_64 binary, and export
+  its path as GODOT_BIN. The release URL and SHA-512 are pinned.
+
+inputs:
+  version:
+    description: Godot release, without the -stable suffix.
+    default: "4.2.1"
+  sha512:
+    description: SHA-512 of Godot_v<version>-stable_linux.x86_64.zip from the release's SHA512-SUMS.txt.
+    default: e835e7a3bcae2033019293beea3bef6d6b2dcaf4b7a266d55c9327bcc84e808b9a0e0a6966379350a6cf3c7c28ec6e4e6a86344eae8ad869f80bae76da3fc855
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Godot download
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/godot-download
+        key: godot-${{ inputs.version }}-stable-linux-x86_64-${{ inputs.sha512 }}
+    - name: Download Godot ${{ inputs.version }}
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GODOT_VERSION: ${{ inputs.version }}
+      run: |
+        mkdir -p ~/.cache/godot-download
+        curl -fsSL --retry 3 \
+          -o ~/.cache/godot-download/godot.zip \
+          "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+    - name: Verify checksum and unpack
+      shell: bash
+      env:
+        GODOT_VERSION: ${{ inputs.version }}
+        GODOT_SHA512: ${{ inputs.sha512 }}
+      run: |
+        echo "${GODOT_SHA512}  ${HOME}/.cache/godot-download/godot.zip" | sha512sum --check --strict -
+        mkdir -p "${RUNNER_TEMP}/godot"
+        unzip -o -q ~/.cache/godot-download/godot.zip -d "${RUNNER_TEMP}/godot"
+        bin="${RUNNER_TEMP}/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+        chmod +x "${bin}"
+        "${bin}" --headless --version
+        echo "GODOT_BIN=${bin}" >> "${GITHUB_ENV}"
