@@ -487,8 +487,12 @@ func _build_command(command_type: String, command_id: String, metrics: Dictionar
 	if metrics.has("Command/SourceLatitude") and metrics.has("Command/SourceLongitude"):
 		command["source_latitude"] = float(metrics["Command/SourceLatitude"])
 		command["source_longitude"] = float(metrics["Command/SourceLongitude"])
-	if command_type == COMMAND_QC_DISCHARGE:
-		# Discharge: the destination is the QC transfer point (TT lane) where the TT receives.
+	# Hand-off lane: Command/TransferPositionId as sent by OES (S15-4). Only when
+	# OES sends none does the QC fall back to its destination (the TT lane).
+	var oes_transfer_id = int(metrics.get("Command/TransferPositionId", 0))
+	if oes_transfer_id > 0:
+		command["transfer_position_id"] = oes_transfer_id
+	elif command_type == COMMAND_QC_DISCHARGE:
 		var transfer_id = int(command.destination_inventory_position_id)
 		command["transfer_position_id"] = transfer_id if transfer_id > 0 else int(command.destination_position_id)
 	return command
@@ -583,7 +587,9 @@ func _complete_tt_handoff(tt_id: int, qc_id: int):
 	command["counterpart_che_id_actual"] = qc_id
 	_active_commands[tt_id] = command
 	_save_runtime_state()
-	var position_id = int(command.get("source_inventory_position_id", 0))
+	var position_id = int(command.get("transfer_position_id", 0))
+	if position_id <= 0:
+		position_id = int(command.get("source_inventory_position_id", 0))
 	if position_id <= 0:
 		position_id = int(command.get("source_position_id", 0))
 	# The receiver's pick is the hand-off itself: handoff_completed only.
@@ -603,6 +609,13 @@ func _publish_events(che_id: int, command: Dictionary, events: Array):
 			context["handoff_role"] = str(item.handoff_role)
 		if item.has("source"):
 			context["source"] = str(item.source)
+		if str(item.event) == "handoff_completed":
+			# Contract §3.3: both sides report the same FromCheId/ToCheId/TransferPositionId.
+			var counterpart_id = int(item.get("counterpart_che_id", 0))
+			var giver = str(item.get("handoff_role", "")) != "receiver"
+			context["from_che_id"] = che_id if giver else counterpart_id
+			context["to_che_id"] = counterpart_id if giver else che_id
+			context["result_transfer_position_id"] = int(item.get("position_id", 0))
 		_publish_command_result(
 			che_id, str(command.command_id), str(item.event), int(item.get("position_id", 0)), "", "", context
 		)
@@ -780,6 +793,12 @@ func _result_context_metrics(context: Dictionary) -> Array:
 		metrics.append({"name": "Command/Result/CounterpartCheId", "type": "Int64", "value": int(context.counterpart_che_id)})
 	if not str(context.get("handoff_role", "")).is_empty():
 		metrics.append({"name": "Command/Result/HandoffRole", "type": "String", "value": str(context.handoff_role)})
+	if int(context.get("from_che_id", 0)) > 0:
+		metrics.append({"name": "Command/Result/FromCheId", "type": "Int64", "value": int(context.from_che_id)})
+	if int(context.get("to_che_id", 0)) > 0:
+		metrics.append({"name": "Command/Result/ToCheId", "type": "Int64", "value": int(context.to_che_id)})
+	if int(context.get("result_transfer_position_id", 0)) > 0:
+		metrics.append({"name": "Command/Result/TransferPositionId", "type": "Int64", "value": int(context.result_transfer_position_id)})
 	if not str(context.get("source", "")).is_empty():
 		metrics.append({"name": "Command/Result/Source", "type": "String", "value": str(context.source)})
 	if not str(context.get("move_kind", "")).is_empty():

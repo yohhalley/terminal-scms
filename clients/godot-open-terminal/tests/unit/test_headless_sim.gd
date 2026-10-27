@@ -80,6 +80,7 @@ func _initialize():
 	_test_results_pending_until_puback()
 	_test_duplicate_dcmd_replays_same_result()
 	_test_carrying_metric_name()
+	_test_handoff_completed_fields()
 	_test_device_id_mapping()
 	_test_mqtt_packet_id_wraps()
 	_cleanup_state_file()
@@ -834,6 +835,38 @@ func _test_carrying_metric_name():
 			carrying_values.append(int(item.m.get("Carrying/ContainerVisitId", -1)))
 	_assert(with_state > 0 and carrying_values.has(101) and carrying_values.has(0), "Carrying/ContainerVisitId reports 101 while held and 0 when empty: %s" % [carrying_values])
 	_free_simulator(simulator)
+
+
+## S15-3/S15-4: both handoff_completed results carry FromCheId (QC), ToCheId (TT)
+## and the TransferPositionId OES sent, not a lane derived from destination ids.
+func _test_handoff_completed_fields():
+	for oes_sends_lane in [true, false]:
+		var simulator = _new_simulator(2, QC_LAT)
+		var qc = _qc_metrics()
+		var tt = _tt_metrics()
+		if oes_sends_lane:
+			qc["Command/TransferPositionId"] = 777
+			tt["Command/TransferPositionId"] = 777
+		_send(simulator, QC_ID, _command(QC_ID, qc))
+		_send(simulator, TT_ID, _command(TT_ID, tt))
+		_run_steps(simulator, 3000)
+		var handoffs: Array = []
+		for item in _results(simulator):
+			if str(item.m["Command/Result/Event"]) == "handoff_completed":
+				handoffs.append(item)
+		_assert(handoffs.size() == 2, "Both sides report handoff_completed (%s)" % handoffs.size())
+		var expected_lane = 777 if oes_sends_lane else 112
+		for item in handoffs:
+			var m: Dictionary = item.m
+			_assert(int(m.get("Command/Result/FromCheId", 0)) == QC_ID and int(m.get("Command/Result/ToCheId", 0)) == TT_ID, "%s: FromCheId = QC, ToCheId = TT" % item.device)
+			_assert(int(m.get("Command/Result/TransferPositionId", 0)) == expected_lane, "%s: TransferPositionId %s (got %s)" % [item.device, expected_lane, m.get("Command/Result/TransferPositionId")])
+			_assert(int(m.get("Command/Result/PositionId", 0)) == expected_lane, "%s: PositionId is the transfer lane" % item.device)
+		var other_events_clean := true
+		for item in _results(simulator):
+			if str(item.m["Command/Result/Event"]) != "handoff_completed" and item.m.has("Command/Result/FromCheId"):
+				other_events_clean = false
+		_assert(other_events_clean, "Only handoff_completed carries FromCheId/ToCheId")
+		_free_simulator(simulator)
 
 func _test_device_id_mapping():
 	var che = {"pk": 12, "name": "QC01"}
