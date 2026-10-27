@@ -10,6 +10,25 @@ const COMMAND_EXECUTE_ORDER_LEG := "execute_order_leg"
 const COMMAND_QC_DISCHARGE := "qc_discharge"
 const COMMAND_CANCEL := "cancel"
 const SUPPORTED_COMMAND_TYPES := [COMMAND_EXECUTE_ORDER_LEG, COMMAND_QC_DISCHARGE, COMMAND_CANCEL]
+## Command/Result/Reason machine codes on `failed` (contract §3.2: consumers branch
+## on the code; the human-readable text goes in Command/Result/Detail).
+const REASON_UNKNOWN_COMMAND_TARGET := "unknown_command_target"
+const REASON_SESSION_MISMATCH := "session_mismatch"
+const REASON_SITE_MISMATCH := "site_mismatch"
+const REASON_CONFIGURATION_REVISION_MISMATCH := "configuration_revision_mismatch"
+const REASON_COMMAND_EXPIRED := "command_expired"
+const REASON_ASSIGNMENT_ID_MISSING := "assignment_id_missing"
+const REASON_UNSUPPORTED_COMMAND_TYPE := "unsupported_command_type"
+const REASON_CHE_BUSY := "che_busy"
+const REASON_CONTAINER_NUMBER_INVALID := "container_number_invalid"
+const REASON_DESTINATION_MISSING := "destination_missing"
+const REASON_HANDOFF_ID_MISSING := "handoff_id_missing"
+const REASON_CONTAINER_VISIT_ID_MISSING := "container_visit_id_missing"
+const REASON_HANDOFF_ALREADY_ACTIVE := "handoff_already_active"
+const REASON_CHE_NOT_EXECUTABLE := "che_not_executable"
+const REASON_CANCEL_TARGET_MISSING := "cancel_target_missing"
+const REASON_NO_ACTIVE_COMMAND := "no_active_command"
+const REASON_CANCEL_TARGET_MISMATCH := "cancel_target_mismatch"
 const TT_DRIVING_TO_SOURCE := "driving_to_source"
 const TT_AT_SOURCE_WAITING := "at_source_waiting"
 const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
@@ -356,59 +375,67 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 		return
 	var che_id = int(metrics.get("Command/CheId", 0))
 	if not _ches.has(che_id) or device_id != SimIds.device_id(_ches[che_id]):
-		_publish_command_result(che_id, command_id, "failed", 0, "Unknown command target")
+		_fail(che_id, command_id, REASON_UNKNOWN_COMMAND_TARGET, "Unknown command target")
 		return
 	if str(metrics.get("Command/SessionId", "")) != _session_id:
-		_publish_command_result(che_id, command_id, "failed", 0, "Session mismatch")
+		_fail(che_id, command_id, REASON_SESSION_MISMATCH, "Session mismatch")
 		return
 	if str(metrics.get("Command/SiteId", "")) != _site_id:
-		_publish_command_result(che_id, command_id, "failed", 0, "Site mismatch")
+		_fail(che_id, command_id, REASON_SITE_MISMATCH, "Site mismatch")
 		return
 	if int(metrics.get("Command/ConfigurationRevision", -1)) != _configuration_revision:
-		_publish_command_result(che_id, command_id, "failed", 0, "Configuration revision mismatch")
+		_fail(che_id, command_id, REASON_CONFIGURATION_REVISION_MISMATCH, "Configuration revision mismatch")
 		return
 	# ExpiresAtMs is a sim-time deadline (Sim/TimeMs units), checked on receipt
 	# against the sim clock, never the wall clock.
 	if is_command_expired(metrics):
-		_publish_command_result(che_id, command_id, "failed", 0, "Command expired")
+		_fail(che_id, command_id, REASON_COMMAND_EXPIRED, "Command expired")
 		return
 	if str(metrics.get("Command/AssignmentId", "")).is_empty():
-		_publish_command_result(che_id, command_id, "failed", 0, "Assignment identity is missing")
+		_fail(che_id, command_id, REASON_ASSIGNMENT_ID_MISSING, "Assignment identity is missing")
 		return
 	var command_type = str(metrics.get("Command/Type", "")).strip_edges()
 	if command_type.is_empty():
 		command_type = COMMAND_EXECUTE_ORDER_LEG
 	if not command_type in SUPPORTED_COMMAND_TYPES:
-		_publish_command_result(che_id, command_id, "failed", 0, "Unsupported command type: %s" % command_type)
+		_fail(che_id, command_id, REASON_UNSUPPORTED_COMMAND_TYPE, "Unsupported command type: %s" % command_type)
 		return
 	if command_type == COMMAND_CANCEL:
 		_handle_cancel(che_id, command_id, metrics)
 		return
 	if _active_commands.has(che_id):
-		_publish_command_result(che_id, command_id, "failed", 0, "CHE already has an active command")
+		# Contract §3.2: a hand-off assignment for a CHE that already holds one
+		# is handoff_already_active; any other second command is che_busy.
+		var holds_handoff = not str(_active_commands[che_id].get("handoff_id", "")).is_empty()
+		var wants_handoff = not str(metrics.get("Command/HandoffId", "")).strip_edges().is_empty()
+		_fail(
+			che_id, command_id,
+			REASON_HANDOFF_ALREADY_ACTIVE if holds_handoff and wants_handoff else REASON_CHE_BUSY,
+			"CHE already has an active command"
+		)
 		return
 	var container_number = str(metrics.get("Command/ContainerNumber", "")).strip_edges().to_upper()
 	if not container_number.is_empty() and not is_container_number_format(container_number):
-		_publish_command_result(che_id, command_id, "failed", 0, "Container number format is invalid")
+		_fail(che_id, command_id, REASON_CONTAINER_NUMBER_INVALID, "Container number format is invalid")
 		return
 	if command_type == COMMAND_EXECUTE_ORDER_LEG:
 		if not metrics.has("Command/DestinationLatitude") or not metrics.has("Command/DestinationLongitude"):
-			_publish_command_result(che_id, command_id, "failed", 0, "Command has no destination coordinates")
+			_fail(che_id, command_id, REASON_DESTINATION_MISSING, "Command has no destination coordinates")
 			return
 	elif command_type == COMMAND_QC_DISCHARGE:
 		if str(metrics.get("Command/HandoffId", "")).strip_edges().is_empty():
-			_publish_command_result(che_id, command_id, "failed", 0, "qc_discharge requires Command/HandoffId")
+			_fail(che_id, command_id, REASON_HANDOFF_ID_MISSING, "qc_discharge requires Command/HandoffId")
 			return
 		if int(metrics.get("Command/ContainerVisitId", 0)) <= 0:
-			_publish_command_result(che_id, command_id, "failed", 0, "qc_discharge requires Command/ContainerVisitId")
+			_fail(che_id, command_id, REASON_CONTAINER_VISIT_ID_MISSING, "qc_discharge requires Command/ContainerVisitId")
 			return
 	var handoff_id = str(metrics.get("Command/HandoffId", "")).strip_edges()
 	if not handoff_id.is_empty() and _handoff_side_taken(handoff_id, command_type == COMMAND_QC_DISCHARGE):
-		_publish_command_result(che_id, command_id, "failed", 0, "HandoffId is already held by another active command")
+		_fail(che_id, command_id, REASON_HANDOFF_ALREADY_ACTIVE, "HandoffId is already held by another active command")
 		return
 	var che: Dictionary = _ches[che_id]
 	if not bool(che.get("powered_on", false)) or bool(che.get("is_in_maintenance", false)):
-		_publish_command_result(che_id, command_id, "failed", 0, "CHE is not executable")
+		_fail(che_id, command_id, REASON_CHE_NOT_EXECUTABLE, "CHE is not executable")
 		return
 	var command = _build_command(command_type, command_id, metrics, che)
 	command["container_number"] = container_number
@@ -443,7 +470,7 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 func _handle_cancel(che_id: int, cancel_id: String, metrics: Dictionary):
 	var target_id = str(metrics.get("Command/CancelCommandId", "")).strip_edges()
 	if target_id.is_empty():
-		_publish_command_result(che_id, cancel_id, "failed", 0, "Cancel requires Command/CancelCommandId")
+		_fail(che_id, cancel_id, REASON_CANCEL_TARGET_MISSING, "Cancel requires Command/CancelCommandId")
 		return
 	if not _active_commands.has(che_id):
 		if (
@@ -454,11 +481,11 @@ func _handle_cancel(che_id: int, cancel_id: String, metrics: Dictionary):
 			_save_runtime_state()
 			_replay_command_result(target_id)
 			return
-		_publish_command_result(che_id, cancel_id, "failed", 0, "No active command to cancel")
+		_fail(che_id, cancel_id, REASON_NO_ACTIVE_COMMAND, "No active command to cancel")
 		return
 	var command: Dictionary = _active_commands[che_id]
 	if target_id != str(command.command_id):
-		_publish_command_result(che_id, cancel_id, "failed", 0, "Cancel target is not the active command")
+		_fail(che_id, cancel_id, REASON_CANCEL_TARGET_MISMATCH, "Cancel target is not the active command")
 		return
 	var events: Array
 	if _is_qc_command(command):
@@ -794,11 +821,18 @@ func _publish_command_result(
 	_flush_result_outbox()
 
 
+## `failed` result: Reason is a machine code, Detail the human-readable text.
+func _fail(che_id: int, command_id: String, code: String, detail := ""):
+	_publish_command_result(che_id, command_id, "failed", 0, code, "", {"detail": detail})
+
+
 ## Optional result metrics taken from the command (absent fields are omitted).
 func _result_context_metrics(context: Dictionary) -> Array:
 	var metrics: Array = []
 	if context.is_empty():
 		return metrics
+	if not str(context.get("detail", "")).is_empty():
+		metrics.append({"name": "Command/Result/Detail", "type": "String", "value": str(context.detail)})
 	if int(context.get("container_visit_id", 0)) > 0:
 		metrics.append({"name": "Command/Result/ContainerVisitId", "type": "Int64", "value": int(context.container_visit_id)})
 	if not str(context.get("container_number", "")).is_empty():

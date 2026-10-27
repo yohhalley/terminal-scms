@@ -82,6 +82,7 @@ func _initialize():
 	_test_carrying_metric_name()
 	_test_handoff_completed_fields()
 	_test_node_birth_metrics()
+	_test_failure_reason_codes()
 	_test_device_id_mapping()
 	_test_mqtt_packet_id_wraps()
 	_cleanup_state_file()
@@ -454,16 +455,16 @@ func _test_command_type_routing():
 	_assert(not simulator._active_commands[TT_ID].has("tt_phase"), "Legacy commands keep legacy movement")
 	_send(simulator, QC_ID, _command(QC_ID, {"Command/Type": "qc_load", "Command/HandoffId": "h"}))
 	var last = _last_result(simulator)
-	_assert(str(last["Command/Result/Event"]) == "failed" and str(last["Command/Result/Reason"]).begins_with("Unsupported command type"), "Unknown types are rejected")
+	_assert(str(last["Command/Result/Event"]) == "failed" and str(last["Command/Result/Reason"]) == "unsupported_command_type" and str(last["Command/Result/Detail"]) == "Unsupported command type: qc_load", "Unknown types are rejected with the contract code; text in Detail")
 	_assert(not simulator._active_commands.has(QC_ID), "A rejected type creates no action")
 	var no_handoff = _qc_metrics()
 	no_handoff.erase("Command/HandoffId")
 	_send(simulator, QC_ID, _command(QC_ID, no_handoff))
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]).contains("HandoffId"), "qc_discharge needs a HandoffId")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_id_missing", "qc_discharge needs a HandoffId")
 	var bad_number = _qc_metrics()
 	bad_number["Command/ContainerNumber"] = "MSC-1234"
 	_send(simulator, QC_ID, _command(QC_ID, bad_number))
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]).contains("Container number"), "Malformed container numbers are rejected")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "container_number_invalid", "Malformed container numbers are rejected")
 	_assert(HeadlessSimulator.is_container_number_format("MSCU1234565"), "A well-formed container number passes")
 	for category in ["J", "Z"]:
 		_assert(HeadlessSimulator.is_container_number_format("MSC%s1234565" % category), "ISO 6346 category %s passes" % category)
@@ -482,12 +483,12 @@ func _test_handoff_id_rules():
 	second_tt["Command/CounterpartCheId"] = QC_ID
 	_send(simulator, 3, _command(3, second_tt))
 	_assert(not simulator._active_commands.has(3), "A second receiver for the same HandoffId is rejected")
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]).contains("HandoffId"), "Rejection names the HandoffId")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_already_active" and str(_last_result(simulator)["Command/Result/Detail"]).contains("HandoffId"), "A held HandoffId is handoff_already_active (contract §3.2)")
 	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
 	_send(simulator, 4, _command(4, _qc_metrics()))
 	_assert(simulator._active_commands.has(QC_ID) and not simulator._active_commands.has(4), "A second giver for the same HandoffId is rejected")
 	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "CHE already has an active command", "A TT holds one handoff at a time")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_already_active", "A TT holds one handoff at a time (handoff_already_active)")
 	# Pairing is by HandoffId, not by container: a TT with the same container but another HandoffId is never used.
 	var simulator2 = _new_simulator(1, QC_LAT)
 	var other_tt = _tt_metrics()
@@ -516,7 +517,7 @@ func _test_cancel_releases_che():
 	_send(simulator, TT_ID, leg)
 	_run_steps(simulator, 10)
 	_send(simulator, TT_ID, _cancel(TT_ID, "99999999-9999-4999-8999-999999999999"))
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Cancel target is not the active command", "A cancel for another command is rejected")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "cancel_target_mismatch", "A cancel for another command is rejected")
 	_assert(simulator._active_commands.has(TT_ID), "A rejected cancel leaves the command running")
 	var cancel = _cancel(TT_ID, str(leg["Command/Id"]))
 	_send(simulator, TT_ID, cancel)
@@ -534,12 +535,12 @@ func _test_cancel_releases_che():
 	_assert(str(_last_result(simulator)["Command/Result/Id"]) == str(last["Command/Result/Id"]), "A redelivered cancel replays the same cancelled result")
 	_assert(_results(simulator).size() == before + 1 and simulator._active_commands.has(TT_ID), "A redelivered cancel does not cancel the next command")
 	_send(simulator, TT_ID, _cancel(TT_ID))
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Cancel requires Command/CancelCommandId", "A cancel without a target is rejected")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "cancel_target_missing", "A cancel without a target is rejected")
 	_assert(simulator._active_commands.has(TT_ID), "A rejected cancel leaves the next command running")
 	_send(simulator, TT_ID, _cancel(TT_ID, str(next_leg["Command/Id"])))
 	_assert(str(_last_result(simulator)["Command/Result/Event"]) == "cancelled" and not simulator._active_commands.has(TT_ID), "A cancel naming the active command cancels it")
 	_send(simulator, TT_ID, _cancel(TT_ID, "99999999-9999-4999-8999-999999999999"))
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "No active command to cancel", "Cancel on an idle CHE fails cleanly")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "no_active_command", "Cancel on an idle CHE fails cleanly")
 	# A TT that already holds the container is emptied by the cancel.
 	var simulator2 = _new_simulator(3, QC_LAT)
 	_send(simulator2, QC_ID, _command(QC_ID, _qc_metrics()))
@@ -595,9 +596,9 @@ func _test_command_expiry_uses_sim_time():
 	var simulator = _new_simulator(1, QC_LAT)
 	simulator._clock.restore(120000)
 	_send(simulator, TT_ID, _leg(TT_ID, 120000))
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Command expired", "ExpiresAtMs at the current Sim/TimeMs is expired")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "command_expired", "ExpiresAtMs at the current Sim/TimeMs is expired")
 	_send(simulator, TT_ID, _leg(TT_ID, 60000))
-	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "Command expired", "ExpiresAtMs in the sim past is expired")
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "command_expired", "ExpiresAtMs in the sim past is expired")
 	_assert(not simulator._active_commands.has(TT_ID), "Expired commands create no action")
 	var wall_now = int(Time.get_unix_time_from_system() * 1000.0)
 	_assert(not simulator.is_command_expired({"Command/ExpiresAtMs": 120001}), "A deadline 1 ms after Sim/TimeMs is valid even though it is long past in wall time")
@@ -797,14 +798,21 @@ func _test_results_pending_until_puback():
 	_free_simulator(simulator)
 
 
-## N15-3: a redelivered DCMD replays the recorded result with the same Result/Id
+## N15-3: a DCMD redelivered after completion replays the recorded result with the same Result/Id
 ## and Sim/EventSeq, and it is tracked until PUBACK like any other.
 func _test_duplicate_dcmd_replays_same_result():
 	var simulator = _new_simulator(2, QC_LAT)
 	var metrics = _command(QC_ID, _qc_metrics())
 	_send(simulator, QC_ID, metrics)
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_run_steps(simulator, 3000)
+	_assert(not simulator._active_commands.has(QC_ID), "The QC command completed before the redelivery")
 	_ack_all(simulator)
-	var last = _last_result(simulator)
+	var last: Dictionary = {}
+	for item in _results(simulator):
+		if str(item.m["Command/Result/CommandId"]) == str(metrics["Command/Id"]):
+			last = item.m
+	_assert(str(last.get("Command/Result/Event", "")) == "completed", "The QC's last result is completed")
 	var count = _results(simulator).size()
 	var seq_before = simulator._event_seq
 	_send(simulator, QC_ID, metrics)
@@ -893,6 +901,31 @@ func _test_node_birth_metrics():
 		for metric in call[2]:
 			if str(metric.name) == "Event/TimeMs":
 				_assert(str(metric.type) == "Int64", "Event/TimeMs is Int64")
+	_free_simulator(simulator)
+
+
+## S15-6: every failed result carries a machine code in Reason (snake_case) and
+## the human text in Detail; a second plain command is che_busy.
+func _test_failure_reason_codes():
+	var simulator = _new_simulator(1, QC_LAT)
+	var plain = {"Command/DestinationLatitude": QC_LAT + 0.001, "Command/DestinationLongitude": QC_LON}
+	_send(simulator, TT_ID, _command(TT_ID, plain))
+	_send(simulator, TT_ID, _command(TT_ID, plain))
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "che_busy", "A second command without a hand-off is che_busy")
+	var bad_session = _command(QC_ID, _qc_metrics())
+	bad_session["Command/SessionId"] = "00000000-0000-4000-8000-000000000000"
+	_send(simulator, QC_ID, bad_session)
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "session_mismatch", "Session mismatch code")
+	var no_assignment = _command(QC_ID, _qc_metrics())
+	no_assignment.erase("Command/AssignmentId")
+	_send(simulator, QC_ID, no_assignment)
+	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "assignment_id_missing", "Missing assignment code")
+	var code = RegEx.new()
+	code.compile("^[a-z]+(_[a-z]+)*$")
+	for item in _results(simulator):
+		if str(item.m["Command/Result/Event"]) == "failed":
+			_assert(code.search(str(item.m["Command/Result/Reason"])) != null, "Reason is a code: %s" % item.m["Command/Result/Reason"])
+			_assert(not str(item.m.get("Command/Result/Detail", "")).is_empty(), "Detail holds the text")
 	_free_simulator(simulator)
 
 func _test_device_id_mapping():
