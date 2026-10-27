@@ -1381,22 +1381,32 @@ def transition_visit_status(request, visit_id):
     if not new_status:
         return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    visit_manager = VisitStateManager()
-    success, message = visit_manager.transition_visit_status(visit, new_status, request.user)
-
-    if success:
-        # Return updated visit
-        serializer = VisitSerializer(visit)
+    # TCL-032: the legacy VisitStateManager/VisitSerializer never existed in this
+    # codebase. Use the same rules as the CarrierVisit API (CarrierVisitSerializer:
+    # status must be one of CarrierVisit.STATUS_CHOICES); no transition graph is
+    # enforced because none is defined yet (open question for the PO).
+    # A same-status request is a 200 no-op: nothing is saved, so save() does not
+    # recompute etd or bump last_updated.
+    old_status = visit.status
+    if new_status == old_status:
         return Response({
             'success': True,
-            'message': message,
-            'visit': serializer.data
+            'message': f'Visit {visit.name} is already {old_status}; no change.',
+            'visit': CarrierVisitSerializer(visit).data,
         })
-    else:
+    serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
+    if not serializer.is_valid():
         return Response({
             'success': False,
-            'message': message
+            'message': f'Invalid status {new_status!r} for visit {visit.name}.',
+            'errors': serializer.errors,
         }, status=status.HTTP_400_BAD_REQUEST)
+    serializer.save()
+    return Response({
+        'success': True,
+        'message': f'Visit {visit.name} status changed from {old_status} to {visit.status}.',
+        'visit': serializer.data,
+    })
 
 
 @api_view(['POST'])
@@ -1414,22 +1424,29 @@ def transition_container_status(request, container_id):
     if not new_status:
         return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    visit_manager = VisitStateManager()
-    success, message = visit_manager.transition_container_status(container_visit, new_status, request.user)
-
-    if success:
-        # Return updated container
-        serializer = ContainerVisitSerializer(container_visit)
+    # TCL-032: same fix as transition_visit_status. Validate through the existing
+    # ContainerVisitSerializer (model status choices + its OnEquipment rules);
+    # no transition graph is enforced. A same-status request is a 200 no-op.
+    old_status = container_visit.status
+    if new_status == old_status:
         return Response({
             'success': True,
-            'message': message,
-            'container_visit': serializer.data
+            'message': f'Container visit {container_visit.pk} is already {old_status}; no change.',
+            'container_visit': ContainerVisitSerializer(container_visit).data,
         })
-    else:
+    serializer = ContainerVisitSerializer(container_visit, data={'status': new_status}, partial=True)
+    if not serializer.is_valid():
         return Response({
             'success': False,
-            'message': message
+            'message': f'Invalid status {new_status!r} for container visit {container_visit.pk}.',
+            'errors': serializer.errors,
         }, status=status.HTTP_400_BAD_REQUEST)
+    serializer.save()
+    return Response({
+        'success': True,
+        'message': f'Container visit {container_visit.pk} status changed from {old_status} to {container_visit.status}.',
+        'container_visit': serializer.data,
+    })
 
 
 @api_view(['GET'])
