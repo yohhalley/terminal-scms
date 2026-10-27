@@ -21,6 +21,9 @@ from .models import (
     OutboxEvent,
     SimulationSession,
 )
+from .services.simulations import stop_simulation
+from .services.sparkplug_runtime import process_sparkplug_message
+from .sparkplug import encode_payload
 from .test_handoffs import CONTAINER, HandoffTestBase
 
 TOKEN = "t"
@@ -162,6 +165,59 @@ class DispatchNextApiTests(DispatchNextApiTestBase):
         self.assertFalse(
             CommandResultReceipt.objects.filter(status=CommandResultReceipt.REJECTED).exists(),
         )
+
+
+class DispatchNextSessionStateTests(DispatchNextApiTestBase):
+    """TL review S-1: the 200 no-op only while the leg's session is running and connected."""
+
+    ndeath_topic = "spBv1.0/ENTERPRISE_A/NDEATH/SCMS_ENTERPRISE_A_SITE_A"
+
+    def dispatch_first_step(self):
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        return self.leg_commands().count(), self.dcmd_count()
+
+    def ndeath(self):
+        SimulationSession.objects.filter(pk=self.session.pk).update(sparkplug_bdseq=1)
+        process_sparkplug_message(
+            self.ndeath_topic, encode_payload([{"name": "bdSeq", "type": "Int64", "value": 1}]),
+        )
+        self.session.refresh_from_db()
+
+    def assert_not_running_409(self, counts):
+        response = self.post(self.order.pk)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.data["code"], "simulation_not_running")
+        self.assertIn("not running and connected", response.data["detail"])
+        self.assertNotIn("dispatched", response.data)
+        self.assertEqual((self.leg_commands().count(), self.dcmd_count()), counts)
+
+    def test_running_session_recall_is_still_the_200_noop(self):
+        counts = self.dispatch_first_step()
+        response = self.post(self.order.pk)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(response.data["dispatched"])
+        self.assertEqual(response.data["code"], "waiting_for_handoff")
+        self.assertEqual((self.leg_commands().count(), self.dcmd_count()), counts)
+
+    def test_stopped_session_recall_is_409_simulation_not_running(self):
+        counts = self.dispatch_first_step()
+        stop_simulation(self.session.pk)
+        # The legs stay dispatched; only the hand-off is closed (pre-existing, TCL-006 resets).
+        self.assertTrue(self.order.operations.filter(
+            status=ExecutionOperation.DISPATCHED).exists())
+        self.assertEqual(Handoff.objects.get().status, Handoff.CANCELLED)
+        self.assert_not_running_409(counts)
+        # The stop completes with NDEATH (desired stopped): still 409.
+        self.ndeath()
+        self.assertEqual(self.session.actual_state, SimulationSession.STOPPED)
+        self.assert_not_running_409(counts)
+
+    def test_disconnected_session_recall_is_409_simulation_not_running(self):
+        counts = self.dispatch_first_step()
+        self.ndeath()  # Godot died: desired running, node offline, awaiting NBIRTH.
+        self.assertFalse(self.session.node_connected)
+        self.assertEqual(self.session.actual_state, SimulationSession.STARTING)
+        self.assert_not_running_409(counts)
 
 
 class GodotFailureCodeTests(DispatchNextApiTestBase):

@@ -36,8 +36,11 @@ from .serializers import (
 from .services.dispatch import (
     DISPATCH_EQUIPMENT_INVALID,
     DISPATCH_IN_FLIGHT_CODES,
+    DISPATCH_SIMULATION_NOT_RUNNING,
+    SIMULATION_NOT_RUNNING_MESSAGE,
     apply_command_event,
     dispatch_next_operation,
+    live_leg_session_running,
     order_has_live_leg,
 )
 from .services.simulations import (
@@ -289,10 +292,11 @@ class ExecutionOrderViewSet(ReadOnlyModelViewSet):
     def dispatch_next(self, request, pk=None):
         """TCL-028: dispatch the order's next step as TCL-002 DCMDs.
 
-        201: new DCMDs queued. 200: the current step is still in flight, nothing
-        new was sent (an idempotent re-call, A-18). 409: the order is not
-        released/active, has nothing left to dispatch, or no CHE/simulation is
-        available. 400: a bad request body or an unusable ``equipment_id``.
+        201: new DCMDs queued. 200: the current step is still in flight in a
+        running, connected session; nothing new was sent (an idempotent re-call,
+        A-18). 409: the order is not released/active, has nothing left to
+        dispatch, no CHE/simulation is available, or a leg is in flight but its
+        session is stopped or offline (``simulation_not_running``, TL review S-1). 400: a bad request body or an unusable ``equipment_id``.
         Every refusal carries ``code`` (machine) and ``detail`` (human).
         """
         serializer = DispatchRequestSerializer(data=request.data)
@@ -308,6 +312,15 @@ class ExecutionOrderViewSet(ReadOnlyModelViewSet):
             detail = "; ".join(exc.messages)
             order.refresh_from_db()
             if code in DISPATCH_IN_FLIGHT_CODES and order_has_live_leg(order):
+                if not live_leg_session_running(order):
+                    # TL review S-1: the leg is stuck, not in flight.
+                    return Response(
+                        {
+                            "code": DISPATCH_SIMULATION_NOT_RUNNING,
+                            "detail": SIMULATION_NOT_RUNNING_MESSAGE,
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
                 data = dict(ExecutionOrderSerializer(
                     order, context=self.get_serializer_context(),
                 ).data)

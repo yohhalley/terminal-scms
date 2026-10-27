@@ -54,6 +54,14 @@ DISPATCH_OPERATION_NOT_PLANNABLE = "operation_not_plannable"
 DISPATCH_NO_SIMULATION = "no_simulation"
 DISPATCH_NO_EQUIPMENT = "no_equipment"
 DISPATCH_EQUIPMENT_INVALID = "equipment_invalid"
+# TL review S-1: a leg is in flight, but its session is stopped or offline, so
+# the leg can never progress; a re-call must not look like a healthy no-op.
+DISPATCH_SIMULATION_NOT_RUNNING = "simulation_not_running"
+SIMULATION_NOT_RUNNING_MESSAGE = (
+    "A leg of this order is still dispatched, but its simulation session is not "
+    "running and connected (stopped, or the Edge Node is offline). The leg cannot "
+    "progress; restart or reset the simulation."
+)
 NO_EQUIPMENT_MESSAGE = "No fresh, available CHE satisfies this operation."
 EQUIPMENT_INVALID_MESSAGE = (
     "The requested CHE is not a fresh, available CHE of the right type in the active session."
@@ -71,6 +79,18 @@ DISPATCH_IN_FLIGHT_CODES = frozenset({
 def order_has_live_leg(order):
     """True while any leg of the order is dispatched or working (TCL-028)."""
     return order.operations.filter(status__in=ACTIVE_OPERATION_STATES).exists()
+
+
+def live_leg_session_running(order):
+    """TL review S-1: True when a live leg's DCMD belongs to a session that is
+    running and node-connected (NBIRTH seen, no NDEATH, no stop requested)."""
+    return SimulationSession.objects.filter(
+        desired_state=SimulationSession.RUNNING_DESIRED,
+        actual_state=SimulationSession.RUNNING,
+        node_connected=True,
+        commands__assignment__operation__order=order,
+        commands__assignment__operation__status__in=ACTIVE_OPERATION_STATES,
+    ).exists()
 
 
 def derived_id(*parts):
