@@ -242,6 +242,8 @@ class ExecutionOrder(models.Model):
     started_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)
     failure_reason = models.TextField(blank=True)
+    # TCL-028/§3.2c: Godot Command/Result/Detail next to the failure code.
+    failure_detail = models.TextField(blank=True)
     source_payload = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -308,6 +310,8 @@ class ExecutionOperation(models.Model):
     actual_start = models.DateTimeField(blank=True, null=True)
     actual_end = models.DateTimeField(blank=True, null=True)
     failure_reason = models.TextField(blank=True)
+    # TCL-028/§3.2c: Godot Command/Result/Detail next to the failure code.
+    failure_detail = models.TextField(blank=True)
     source_payload = models.JSONField(default=dict)
 
     class Meta:
@@ -420,6 +424,8 @@ class DispatchAssignment(models.Model):
     started_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)
     failure_reason = models.TextField(blank=True)
+    # TCL-028/§3.2c: Godot Command/Result/Detail next to the failure code.
+    failure_detail = models.TextField(blank=True)
 
 
 class EquipmentCommand(models.Model):

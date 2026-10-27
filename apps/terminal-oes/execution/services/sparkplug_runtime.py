@@ -195,6 +195,7 @@ def _route_result(command, event, metrics, result_id):
         event,
         position_id=position_id or None,
         reason=str(metrics.get("Command/Result/Reason", "")),
+        detail=str(metrics.get("Command/Result/Detail", "")),
         event_ms=event_ms,
         source=metrics.get("Command/Result/Source") or None,
     )

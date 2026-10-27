@@ -43,6 +43,35 @@ TERMINAL_COMMAND_STATES = {
 DONE_OPERATION_STATES = {ExecutionOperation.COMPLETE, ExecutionOperation.CANCELLED}
 ACTIVE_OPERATION_STATES = {ExecutionOperation.DISPATCHED, ExecutionOperation.WORKING}
 
+# TCL-028: machine codes on dispatch refusals (``ValidationError.code``), so the
+# ``dispatch-next`` API can map them to 409/400 and recognise a re-call.
+DISPATCH_ORDER_NOT_RELEASED = "order_not_released"
+DISPATCH_NOTHING_TO_DISPATCH = "nothing_to_dispatch"
+DISPATCH_ALREADY_DISPATCHED = "already_dispatched"
+DISPATCH_WAITING_FOR_HANDOFF = "waiting_for_handoff"
+DISPATCH_EARLIER_INCOMPLETE = "earlier_operation_incomplete"
+DISPATCH_OPERATION_NOT_PLANNABLE = "operation_not_plannable"
+DISPATCH_NO_SIMULATION = "no_simulation"
+DISPATCH_NO_EQUIPMENT = "no_equipment"
+DISPATCH_EQUIPMENT_INVALID = "equipment_invalid"
+NO_EQUIPMENT_MESSAGE = "No fresh, available CHE satisfies this operation."
+EQUIPMENT_INVALID_MESSAGE = (
+    "The requested CHE is not a fresh, available CHE of the right type in the active session."
+)
+# Refusals that only mean "the current step is still in flight": with a live
+# leg, a re-call of dispatch-next is an idempotent no-op (A-18).
+DISPATCH_IN_FLIGHT_CODES = frozenset({
+    DISPATCH_NOTHING_TO_DISPATCH,
+    DISPATCH_ALREADY_DISPATCHED,
+    DISPATCH_WAITING_FOR_HANDOFF,
+    DISPATCH_EARLIER_INCOMPLETE,
+})
+
+
+def order_has_live_leg(order):
+    """True while any leg of the order is dispatched or working (TCL-028)."""
+    return order.operations.filter(status__in=ACTIVE_OPERATION_STATES).exists()
+
 
 def derived_id(*parts):
     """Deterministic UUID for OES-derived identities (D-016)."""
@@ -89,28 +118,44 @@ def _plan_dispatch(order):
         if operation.status in ACTIVE_OPERATION_STATES:
             continue
         if operation.status != ExecutionOperation.PLANNED:
-            raise ValidationError("The next order operation is already assigned or blocked.")
+            raise ValidationError(
+                "The next order operation is already assigned or blocked.",
+                code=DISPATCH_OPERATION_NOT_PLANNABLE,
+            )
         previous = operations[index - 1] if index else None
         following = operations[index + 1] if index + 1 < len(operations) else None
         if previous is None or previous.status == ExecutionOperation.COMPLETE:
             if any(earlier.status not in DONE_OPERATION_STATES for earlier in operations[:index]):
-                raise ValidationError("An earlier order operation is not complete.")
+                raise ValidationError(
+                    "An earlier order operation is not complete.", code=DISPATCH_EARLIER_INCOMPLETE,
+                )
             if following is not None and is_handoff_boundary(operation):
                 if following.status != ExecutionOperation.PLANNED:
-                    raise ValidationError("The hand-off receiver leg is not plannable.")
+                    raise ValidationError(
+                        "The hand-off receiver leg is not plannable.",
+                        code=DISPATCH_OPERATION_NOT_PLANNABLE,
+                    )
                 return operation, following, False
             return operation, None, False
         if previous.status in ACTIVE_OPERATION_STATES and is_handoff_boundary(previous):
             incoming = previous.incoming_handoffs.first()
             if incoming is not None and incoming.status != Handoff.TRANSFERRED:
                 raise ValidationError(
-                    "Q18: the next hand-off waits until the previous hand-off has transferred."
+                    "Q18: the next hand-off waits until the previous hand-off has transferred.",
+                    code=DISPATCH_WAITING_FOR_HANDOFF,
                 )
             if previous.outgoing_handoffs.exists():
-                raise ValidationError("The order's next hand-off is already dispatched.")
+                raise ValidationError(
+                    "The order's next hand-off is already dispatched.",
+                    code=DISPATCH_ALREADY_DISPATCHED,
+                )
             return previous, operation, True
-        raise ValidationError("An earlier order operation is not complete.")
-    raise ValidationError("The order has no remaining operation to dispatch.")
+        raise ValidationError(
+            "An earlier order operation is not complete.", code=DISPATCH_EARLIER_INCOMPLETE,
+        )
+    raise ValidationError(
+        "The order has no remaining operation to dispatch.", code=DISPATCH_NOTHING_TO_DISPATCH,
+    )
 
 
 def _eligible_equipment(operation, session):
@@ -197,7 +242,7 @@ def _choose(operation, session, order, *, exclude=()):
     ]
     equipment = select_equipment(candidates, seed=session.seed, order_id=order.tos_order_id)
     if equipment is None:
-        raise ValidationError("No fresh, available CHE satisfies this operation.")
+        raise ValidationError(NO_EQUIPMENT_MESSAGE, code=DISPATCH_NO_EQUIPMENT)
     return equipment
 
 
@@ -542,7 +587,9 @@ def _active_session(order):
         node_connected=True,
     ).first()
     if session is None:
-        raise ValidationError("The Site has no connected, running Sparkplug simulation.")
+        raise ValidationError(
+            "The Site has no connected, running Sparkplug simulation.", code=DISPATCH_NO_SIMULATION,
+        )
     return session
 
 
@@ -556,21 +603,25 @@ def dispatch_next_operation(order_id, *, equipment_id=None):
     """
     order = ExecutionOrder.objects.select_for_update().get(pk=order_id)
     if order.status not in {ExecutionOrder.RELEASED, ExecutionOrder.IN_PROGRESS}:
-        raise ValidationError("Only released or active orders can be dispatched.")
+        raise ValidationError(
+            "Only released or active orders can be dispatched.", code=DISPATCH_ORDER_NOT_RELEASED,
+        )
     first, receiver_operation, chained = _plan_dispatch(order)
     session = _active_session(order)
 
     if chained:
         giver = first.assignment.equipment
         if _pending_handoff_for(giver, session):
-            raise ValidationError("Q18: the CHE already has an active hand-off.")
+            raise ValidationError(
+                "Q18: the CHE already has an active hand-off.", code=DISPATCH_WAITING_FOR_HANDOFF,
+            )
         receiver = (
             _explicit_equipment(equipment_id, order, receiver_operation, session)
             if equipment_id is not None
             else _choose(receiver_operation, session, order, exclude={giver.pk})
         )
         if receiver is None:
-            raise ValidationError("No fresh, available CHE satisfies this operation.")
+            raise ValidationError(EQUIPMENT_INVALID_MESSAGE, code=DISPATCH_EQUIPMENT_INVALID)
         handoff = _create_handoff(session, order, first, receiver_operation, giver, receiver)
         anchor = _transfer_sim_ms(session, first)
         _issue_assign_handoff(session, order, first, handoff, receiver, anchor_sim_ms=anchor)
@@ -589,9 +640,12 @@ def dispatch_next_operation(order_id, *, equipment_id=None):
     else:
         equipment = _explicit_equipment(equipment_id, order, first, session)
     if equipment is None:
-        raise ValidationError("No fresh, available CHE satisfies this operation.")
+        raise ValidationError(EQUIPMENT_INVALID_MESSAGE, code=DISPATCH_EQUIPMENT_INVALID)
     if equipment.simulation_session_id != session.pk:
-        raise ValidationError("The selected CHE does not belong to the active simulation session.")
+        raise ValidationError(
+            "The selected CHE does not belong to the active simulation session.",
+            code=DISPATCH_EQUIPMENT_INVALID,
+        )
 
     receiver = None
     handoff = None
@@ -623,7 +677,7 @@ def dispatch_next_operation(order_id, *, equipment_id=None):
 
 @transaction.atomic
 def apply_command_event(
-    command_id, event, *, position_id=None, reason="", event_ms=None, source=None,
+    command_id, event, *, position_id=None, reason="", detail="", event_ms=None, source=None,
     notify_che=False,
 ):
     """Apply one command result or operator event.
@@ -746,8 +800,12 @@ def apply_command_event(
         DispatchAssignment.COMPLETE
     )
     assignment.completed_at = now
+    # §3.2c: ``reason`` is the raw failure code, kept as sent; an unknown code
+    # is a generic failure. ``detail`` is human text, stored, never parsed.
+    detail = str(detail or "")
     assignment.failure_reason = reason
-    assignment.save(update_fields=["status", "completed_at", "failure_reason"])
+    assignment.failure_detail = detail
+    assignment.save(update_fields=["status", "completed_at", "failure_reason", "failure_detail"])
     operation.status = (
         ExecutionOperation.FAILED if failed else
         ExecutionOperation.CANCELLED if cancelled else
@@ -755,7 +813,8 @@ def apply_command_event(
     )
     operation.actual_end = now
     operation.failure_reason = reason
-    operation.save(update_fields=["status", "actual_end", "failure_reason"])
+    operation.failure_detail = detail
+    operation.save(update_fields=["status", "actual_end", "failure_reason", "failure_detail"])
     equipment.working = False
     equipment.is_dispatched = False
     equipment.is_available = equipment.powered_on and not equipment.is_in_maintenance
@@ -776,17 +835,25 @@ def apply_command_event(
         )
 
     tos_event = "leg_failed" if failed else "order_cancelled" if cancelled else "leg_completed"
+    extra = {}
+    if reason:
+        extra["reason"] = reason
+    if detail and (failed or cancelled):
+        extra["detail"] = detail
     outgoing = queue_execution_event(
         order, tos_event, operation=operation, equipment=equipment,
-        extra={"reason": reason} if reason else None,
+        extra=extra or None,
         occurred_at=occurred_at,
     )
     finalize_outbox_event(outgoing)
     if failed:
         order.status = ExecutionOrder.FAILED
         order.failure_reason = reason
+        order.failure_detail = detail
         order.completed_at = now
-        order.save(update_fields=["status", "failure_reason", "completed_at", "updated_at"])
+        order.save(update_fields=[
+            "status", "failure_reason", "failure_detail", "completed_at", "updated_at",
+        ])
     elif cancelled:
         order.status = ExecutionOrder.CANCELLED
         order.completed_at = now

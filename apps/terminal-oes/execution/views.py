@@ -33,7 +33,13 @@ from .serializers import (
     StartSimulationSerializer,
     SiteProjectionSerializer,
 )
-from .services.dispatch import apply_command_event, dispatch_next_operation
+from .services.dispatch import (
+    DISPATCH_EQUIPMENT_INVALID,
+    DISPATCH_IN_FLIGHT_CODES,
+    apply_command_event,
+    dispatch_next_operation,
+    order_has_live_leg,
+)
 from .services.simulations import (
     bootstrap_document,
     claim_next_session,
@@ -281,22 +287,44 @@ class ExecutionOrderViewSet(ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="dispatch-next")
     def dispatch_next(self, request, pk=None):
+        """TCL-028: dispatch the order's next step as TCL-002 DCMDs.
+
+        201: new DCMDs queued. 200: the current step is still in flight, nothing
+        new was sent (an idempotent re-call, A-18). 409: the order is not
+        released/active, has nothing left to dispatch, or no CHE/simulation is
+        available. 400: a bad request body or an unusable ``equipment_id``.
+        Every refusal carries ``code`` (machine) and ``detail`` (human).
+        """
         serializer = DispatchRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        order = self.get_object()
         try:
             assignment = dispatch_next_operation(
-                self.get_object().pk,
+                order.pk,
                 equipment_id=serializer.validated_data.get("equipment_id"),
             )
         except DjangoValidationError as exc:
-            raise ValidationError(_service_error(exc)) from exc
-        return Response(
-            ExecutionOrderSerializer(
-                assignment.operation.order,
-                context=self.get_serializer_context(),
-            ).data,
-            status=status.HTTP_201_CREATED,
-        )
+            code = getattr(exc, "code", None) or "dispatch_refused"
+            detail = "; ".join(exc.messages)
+            order.refresh_from_db()
+            if code in DISPATCH_IN_FLIGHT_CODES and order_has_live_leg(order):
+                data = dict(ExecutionOrderSerializer(
+                    order, context=self.get_serializer_context(),
+                ).data)
+                data.update(dispatched=False, code=code, detail=detail)
+                return Response(data, status=status.HTTP_200_OK)
+            return Response(
+                {"code": code, "detail": detail},
+                status=(
+                    status.HTTP_400_BAD_REQUEST if code == DISPATCH_EQUIPMENT_INVALID
+                    else status.HTTP_409_CONFLICT
+                ),
+            )
+        data = dict(ExecutionOrderSerializer(
+            assignment.operation.order, context=self.get_serializer_context(),
+        ).data)
+        data["dispatched"] = True
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class EquipmentStateViewSet(ReadOnlyModelViewSet):
@@ -331,6 +359,7 @@ class EquipmentCommandViewSet(
                 serializer.validated_data["event"],
                 position_id=serializer.validated_data.get("position_id"),
                 reason=serializer.validated_data.get("reason", ""),
+                detail=serializer.validated_data.get("detail", ""),
                 notify_che=True,
             )
         except DjangoValidationError as exc:
