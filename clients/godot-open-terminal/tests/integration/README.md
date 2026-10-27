@@ -67,7 +67,8 @@ Environment: `SIMULATOR_SEED`, `SIMULATOR_RUN_ID`, `SIMULATOR_FIXED_STEP_MS`,
 `QC01`; `legacy` uses `CHE_{id}`), and
 `SIMULATOR_QC_WAIT_MIN_S` / `SIMULATOR_QC_WAIT_MAX_S`. `SIMULATOR_QC_HOLD_WAIT_MIN_S`
 / `_MAX_S` override the general wait range. `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`
-sets the no-show time-out (default 300; the RTG uses the same value).
+sets the no-show time-out (default 300). The RTG side is off unless
+`SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED=true`, which applies the same value (O7).
 `SIMULATOR_RTG_WAIT_MIN_S` / `SIMULATOR_RTG_WAIT_MAX_S` (default 10..30) and
 `SIMULATOR_RTG_HOLD_WAIT_MIN_S` / `_MAX_S` set the RTG hold. Each variable also
 accepts a `SIM_*` alias. See `NOTES-TCL-014a.md` and `NOTES-TCL-014b.md` for open

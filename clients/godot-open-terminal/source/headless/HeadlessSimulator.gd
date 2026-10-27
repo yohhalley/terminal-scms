@@ -53,6 +53,10 @@ const TT_AT_DESTINATION_WAITING := "at_destination_waiting"
 const DEFAULT_QC_WAIT_MIN_S := 10
 const DEFAULT_QC_WAIT_MAX_S := 30
 const DEFAULT_TT_NO_SHOW_TIMEOUT_S := 300
+## D17-1: the RTG-side no-show time-out (D-013 analogue) is a separate switch and
+## stays OFF until the PO decides O7. Off: an RTG in waiting_for_tt waits until
+## the TT arrives or OES cancels. On: it uses Sim/Timing/TtNoShowTimeoutS.
+const DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED := false
 ## Sim-time command TTL (seconds) applied when a DCMD carries no ExpiresAtMs.
 const DEFAULT_COMMAND_TTL_S := 600
 ## Sim time is checkpointed at least this often, so a restart loses at most this much.
@@ -106,6 +110,7 @@ var _rtg_wait_s := {
 	"hold": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
 }
 var _tt_no_show_timeout_s := DEFAULT_TT_NO_SHOW_TIMEOUT_S
+var _rtg_no_show_timeout_enabled := DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED
 var _command_ttl_s := DEFAULT_COMMAND_TTL_S
 
 
@@ -169,6 +174,12 @@ func _configure_simulation():
 			["SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "SIM_TT_NO_SHOW_TIMEOUT_S"], str(DEFAULT_TT_NO_SHOW_TIMEOUT_S)
 		)
 	)
+	configure_rtg_no_show_timeout_enabled(
+		_env_any(
+			["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", "SIM_RTG_NO_SHOW_TIMEOUT_ENABLED"],
+			str(DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED)
+		)
+	)
 
 	configure_command_ttl(
 		_env_any(["SIMULATOR_COMMAND_TTL_S", "SIM_COMMAND_TTL_S"], str(DEFAULT_COMMAND_TTL_S))
@@ -198,6 +209,25 @@ func command_deadline_sim_ms(metrics: Dictionary) -> int:
 
 func is_command_expired(metrics: Dictionary) -> bool:
 	return command_deadline_sim_ms(metrics) <= _clock.now_ms
+
+
+## Sets Sim/Timing/RtgNoShowTimeoutEnabled from true/false, 1/0, yes/no or on/off
+## (case-insensitive). Anything else keeps the previous value. Returns true when applied.
+func configure_rtg_no_show_timeout_enabled(text: String) -> bool:
+	var value_text = text.strip_edges().to_lower()
+	if value_text in ["true", "1", "yes", "on"]:
+		_rtg_no_show_timeout_enabled = true
+		return true
+	if value_text in ["false", "0", "no", "off"]:
+		_rtg_no_show_timeout_enabled = false
+		return true
+	push_warning("Invalid RTG no-show switch %s; keeping %s" % [text, _rtg_no_show_timeout_enabled])
+	return false
+
+
+## RTG no-show time-out in ms for RtgStack.start (0 = never times out).
+func rtg_no_show_timeout_ms() -> int:
+	return _tt_no_show_timeout_s * 1000 if _rtg_no_show_timeout_enabled else 0
 
 
 ## Sets Sim/Timing/TtNoShowTimeoutS (whole seconds, > 0). Invalid values keep the
@@ -344,6 +374,7 @@ func node_birth_metrics() -> Array:
 		{"name": "Sim/Timing/RtgHoldMinS", "type": "Int64", "value": int(_rtg_wait_s.hold[0])},
 		{"name": "Sim/Timing/RtgHoldMaxS", "type": "Int64", "value": int(_rtg_wait_s.hold[1])},
 		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
+		{"name": "Sim/Timing/RtgNoShowTimeoutEnabled", "type": "Boolean", "value": _rtg_no_show_timeout_enabled},
 		{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": _command_ttl_s},
 	]
 
@@ -523,7 +554,7 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	elif rtg_leg:
 		var rtg_key = _command_seed_key(command)
 		var rtg_hold_s = _draw_rtg_wait_s(che, rtg_key, 0, "hold")
-		var rtg_events = RtgStack.start(command, rtg_hold_s * 1000, _rtg_slot(che, command, rtg_key), _tt_no_show_timeout_s * 1000)
+		var rtg_events = RtgStack.start(command, rtg_hold_s * 1000, _rtg_slot(che, command, rtg_key), rtg_no_show_timeout_ms())
 		_active_commands[che_id] = command
 		_save_runtime_state()
 		_publish_events(che_id, command, rtg_events)

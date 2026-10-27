@@ -98,7 +98,9 @@ func _initialize():
 	_test_chain_late_tt_at_rtg()
 	_test_chain_rtg_cancel()
 	_test_chain_determinism()
-	_test_chain_wrong_handoff_id()
+	_test_chain_wrong_handoff_id(false)
+	_test_chain_wrong_handoff_id(true)
+	_test_rtg_no_show_setting()
 	_test_rtg_rules_and_config()
 	_cleanup_state_file()
 	if not _failed:
@@ -1245,8 +1247,10 @@ func _test_chain_determinism():
 	_assert(first != _chain_trace(77), "Another seed changes the chain")
 
 
-func _test_chain_wrong_handoff_id():
+## D17-1: run with the RTG no-show switch off (default) and on.
+func _test_chain_wrong_handoff_id(rtg_no_show_enabled: bool):
 	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator.configure_rtg_no_show_timeout_enabled(str(rtg_no_show_enabled)), "RTG no-show switch applies")
 	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
 	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
 	_run_steps(simulator, 2)
@@ -1277,14 +1281,47 @@ func _test_chain_wrong_handoff_id():
 	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics(HANDOFF_ID_WRONG)))
 	_assert(str(_last_result(simulator)["Command/Result/Reason"]) == "handoff_already_active", "A TT holds at most one active hand-off")
 	_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 3000)
-	# RTG with a HandoffId the TT does not hold: never pairs, times out after 300 s sim.
+	# RTG with a HandoffId the TT does not hold: never pairs. Switch on: times out
+	# after 300 s sim (D-013 analogue). Switch off: keeps waiting_for_tt.
 	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics(HANDOFF_ID_WRONG)))
 	_run_steps(simulator, 3100)
 	var rtg_events = _events_of(_results(simulator), "RTG01")
 	_assert(not rtg_events.has("handoff_completed"), "Wrong HandoffId: the RTG must not take the container (%s)" % [rtg_events])
-	_assert(rtg_events.has("handoff_timed_out"), "Wrong HandoffId: the RTG times out (D-013 analogue)")
+	if rtg_no_show_enabled:
+		_assert(rtg_events.has("handoff_timed_out"), "Switch on: the RTG times out (D-013 analogue)")
+	else:
+		_assert(not rtg_events.has("handoff_timed_out"), "Switch off: the RTG never times out (%s)" % [rtg_events])
+		_assert(str(simulator._active_commands[RTG_ID].work_state) == "waiting_for_tt", "Switch off: the RTG keeps waiting_for_tt")
 	_assert(_tt_phase(simulator) == "at_destination_waiting" and int(simulator._active_commands[TT_ID].load_container_visit_id) == 101, "The TT keeps the container")
 	_free_simulator(simulator)
+
+
+## D17-1: SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED parsing, default off, NBIRTH metric,
+## and RtgStack with timeout 0 never timing out.
+func _test_rtg_no_show_setting():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(not simulator._rtg_no_show_timeout_enabled and simulator.rtg_no_show_timeout_ms() == 0, "RTG no-show is off by default")
+	_assert(_birth_metric(simulator, "Sim/Timing/RtgNoShowTimeoutEnabled") == false, "NBIRTH reports the RTG no-show switch off")
+	for text in ["true", "1", "YES", " on "]:
+		_assert(simulator.configure_rtg_no_show_timeout_enabled(text) and simulator._rtg_no_show_timeout_enabled, "%s turns it on" % text)
+	_assert(simulator.rtg_no_show_timeout_ms() == 300000, "On: uses Sim/Timing/TtNoShowTimeoutS")
+	_assert(_birth_metric(simulator, "Sim/Timing/RtgNoShowTimeoutEnabled") == true, "NBIRTH reports the RTG no-show switch on")
+	_assert(not simulator.configure_rtg_no_show_timeout_enabled("maybe") and simulator._rtg_no_show_timeout_enabled, "Invalid text keeps the value")
+	for text in ["false", "0", "no", "OFF"]:
+		_assert(simulator.configure_rtg_no_show_timeout_enabled(text) and not simulator._rtg_no_show_timeout_enabled, "%s turns it off" % text)
+	_free_simulator(simulator)
+	var command = _rtg_command()
+	RtgStack.start(command, 10000, {"position_id": 0, "position_code": "BLOCK01-DUMMY-01"}, 0)
+	RtgStack.step(command, 0, 0)
+	_assert(RtgStack.step(command, 10000000, 0).is_empty(), "RtgStack with timeout 0 never times out")
+	_assert(_names(RtgStack.step(command, 10000100, TT_ID)) == ["handoff_completed"], "Switch off: a very late TT is still served")
+
+
+func _birth_metric(simulator: HeadlessSimulator, name: String):
+	for metric in simulator.node_birth_metrics():
+		if str(metric.name) == name:
+			return metric.value
+	return null
 
 
 func _test_rtg_rules_and_config():

@@ -28,6 +28,8 @@ environment are allowlisted explicitly (see `ALLOWED_ENVIRONMENT`):
 `SIMULATOR_QC_WAIT_MIN_S`, `SIMULATOR_QC_WAIT_MAX_S`, `SIMULATOR_QC_HOLD_WAIT_MIN_S`,
 `SIMULATOR_QC_HOLD_WAIT_MAX_S`, `SIMULATOR_RTG_WAIT_MIN_S`, `SIMULATOR_RTG_WAIT_MAX_S`,
 `SIMULATOR_RTG_HOLD_WAIT_MIN_S`, `SIMULATOR_RTG_HOLD_WAIT_MAX_S`, `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`,
+`SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED` (default `false`: an RTG waiting for its TT
+never times out; `true` applies `SIMULATOR_TT_NO_SHOW_TIMEOUT_S` to the RTG too, pending O7),
 `SIMULATOR_COMMAND_TTL_S` and `SIMULATOR_SCENARIO_ID` (NBIRTH `Sim/ScenarioId`;
 the OES bootstrap `session.scenario_id` wins when present).
 
