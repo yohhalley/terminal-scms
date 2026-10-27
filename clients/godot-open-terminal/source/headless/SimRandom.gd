@@ -58,15 +58,28 @@ func draw_wait_s(
 	return _rng.randi_range(low, high)
 
 
-## UUID-shaped (version 8, RFC 4122 variant) id for a command result. It includes
-## the run id so reruns of the same session/command never reuse a result id.
-func result_id(session_id: String, command_id: String, event: String, event_seq: int) -> String:
-	var key = _key(["result", run_id, session_id, command_id, event, event_seq])
-	var a = fnv1a32("0|" + key)
-	var b = fnv1a32("1|" + key)
-	var c = fnv1a32("2|" + key)
-	var d = fnv1a32("3|" + key)
-	return (
-		"%08x-%04x-8%03x-%04x-%04x%08x"
-		% [a, (b >> 16) & 0xffff, b & 0xfff, ((c >> 16) & 0x3fff) | 0x8000, c & 0xffff, d]
-	)
+## Contract §5.2 (B5) namespace for result ids. Fixed value, derived once as
+## uuid5(NAMESPACE_URL, "urn:scms:contract:tcl-002:result-id"); never change it,
+## or replays of an existing session would get new ids.
+const NS_TCL002 := "5db85d9e-b37c-5c1a-9501-e4cbb091c5b9"
+
+
+## Result/Id = uuid5(NS_TCL002, "{Session/Id}:{Sim/EventSeq}") (contract §5.2).
+## A replay of the same result keeps its EventSeq and so its id; a new run has a
+## new Session/Id, so reruns never collide.
+static func result_id(session_id: String, event_seq: int) -> String:
+	return uuid5(NS_TCL002, "%s:%d" % [session_id, event_seq])
+
+
+## RFC 4122 name-based UUID, version 5 (SHA-1).
+static func uuid5(namespace_uuid: String, name: String) -> String:
+	var data: PackedByteArray = namespace_uuid.replace("-", "").hex_decode()
+	data.append_array(name.to_utf8_buffer())
+	var context = HashingContext.new()
+	context.start(HashingContext.HASH_SHA1)
+	context.update(data)
+	var digest: PackedByteArray = context.finish().slice(0, 16)
+	digest[6] = (digest[6] & 0x0f) | 0x50
+	digest[8] = (digest[8] & 0x3f) | 0x80
+	var hex = digest.hex_encode()
+	return "%s-%s-%s-%s-%s" % [hex.substr(0, 8), hex.substr(8, 4), hex.substr(12, 4), hex.substr(16, 4), hex.substr(20, 12)]

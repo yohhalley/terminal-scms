@@ -43,6 +43,7 @@ class DockerLauncherTests(unittest.TestCase):
             "SIMULATOR_RTG_HOLD_WAIT_MAX_S": "25",
             "SIMULATOR_TT_NO_SHOW_TIMEOUT_S": "300",
             "SIMULATOR_COMMAND_TTL_S": "600",
+            "SIMULATOR_SCENARIO_ID": "import-discharge-ci",
             "SIMULATOR_DEFAULT_SPEED_MPS": "4.0",
         }
         environment = {

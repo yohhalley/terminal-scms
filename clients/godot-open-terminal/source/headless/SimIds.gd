@@ -30,9 +30,28 @@ static func device_id_for(che_id: int, ches: Dictionary) -> String:
 	return device_id({"pk": che_id})
 
 
-## Sparkplug ids must not contain '/', '+' or '#'.
+## Sparkplug ids must not contain '/', '+' or '#'. Q11 forbids silent
+## normalisation: when the name has to change, a warning names both forms (once
+## per name) so the MiniTOS Che.name can be fixed. The replacement stays so the
+## topic is still valid.
 static func sanitize(raw: String) -> String:
-	return raw.strip_edges().replace("/", "_").replace("+", "_").replace("#", "_")
+	var clean = raw.strip_edges().replace("/", "_").replace("+", "_").replace("#", "_")
+	if clean != raw:
+		_warn_once(raw, "Device name '%s' is not a valid Sparkplug id; publishing as '%s' (fix Che.name, contract Q11)" % [raw, clean])
+	return clean
+
+
+## Warnings raised so far (also pushed to the Godot log). Tests read and clear it.
+static var warnings: Array = []
+static var _warned := {}
+
+
+static func _warn_once(key: String, message: String):
+	if _warned.has(key):
+		return
+	_warned[key] = true
+	warnings.append(message)
+	push_warning(message)
 
 
 ## Key used to derive per-CHE random draws. It follows the device id so that a
