@@ -10,30 +10,20 @@ extends SceneTree
 # (Command/Type = "cancel", Command/CancelCommandId); the shape is NOT agreed yet
 # (BE review B4), so update it here when the contract is fixed.
 #
-# Known-bug convention (same as the Python known_bug marker):
-# - the B10 checks fail today -> prints EXPECTED FAILURE and exits 0, so
-#   `make test-godot` stays green on main;
-# - the B10 checks pass       -> prints UNEXPECTED SUCCESS and exits 1: remove
-#   KNOWN_BUG below in the change that fixes B10;
-# - a precondition fails or the script errors -> exits 1 as usual.
-# Set SCMS_CONTRACT_STRICT=1 to treat the known bug as a plain failure.
+# B10 is fixed by TCL-014a (#15, HeadlessSimulator._handle_cancel). The checks
+# below are plain assertions: any B10 regression prints "B10 regression: ..." and
+# exits 1.
 #
-# TCL-005a: B10 is fixed by TCL-014a (#15, HeadlessSimulator._handle_cancel), so
-# KNOWN_BUG is empty and the B10 checks are plain assertions. The DCMDs are
-# addressed by the CHE name (SC01), as #15 matches the topic's device id against
-# SimIds.device_id() (name mode, the default). The old CHE_17 form was rejected
-# with unknown_command_target before the cancel was ever exercised.
+# The DCMDs are addressed by the CHE name (SC01): #15 matches the topic's device
+# id against SimIds.device_id() (name mode, the default). The old CHE_17 form was
+# rejected with unknown_command_target before the cancel was ever exercised.
 
 const HeadlessSimulator = preload("res://source/headless/HeadlessSimulator.gd")
 const SimIds = preload("res://source/headless/SimIds.gd")
 const CHE_ID := 17
 const CHE_NAME := "SC01"
-# B10 ("Godot keeps a cancelled command, so the CHE rejects its next command") is
-# fixed; keep this empty so a regression fails the run.
-const KNOWN_BUG := ""
 
 var _failed := false
-var _known_bug_failures: Array = []
 
 
 class FakeSparkplugManager:
@@ -68,20 +58,7 @@ func _initialize():
 func _exit_code() -> int:
 	if _failed:
 		return 1
-	var strict = not OS.get_environment("SCMS_CONTRACT_STRICT").is_empty()
-	if KNOWN_BUG.is_empty():
-		if not _known_bug_failures.is_empty():
-			for failure in _known_bug_failures:
-				push_error("B10 regression: %s" % failure)
-			return 1
-		print("Cancel regression checks passed")
-		return 0
-	if _known_bug_failures.is_empty():
-		push_error("UNEXPECTED SUCCESS: %s is fixed; remove KNOWN_BUG in test_cancel_regression.gd" % KNOWN_BUG)
-		return 1
-	if strict:
-		return 1
-	print("EXPECTED FAILURE (KNOWN BUG %s): %s" % [KNOWN_BUG, "; ".join(_known_bug_failures)])
+	print("Cancel regression checks passed")
 	return 0
 
 
@@ -139,7 +116,7 @@ func _test_next_command_after_cancel_is_accepted():
 	}))
 
 	var cancelled: Dictionary = simulator._command_outcomes.get(first_id, {})
-	_known_bug_check(
+	_b10_check(
 		str(cancelled.get("event", "")) == "cancelled" and not (
 			simulator._active_commands.has(CHE_ID)
 			and str(simulator._active_commands[CHE_ID].command_id) == first_id
@@ -150,11 +127,11 @@ func _test_next_command_after_cancel_is_accepted():
 	var second_id = "55555555-5555-4555-8555-555555555555"
 	simulator._on_sparkplug_command(topic, "DCMD", device_id, _command(simulator, second_id, _leg()))
 	var outcome: Dictionary = simulator._command_outcomes.get(second_id, {})
-	_known_bug_check(
+	_b10_check(
 		str(outcome.get("event", "")) != "failed",
 		"next DCMD after a cancel is rejected: event=%s reason=%s" % [outcome.get("event", ""), outcome.get("reason", "")]
 	)
-	_known_bug_check(
+	_b10_check(
 		simulator._active_commands.has(CHE_ID) and str(simulator._active_commands[CHE_ID].command_id) == second_id,
 		"%s still holds cancelled command %s" % [CHE_NAME, first_id]
 	)
@@ -167,9 +144,8 @@ func _test_next_command_after_cancel_is_accepted():
 	fake.free()
 
 
-func _known_bug_check(condition: bool, message: String):
-	if not condition:
-		_known_bug_failures.append(message)
+func _b10_check(condition: bool, message: String):
+	_assert(condition, "B10 regression: %s" % message)
 
 
 func _assert(condition: bool, message: String):
