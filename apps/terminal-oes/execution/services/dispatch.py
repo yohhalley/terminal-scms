@@ -825,7 +825,8 @@ def apply_command_event(
     # §3.2c: ``reason`` is the raw failure code, kept as sent; an unknown code
     # is a generic failure. ``detail`` is human text, stored, never parsed.
     # TL review N-1: detail is only kept for a failed or cancelled leg.
-    detail = str(detail or "") if (failed or cancelled) else ""
+    # QA M2: None and whitespace-only become "" (and are left out of the event).
+    detail = str(detail or "").strip() if (failed or cancelled) else ""
     assignment.failure_reason = reason
     assignment.failure_detail = detail
     assignment.save(update_fields=["status", "completed_at", "failure_reason", "failure_detail"])

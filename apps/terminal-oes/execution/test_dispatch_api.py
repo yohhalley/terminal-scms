@@ -309,6 +309,35 @@ class GodotFailureCodeTests(DispatchNextApiTestBase):
         self.assertEqual(failed.payload["data"]["reason"], "che_busy")
         self.assertNotIn("detail", failed.payload["data"])
 
+    def test_null_or_blank_detail_is_empty_and_left_out_of_leg_failed(self):
+        # QA M2: a Sparkplug null detail is not "None"; whitespace-only is empty.
+        for order_id, value in ((51, None), (52, "   "), (53, "\t\n")):
+            with self.subTest(detail=repr(value)):
+                OutboxEvent.objects.all().delete()
+                order = self.release(order_id)
+                self.assertEqual(self.post(order.pk).status_code, 201)
+                qc_cmd = self.command_for(self.qc)
+                receipt = self.result(qc_cmd, "failed", 0, **{
+                    "Command/Result/Reason": "che_busy", "Command/Result/Detail": value,
+                })
+                self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+                operation = order.operations.get(sequence=1)
+                self.assertEqual(operation.failure_detail, "")
+                order.refresh_from_db()
+                self.assertEqual(order.failure_detail, "")
+                failed = OutboxEvent.objects.get(payload__data__event="leg_failed")
+                self.assertNotIn("detail", failed.payload["data"])
+
+    def test_detail_is_stripped(self):
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        qc_cmd = self.command_for(self.qc)
+        self.result(qc_cmd, "failed", 0, **{
+            "Command/Result/Reason": "che_busy", "Command/Result/Detail": "  crane fault \n",
+        })
+        self.assertEqual(self.order.operations.get(sequence=1).failure_detail, "crane fault")
+        failed = OutboxEvent.objects.get(payload__data__event="leg_failed")
+        self.assertEqual(failed.payload["data"]["detail"], "crane fault")
+
     def test_operator_failed_event_via_api_records_detail(self):
         self.assertEqual(self.post(self.order.pk).status_code, 201)
         qc_cmd = self.command_for(self.qc)

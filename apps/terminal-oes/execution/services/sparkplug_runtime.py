@@ -175,7 +175,8 @@ def _route_result(command, event, metrics, result_id):
         return CommandResultReceipt.INFORMATIONAL
     expected_number = operation.order.container_number
     reported_number = str(metrics.get("Command/Result/ContainerNumber") or "")
-    detail = str(metrics.get("Command/Result/Detail", ""))
+    # QA M2: a Sparkplug null is None, not "None"; whitespace-only is empty.
+    detail = str(metrics.get("Command/Result/Detail") or "").strip()
     if expected_number and reported_number and reported_number != expected_number:
         if event != "failed":
             # TL review N-4: this includes ``cancelled``. A cancel is terminal and
