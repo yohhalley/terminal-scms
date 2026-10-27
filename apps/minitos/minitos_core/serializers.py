@@ -70,7 +70,11 @@ class PositionSerializer(serializers.ModelSerializer):
         position = Position.objects.get(pk=instance.id)
         Position.objects.filter(pk=instance.id)\
                            .update(**validated_data)
-        if position.container is Null:
+        # TCL-032: was `position.container is Null` (Position has no `container`
+        # attribute; `Null` is undefined). Branch values kept as-is although they
+        # are the inverse of Position.save() (is_occupied = bool(container_visit));
+        # open question. Note DRF never calls a serializer `partial_update`.
+        if position.container_visit is None:
             position.is_occupied = True
         else:
             position.is_occupied = False
