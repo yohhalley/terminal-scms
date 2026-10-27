@@ -5,9 +5,13 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   minitos:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:17
@@ -50,6 +54,7 @@ jobs:
 
   terminal-oes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: apps/terminal-oes
@@ -67,6 +72,7 @@ jobs:
 
   simulator-runner:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -75,9 +81,11 @@ jobs:
       - run: python -m unittest discover -v -s apps/simulator-runner -p 'test_*.py'
 
   # Headless Godot unit suites (TCL-029). They use fakes for MQTT and OES, so no
-  # broker or credentials are needed. A non-zero exit or a hang (timeout) fails the job.
+  # broker or credentials are needed. A non-zero exit, a hang (timeout) or any
+  # "SCRIPT ERROR" in the output fails the step (.github/scripts/run-godot-test.sh).
   godot:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: clients/godot-open-terminal
@@ -87,16 +95,17 @@ jobs:
       - name: Import project
         run: timeout 300 "$GODOT_BIN" --headless --editor --path . --quit
       - name: test_headless_sim.gd
-        run: timeout 600 "$GODOT_BIN" --headless --path . --script tests/unit/test_headless_sim.gd
+        run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_headless_sim.gd
       - name: test_terminal_integration.gd
-        run: timeout 600 "$GODOT_BIN" --headless --path . --script tests/unit/test_terminal_integration.gd
+        run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_terminal_integration.gd
       - name: test_che_rails.gd
-        run: timeout 600 "$GODOT_BIN" --headless --path . --script tests/unit/test_che_rails.gd
+        run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_che_rails.gd
 
   # Optional: live MQTT lifecycle against HiveMQ CE (same image as compose.yaml).
   # It does not block the workflow; promote it once it has proven stable.
   godot-mqtt-broker:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: true
     services:
       hivemq:
@@ -123,4 +132,4 @@ jobs:
       - name: Import project
         run: timeout 300 "$GODOT_BIN" --headless --editor --path . --quit
       - name: test_local_mqtt_broker.gd
-        run: timeout 120 "$GODOT_BIN" --headless --path . --script tests/integration/test_local_mqtt_broker.gd
+        run: ../../.github/scripts/run-godot-test.sh 120 tests/integration/test_local_mqtt_broker.gd
