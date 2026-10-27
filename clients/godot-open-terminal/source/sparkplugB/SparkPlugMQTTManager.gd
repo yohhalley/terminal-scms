@@ -32,6 +32,9 @@ var password := ""
 var node_birth_metrics: Array = []
 
 var sequence_number := 0
+## Packet id of the last successful publish (0 for QoS 0). Callers that track
+## PUBACKs read it right after a publish returns true.
+var last_packet_id := 0
 var birth_death_sequence := 0
 var mqtt = null
 
@@ -145,6 +148,11 @@ func publish_device_data(device_id: String, metrics: Array) -> bool:
 	return _publish("DDATA", _topic("DDATA", device_id), _payload(metrics), 0)
 
 
+## Command results are published at QoS 1 (contract: results must not be lost).
+func publish_device_result(device_id: String, metrics: Array) -> bool:
+	return _publish("DDATA", _topic("DDATA", device_id), _payload(metrics), 1)
+
+
 func publish_device_death(device_id: String) -> bool:
 	return _publish("DDEATH", _topic("DDEATH", device_id), _payload(), 0)
 
@@ -189,10 +197,12 @@ func _publish(message_type: String, topic: String, payload: PackedByteArray, qos
 	if _state != ConnectionState.CONNECTED:
 		publish_failed.emit(message_type, topic, "MQTT broker is not connected")
 		return false
+	last_packet_id = 0
 	var packet_id = int(mqtt.publish(topic, payload, retain, qos))
 	if packet_id < 0:
 		publish_failed.emit(message_type, topic, "MQTT transport rejected the packet")
 		return false
+	last_packet_id = packet_id
 	print("%s queued: %s" % [message_type, topic])
 	publish_queued.emit(message_type, topic, packet_id)
 	return true

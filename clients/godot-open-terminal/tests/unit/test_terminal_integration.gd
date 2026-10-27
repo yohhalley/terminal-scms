@@ -26,6 +26,10 @@ class FakeSparkplugManager:
 		calls.append(["DDATA", device_id, metrics])
 		return true
 
+	func publish_device_result(device_id: String, metrics: Array):
+		calls.append(["DDATA", device_id, metrics])
+		return true
+
 	func publish_device_death(device_id: String):
 		calls.append(["DDEATH", device_id, []])
 		return true
@@ -217,16 +221,16 @@ func _test_headless_command_idempotency_and_restart_recovery():
 		"Command/SessionId": simulator._session_id,
 		"Command/SiteId": simulator._site_id,
 		"Command/ConfigurationRevision": 7,
-		"Command/ExpiresAtMs": int(Time.get_unix_time_from_system() * 1000.0) + 60000,
+		"Command/ExpiresAtMs": 600000,
 		"Command/AssignmentId": "44444444-4444-4444-8444-444444444444",
 		"Command/DestinationLatitude": 41.351,
 		"Command/DestinationLongitude": 2.171,
 	}
-	simulator._on_sparkplug_command("spBv1.0/GROUP/DCMD/NODE/CHE_17", "DCMD", "CHE_17", metrics)
+	simulator._on_sparkplug_command("spBv1.0/GROUP/DCMD/NODE/SC01", "DCMD", "SC01", metrics)
 	var original_call_count = fake.calls.size()
 	var result_id = str(simulator._command_outcomes[command_id].result_id)
 	_assert(simulator._active_commands.size() == 1, "A valid DCMD must create one physical action")
-	simulator._on_sparkplug_command("spBv1.0/GROUP/DCMD/NODE/CHE_17", "DCMD", "CHE_17", metrics)
+	simulator._on_sparkplug_command("spBv1.0/GROUP/DCMD/NODE/SC01", "DCMD", "SC01", metrics)
 	_assert(simulator._active_commands.size() == 1, "A duplicate DCMD must not create a second physical action")
 	_assert(fake.calls.size() == original_call_count + 1, "A duplicate DCMD must only replay the recorded result")
 	_assert(str(simulator._command_outcomes[command_id].result_id) == result_id, "A duplicate DCMD must preserve the original result identity")

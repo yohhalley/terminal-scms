@@ -15,12 +15,15 @@ var _host := "127.0.0.1"
 var _port := 1883
 var _received_topics: Array[String] = []
 var _saw_powered_off_data := false
+## B15-2: a QoS 1 result DDATA must come back as a PUBACK with its packet id.
+var _result_packet_id := 0
+var _result_acked := false
 
 const EXPECTED_TOPICS: Array[String] = [
 	"spBv1.0/MINI-TERMINAL/NBIRTH/GODOT-SANDBOX",
-	"spBv1.0/MINI-TERMINAL/DBIRTH/GODOT-SANDBOX/CHE_999",
-	"spBv1.0/MINI-TERMINAL/DDATA/GODOT-SANDBOX/CHE_999",
-	"spBv1.0/MINI-TERMINAL/DDEATH/GODOT-SANDBOX/CHE_999",
+	"spBv1.0/MINI-TERMINAL/DBIRTH/GODOT-SANDBOX/MQTT-INTEGRATION-CHE",
+	"spBv1.0/MINI-TERMINAL/DDATA/GODOT-SANDBOX/MQTT-INTEGRATION-CHE",
+	"spBv1.0/MINI-TERMINAL/DDEATH/GODOT-SANDBOX/MQTT-INTEGRATION-CHE",
 	"spBv1.0/MINI-TERMINAL/NDEATH/GODOT-SANDBOX",
 ]
 
@@ -29,6 +32,7 @@ func _initialize():
 	get_root().add_child(_client)
 	_client.broker_checked.connect(_on_broker_checked)
 	_client.message_rejected.connect(_on_message_rejected)
+	_client.publish_acknowledged.connect(_on_publish_acknowledged)
 	var configured_host = OS.get_environment("MQTT_TEST_HOST")
 	if not configured_host.is_empty():
 		_host = configured_host
@@ -74,6 +78,19 @@ func _process(delta):
 		if not _client.publish_che_data(che):
 			_fail("DDATA was rejected")
 			return
+		var result_metrics = [
+			{"name": "Command/Result/Id", "type": "String", "value": "7d422a93-a77f-54c7-9a08-c1970096d39d"},
+			{"name": "Command/Result/CommandId", "type": "String", "value": "33333333-3333-4333-8333-000000000001"},
+			{"name": "Command/Result/Event", "type": "String", "value": "acknowledged"},
+			{"name": "Sim/EventSeq", "type": "Int64", "value": 1},
+		]
+		if not _client.publish_command_result(che, result_metrics):
+			_fail("Result DDATA was rejected")
+			return
+		_result_packet_id = _client.last_result_packet_id
+		if _result_packet_id <= 0:
+			_fail("Result DDATA was not sent with QoS 1 (no packet id)")
+			return
 		che.powered_on = false
 		che.is_available = false
 		if not _client.publish_che_data(che):
@@ -93,6 +110,10 @@ func _process(delta):
 		if not _saw_powered_off_data:
 			_fail("Broker did not deliver a DDATA observation with PoweredOn=false")
 			return
+		if not _result_acked:
+			_fail("Broker did not PUBACK the QoS 1 result DDATA (packet id %s)" % _result_packet_id)
+			return
+		print("Result DDATA PUBACK received for packet id %s" % _result_packet_id)
 		print("Local MQTT lifecycle received successfully")
 		quit(1 if _failed else 0)
 
@@ -121,6 +142,11 @@ func _on_broker_checked(ok: bool, message: String):
 		_connected_at = _elapsed
 	elif not _disconnect_requested:
 		_fail(message)
+
+
+func _on_publish_acknowledged(packet_id: int):
+	if packet_id == _result_packet_id and packet_id > 0:
+		_result_acked = true
 
 
 func _on_message_rejected(message_type: String, device_id: String, reason: String):

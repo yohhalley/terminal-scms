@@ -5,8 +5,11 @@ signal broker_checked(ok: bool, message: String)
 signal message_published(message_type: String, device_id: String)
 signal message_rejected(message_type: String, device_id: String, reason: String)
 signal sparkplug_command_received(topic: String, message_type: String, device_id: String, metrics: Dictionary)
+## PUBACK for a QoS 1 publish (packet id as returned by the last publish).
+signal publish_acknowledged(packet_id: int)
 
 const SPARKPLUG_MANAGER = preload("res://source/sparkplugB/SparkPlugMQTTManager.gd")
+const SIM_IDS = preload("res://source/headless/SimIds.gd")
 const CONNECT_TIMEOUT_SECONDS := 8.0
 
 var _manager = null
@@ -15,6 +18,14 @@ var _pending_connection := {}
 var _born_devices := {}
 var _connected := false
 var _disconnect_requested := false
+## When set (headless sessions), Session/Id is added to every DBIRTH and DDATA.
+var session_id := ""
+## Headless sessions set the sim clock (ms) before each publish; it is added
+## as Sim/TimeMs to DBIRTH/DDATA so OES has a sim-time source. -1 = not set.
+var sim_time_ms := -1
+## MQTT packet id of the last successful publish_command_result (QoS 1), 0 when
+## the transport gives none. The caller keeps the result until that PUBACK.
+var last_result_packet_id := 0
 
 
 func _ready():
@@ -26,6 +37,7 @@ func _ready():
 	_manager.broker_connection_failed.connect(_on_connection_failed)
 	_manager.publish_failed.connect(_on_publish_failed)
 	_manager.message_received.connect(_on_message_received)
+	_manager.publish_acknowledged.connect(_on_publish_acknowledged)
 	_connect_timeout = Timer.new()
 	_connect_timeout.one_shot = true
 	_connect_timeout.wait_time = CONNECT_TIMEOUT_SECONDS
@@ -145,15 +157,27 @@ func publish_che_data(che: Dictionary) -> bool:
 
 
 func publish_command_result(che: Dictionary, metrics: Array) -> bool:
+	last_result_packet_id = 0
 	var device_id = _device_id(che)
 	if not _can_publish("DDATA", device_id):
 		return false
 	if not _born_devices.has(device_id) and not publish_che_birth(che):
 		return false
-	if not _manager.publish_device_data(device_id, metrics):
+	var published = (
+		_manager.publish_device_result(device_id, metrics)
+		if _manager.has_method("publish_device_result")
+		else _manager.publish_device_data(device_id, metrics)
+	)
+	if not published:
 		return false
+	var packet_id = _manager.get("last_packet_id")
+	last_result_packet_id = int(packet_id) if packet_id != null else 0
 	message_published.emit("DDATA", device_id)
 	return true
+
+
+func _on_publish_acknowledged(packet_id: int):
+	publish_acknowledged.emit(packet_id)
 
 
 func publish_che_death(che: Dictionary) -> bool:
@@ -237,10 +261,19 @@ func _on_message_received(topic: String, payload: PackedByteArray):
 
 
 func _device_id(che: Dictionary) -> String:
-	return "CHE_%s" % str(che.get("pk", che.get("id", che.get("name", "UNKNOWN"))))
+	return SIM_IDS.device_id(che)
 
 
 func _che_metrics(che: Dictionary) -> Array:
+	var metrics = _equipment_metrics(che)
+	if not session_id.is_empty():
+		metrics.append({"name": "Session/Id", "type": "String", "value": session_id})
+	if sim_time_ms >= 0:
+		metrics.append({"name": "Sim/TimeMs", "type": "Int64", "value": sim_time_ms})
+	return metrics
+
+
+func _equipment_metrics(che: Dictionary) -> Array:
 	var equipment: Dictionary = che.get("equipment_type_details", {})
 	return [
 		{"name": "Identity/Id", "type": "Int32", "value": int(che.get("pk", che.get("id", 0)))},

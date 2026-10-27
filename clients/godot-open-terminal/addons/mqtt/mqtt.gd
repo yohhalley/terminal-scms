@@ -240,6 +240,11 @@ static func encoderemaininglength(pkt, sz):
 			pkt.append(0x00);
 	pkt[i] = sz
 
+# MQTT packet identifiers are 1..65535 and must never be 0: wrap 65535 -> 1.
+func next_packet_id() -> int:
+	pid = (int(pid) % 65535) + 1
+	return pid
+
 static func encodeshortint(pkt, n):
 	assert (n >= 0 and n < 65536)
 	pkt.append((n >> 8) & 0xFF)
@@ -379,7 +384,7 @@ func publish(stopic, smsg, retain=false, qos=0):
 	var remstartpos = len(pkt)
 	encodevarstr(pkt, topic)
 	if qos > 0:
-		pid += 1
+		next_packet_id()
 		encodeshortint(pkt, pid)
 	pkt.append_array(msg)
 	assert (len(pkt) - remstartpos == sz)
@@ -393,7 +398,7 @@ func publish(stopic, smsg, retain=false, qos=0):
 	return pid if qos > 0 else 0
 
 func subscribe(stopic, qos=0):
-	pid += 1
+	next_packet_id()
 	var topic = stopic.to_ascii_buffer()
 	var sz = 2 + 2 + len(topic) + 1
 	var pkt = PackedByteArray()
@@ -417,7 +422,7 @@ func pingreq():
 	senddata(PackedByteArray([CP_PINGREQ, 0x00]))
 
 func unsubscribe(stopic):
-	pid += 1
+	next_packet_id()
 	var topic = stopic.to_ascii_buffer()
 	var sz = 2 + 2 + len(topic)
 	var pkt = PackedByteArray()
