@@ -1,18 +1,19 @@
 # TCL-014b: TT to the block, RTG takes the container to a dummy slot
 
-Branch `TCL-014b-tt-rtg-block`, based on the TCL-014a tip. Pulled forward from
+Branch `TCL-014b-tt-rtg-block` (PR #17), based on TCL-014a (PR #15) and merged
+with its review fixes (no rebase). Pulled forward from
 S2. RTG yard-to-truck is out of scope. This file records what was built, the
 assumptions made, and the open points. No product decisions were taken here;
-items marked **Yael** need a decision through the Tech Lead.
+items marked **PO** need a decision through the Tech Lead.
 
 ## What was built
 
 - `source/headless/RtgStack.gd`: a pure, serialisable RTG state machine that
   mirrors `QcDischarge.gd`:
-  contract rev 9.1 §3.4 canonical states
+  contract rev 9.3 §3.4 canonical states
   `idle -> gantry_to_bay -> [waiting_for_tt] -> picking_from_tt -> holding -> depositing_to_stack -> idle`.
   - `gantry_to_bay` (ack + started) takes zero sim time; no gantry travel.
-  - `waiting_for_tt` is canonical (Tech Lead decision (a), rev 9.1, mirrors
+  - `waiting_for_tt` is canonical (Tech Lead decision (a), rev 9.3, mirrors
     the QC), kept as its own state in the `RtgStack.WAITING_FOR_TT` constant.
   - The pick is `handoff_completed` (receiver), published with `Work/State` set
     to `picking_from_tt`.
@@ -94,7 +95,7 @@ items marked **Yael** need a decision through the Tech Lead.
 - A1: The RTG does not travel; contract `gantry_to_bay` is not modelled. The RTG
   is assumed to be at the lane. One hold is used after the pick, symmetric with
   the QC's single hold.
-- A2: The RTG `Work/State` names follow contract rev 9.1 §3.4 (O2 resolved).
+- A2: The RTG `Work/State` names follow contract rev 9.3 §3.4 (O2 resolved).
   The command field name `Command/DestinationPositionCode` is assumed (the
   contract §4 step 10 says "PositionId/PositionCode" without the metric name).
 - A3: A TT that received a container through a hand-off now always waits at its
@@ -112,17 +113,17 @@ items marked **Yael** need a decision through the Tech Lead.
 - A5: The `assign_handoff` shape now comes from the BE branch TCL-003a (read
   only). It passes the same session, site, revision, expiry and AssignmentId
   checks as any DCMD. `ExpiresAtMs` on it is checked on receipt only.
-- A6: The RTG no-show clock starts when the RTG enters `waiting_for_tt`, that
+- A6: When switched on (O7), the RTG no-show clock starts when the RTG enters `waiting_for_tt`, that
   is, on the first step after its command when no TT is waiting. If OES commands
   the RTG long before the TT can arrive, 300 s may fire on a TT that is still
   driving.
 
 ## Open points
 
-- O1 (**Yael**, via the Tech Lead): RTG timing. The contract gives none, so the
+- O1 (**PO**, via the Tech Lead): RTG timing. The contract gives none, so the
   default is 10..30 s like the QC hold, and it is configurable. Should there be
   a separate gantry/travel wait before the pick?
-- O2: resolved (rev 9 / 9.1): names aligned to §3.4, `waiting_for_tt`
+- O2: resolved (rev 9 / 9.3): names aligned to §3.4, `waiting_for_tt`
   canonical.
 - O3: resolved. TCL-014a no longer emits `container_dropped` (QC giver) or
   `container_picked_up` (TT receiver) for the hand-off (A4).
@@ -139,10 +140,20 @@ items marked **Yael** need a decision through the Tech Lead.
 - O6: resolved (rev 9): OES always sends the RTG destination; Godot echoes it,
   dummy slot only when absent. Confirm the `Command/DestinationPositionCode`
   metric name (A2).
-- O7 (**Yael**): should the D-013 time-out apply on the RTG side at all, and
-  with which start point (A6)? It is implemented behind the same
-  `TtNoShowTimeoutS` until decided.
+- O7 (**PO**): should the D-013 time-out apply on the RTG side at all, and
+  with which start point (A6)? Until decided it sits behind its own switch,
+  `SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED` (alias `SIM_RTG_NO_SHOW_TIMEOUT_ENABLED`,
+  runner allowlisted), default **off** (D17-1): the RTG waits in `waiting_for_tt`
+  until the TT arrives or OES cancels. On, it uses `Sim/Timing/TtNoShowTimeoutS`.
+  NBIRTH reports it as `Sim/Timing/RtgNoShowTimeoutEnabled` (Boolean; name assumed).
 - O8: should a TT waiting at the block for an RTG time out (A3)?
+- O10: RTG-leg and `assign_handoff` failures now use the 014a code/detail split
+  (S15-6). New codes, not yet in the contract list: `handoff_role_invalid`,
+  `rtg_block_mismatch`, `handoff_target_mismatch` (assign_handoff for another
+  leg / assignment / visit, or for a crane), `counterpart_che_missing`,
+  `handoff_not_ready` (TT has no completed receiver hand-off), `handoff_id_reused`.
+  Reused 014a codes: `container_visit_id_missing`, `no_active_command`,
+  `handoff_id_missing`, `handoff_already_active`.
 - O9: `HeadlessSimulator.gd` is now over gdlint's 1000-line limit. Its existing
   style already fails gdlint on main. A later split (hand-off plumbing into its
   own script) is suggested. `RtgStack.gd` is lint-clean.
