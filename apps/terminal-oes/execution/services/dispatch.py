@@ -54,6 +54,8 @@ DISPATCH_OPERATION_NOT_PLANNABLE = "operation_not_plannable"
 DISPATCH_NO_SIMULATION = "no_simulation"
 DISPATCH_NO_EQUIPMENT = "no_equipment"
 DISPATCH_EQUIPMENT_INVALID = "equipment_invalid"
+# QA M1: a request body that fails validation (HTTP 400, with DRF ``errors``).
+DISPATCH_INVALID_REQUEST = "invalid_request"
 # TL review S-1: a leg is in flight, but its session is stopped or offline, so
 # the leg can never progress; a re-call must not look like a healthy no-op.
 DISPATCH_SIMULATION_NOT_RUNNING = "simulation_not_running"

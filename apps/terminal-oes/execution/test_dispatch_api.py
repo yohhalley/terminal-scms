@@ -148,6 +148,26 @@ class DispatchNextApiTests(DispatchNextApiTestBase):
         self.assertEqual(response.data["code"], "equipment_invalid")
         self.assertFalse(EquipmentCommand.objects.exists())
 
+    def test_bad_body_is_400_with_code_detail_and_drf_errors(self):
+        # QA M1: same {code, detail} shape as every refusal, plus DRF errors.
+        for body, field_error in (
+            ({"equipment_id": "abc"}, "A valid integer is required."),
+            ({"equipment_id": 0}, "Ensure this value is greater than or equal to 1."),
+        ):
+            response = self.post(self.order.pk, body)
+            self.assertEqual(response.status_code, 400, response.content)
+            self.assertEqual(set(response.data), {"code", "detail", "errors"})
+            self.assertEqual(response.data["code"], "invalid_request")
+            self.assertEqual(
+                response.data["detail"], f"Invalid request body: equipment_id: {field_error}",
+            )
+            self.assertEqual(response.data["errors"], {"equipment_id": [field_error]})
+        self.assertFalse(EquipmentCommand.objects.exists())
+
+    def test_unknown_order_with_bad_body_is_404(self):
+        # QA M1: the order is looked up before the body is validated.
+        self.assertEqual(self.post(999_999, {"equipment_id": "abc"}).status_code, 404)
+
     def test_end_to_end_results_drive_execution_state_and_custody_to_the_tt(self):
         """API dispatch → Godot results → OES state → container_transferred to the TT."""
         self.assertEqual(self.post(self.order.pk).status_code, 201)

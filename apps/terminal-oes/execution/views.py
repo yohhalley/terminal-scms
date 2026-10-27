@@ -36,6 +36,7 @@ from .serializers import (
 from .services.dispatch import (
     DISPATCH_EQUIPMENT_INVALID,
     DISPATCH_IN_FLIGHT_CODES,
+    DISPATCH_INVALID_REQUEST,
     DISPATCH_SIMULATION_NOT_RUNNING,
     SIMULATION_NOT_RUNNING_MESSAGE,
     apply_command_event,
@@ -296,12 +297,25 @@ class ExecutionOrderViewSet(ReadOnlyModelViewSet):
         running, connected session; nothing new was sent (an idempotent re-call,
         A-18). 409: the order is not released/active, has nothing left to
         dispatch, no CHE/simulation is available, or a leg is in flight but its
-        session is stopped or offline (``simulation_not_running``, TL review S-1). 400: a bad request body or an unusable ``equipment_id``.
-        Every refusal carries ``code`` (machine) and ``detail`` (human).
+        session is stopped or offline (``simulation_not_running``, TL review S-1).
+        400: a bad request body (``invalid_request``, plus the DRF ``errors``) or
+        an unusable ``equipment_id`` (``equipment_invalid``). 404: unknown order,
+        checked before the body (QA M1). Every refusal carries ``code`` (machine)
+        and ``detail`` (human).
         """
-        serializer = DispatchRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
         order = self.get_object()
+        serializer = DispatchRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            # QA M1: same {code, detail} shape as every other refusal; ``errors``
+            # keeps DRF's field errors (additive).
+            return Response(
+                {
+                    "code": DISPATCH_INVALID_REQUEST,
+                    "detail": _first_error_message(serializer.errors),
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             assignment = dispatch_next_operation(
                 order.pk,
@@ -338,6 +352,14 @@ class ExecutionOrderViewSet(ReadOnlyModelViewSet):
         ).data)
         data["dispatched"] = True
         return Response(data, status=status.HTTP_201_CREATED)
+
+
+def _first_error_message(errors):
+    """Short human text for a DRF error dict: ``field: first message``."""
+    for field, messages in errors.items():
+        message = messages[0] if isinstance(messages, list) and messages else messages
+        return f"Invalid request body: {field}: {message}"
+    return "Invalid request body."
 
 
 class EquipmentStateViewSet(ReadOnlyModelViewSet):

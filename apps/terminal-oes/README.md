@@ -77,8 +77,8 @@ not on `detail`, which is human text.
 | 409 | `no_equipment` | No fresh, available CHE fits the operation. |
 | 409 | `dispatch_refused` | Any other service refusal without its own code. |
 | 400 | `equipment_invalid` | The named `equipment_id` is not a fresh, available CHE of the right type in the active session. |
-| 400 | serializer errors | Invalid body, e.g. `equipment_id: 0`. |
-| 404 | none | Unknown order. |
+| 400 | `invalid_request` | Invalid body, e.g. `equipment_id: 0` or `"abc"`. Body: `{code, detail, errors}`, where `errors` is DRF's field errors. |
+| 404 | none | Unknown order (checked before the body, so an unknown order with a bad body is still 404). |
 | 401/403 | none | Missing or wrong `X-OES-Token`. |
 
 Body shapes:
@@ -87,7 +87,8 @@ Body shapes:
 - 200: the order plus `"dispatched": false`, `"code"` and `"detail"`. Here
   `detail` explains why nothing was sent; it is not an error. Check
   `dispatched`, not the presence of `detail`.
-- 409 and 400 with a code: `{"code": "...", "detail": "..."}`.
+- 409 and 400 `equipment_invalid`: `{"code": "...", "detail": "..."}`.
+- 400 `invalid_request`: `{"code": "invalid_request", "detail": "Invalid request body: <field>: <message>", "errors": {"<field>": ["<message>"]}}`.
 
 See [docs/UNS_CONTRACT.md](docs/UNS_CONTRACT.md) for MQTT topics and payloads.
 
