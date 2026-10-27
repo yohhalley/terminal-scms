@@ -40,7 +40,7 @@ here; anything not covered by an explicit decision is listed as open.
   fails with "Cancel requires Command/CancelCommandId". The active command stops
   and is cleared, and the CHE goes idle with no container. `cancelled` is
   published for the **cancelled** command id, with `Work/State=idle` and
-  `Load/ContainerVisitId=0`. The CHE then accepts the next command.
+  `Carrying/ContainerVisitId=0`. The CHE then accepts the next command.
   - A redelivered cancel replays the same `cancelled` result and never cancels
     a newer command.
   - A cancel for another command fails with "Cancel target is not the active command".

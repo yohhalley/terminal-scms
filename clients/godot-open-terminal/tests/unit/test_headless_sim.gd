@@ -79,6 +79,7 @@ func _initialize():
 	_test_result_outbox_replays_in_order()
 	_test_results_pending_until_puback()
 	_test_duplicate_dcmd_replays_same_result()
+	_test_carrying_metric_name()
 	_test_device_id_mapping()
 	_test_mqtt_packet_id_wraps()
 	_cleanup_state_file()
@@ -520,7 +521,7 @@ func _test_cancel_releases_che():
 	var last = _last_result(simulator)
 	_assert(str(last["Command/Result/Event"]) == "cancelled", "Cancel publishes cancelled")
 	_assert(str(last["Command/Result/CommandId"]) == str(leg["Command/Id"]), "cancelled is reported for the cancelled command")
-	_assert(str(last["Work/State"]) == "idle" and int(last["Load/ContainerVisitId"]) == 0, "Cancelled CHE is idle and empty")
+	_assert(str(last["Work/State"]) == "idle" and int(last["Carrying/ContainerVisitId"]) == 0, "Cancelled CHE is idle and empty")
 	_assert(not simulator._active_commands.has(TT_ID), "Cancel clears the active command")
 	_assert(not bool(simulator._ches[TT_ID].working) and bool(simulator._ches[TT_ID].is_available), "Cancelled CHE is available")
 	var next_leg = _command(TT_ID, {"Command/DestinationLatitude": QC_LAT + 0.001, "Command/DestinationLongitude": QC_LON})
@@ -549,7 +550,7 @@ func _test_cancel_releases_che():
 			break
 	_assert(int(simulator2._active_commands[TT_ID].get("load_container_visit_id", 0)) == 101, "TT holds the container after the handoff")
 	_send(simulator2, TT_ID, _cancel(TT_ID, str(tt["Command/Id"])))
-	_assert(int(_last_result(simulator2)["Load/ContainerVisitId"]) == 0 and simulator2._active_commands.is_empty(), "Cancel clears the TT's container")
+	_assert(int(_last_result(simulator2)["Carrying/ContainerVisitId"]) == 0 and simulator2._active_commands.is_empty(), "Cancel clears the TT's container")
 	_free_simulator(simulator2)
 	_free_simulator(simulator)
 
@@ -628,7 +629,7 @@ func _test_sim_tt_no_show_then_cancel():
 	var timed_out = _find(results, "QC01", "handoff_timed_out")
 	_assert(int(timed_out["Sim/TimeMs"]) == hold_s * 1000 + 300000, "Time-out fires 300 s sim time after the hold end")
 	_assert(str(timed_out["Command/Result/HandoffId"]) == HANDOFF_ID, "handoff_timed_out carries the HandoffId")
-	_assert(str(timed_out["Work/State"]) == "waiting_for_tt" and int(timed_out["Load/ContainerVisitId"]) == 101, "QC still holds the container until OES cancels")
+	_assert(str(timed_out["Work/State"]) == "waiting_for_tt" and int(timed_out["Carrying/ContainerVisitId"]) == 101, "QC still holds the container until OES cancels")
 	# A TT that shows up after the time-out but before the cancel gets no transfer.
 	simulator._ches[TT_ID].latitude = QC_LAT
 	var tt = _command(TT_ID, _tt_metrics())
@@ -640,7 +641,7 @@ func _test_sim_tt_no_show_then_cancel():
 	_send(simulator, QC_ID, _cancel(QC_ID, str(qc["Command/Id"])))
 	_send(simulator, TT_ID, _cancel(TT_ID, str(tt["Command/Id"])))
 	var qc_cancel = _find(_results(simulator), "QC01", "cancelled")
-	_assert(str(qc_cancel.get("Work/State", "")) == "idle" and int(qc_cancel.get("Load/ContainerVisitId", -1)) == 0, "OES cancel clears the QC")
+	_assert(str(qc_cancel.get("Work/State", "")) == "idle" and int(qc_cancel.get("Carrying/ContainerVisitId", -1)) == 0, "OES cancel clears the QC")
 	_assert(simulator._active_commands.is_empty(), "Both legs are cancelled")
 	var retry = _qc_metrics()
 	retry["Command/HandoffId"] = "77777777-7777-4777-8777-777777777777"
@@ -814,6 +815,25 @@ func _test_duplicate_dcmd_replays_same_result():
 	_assert(simulator.pending_result_count() == 0, "The replay's PUBACK acks it")
 	_free_simulator(simulator)
 
+
+
+## S15-2: the custody key on result DDATA is Carrying/ContainerVisitId (contract §2), never Load/.
+func _test_carrying_metric_name():
+	var simulator = _new_simulator(2, QC_LAT)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_run_steps(simulator, 3000)
+	var with_state := 0
+	var carrying_values: Array = []
+	for item in _results(simulator):
+		for name in item.m.keys():
+			_assert(not str(name).begins_with("Load/"), "No Load/ metric on results: %s" % name)
+		if item.m.has("Work/State"):
+			with_state += 1
+			_assert(item.m.has("Carrying/ContainerVisitId"), "Results with Work/State carry Carrying/ContainerVisitId")
+			carrying_values.append(int(item.m.get("Carrying/ContainerVisitId", -1)))
+	_assert(with_state > 0 and carrying_values.has(101) and carrying_values.has(0), "Carrying/ContainerVisitId reports 101 while held and 0 when empty: %s" % [carrying_values])
+	_free_simulator(simulator)
 
 func _test_device_id_mapping():
 	var che = {"pk": 12, "name": "QC01"}

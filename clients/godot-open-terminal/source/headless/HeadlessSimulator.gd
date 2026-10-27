@@ -788,7 +788,7 @@ func _result_context_metrics(context: Dictionary) -> Array:
 	if not work_state.is_empty():
 		metrics.append({"name": "Work/State", "type": "String", "value": work_state})
 		metrics.append({"name": "Work/WaitUntilSimMs", "type": "Int64", "value": int(context.get("wait_until_ms", 0))})
-		metrics.append({"name": "Load/ContainerVisitId", "type": "Int64", "value": int(context.get("load_container_visit_id", 0))})
+		metrics.append({"name": "Carrying/ContainerVisitId", "type": "Int64", "value": int(context.get("load_container_visit_id", 0))})
 	return metrics
 
 
