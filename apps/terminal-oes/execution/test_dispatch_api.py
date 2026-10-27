@@ -211,6 +211,110 @@ class DispatchNextApiTests(DispatchNextApiTestBase):
         )
 
 
+class DispatchNextInFlightCodeTests(DispatchNextApiTestBase):
+    """QA M3: the other in-flight codes on the 200 (leg live) and 409 (no leg live) paths."""
+
+    def through_h1_and_h2(self):
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        qc_cmd, tt_cmd = self.command_for(self.qc), self.command_for(self.chosen_tt())
+        for cmd in (qc_cmd, tt_cmd):
+            self.result(cmd, "acknowledged", 0)
+            self.result(cmd, "started", 0)
+        self.transfer_h1(qc_cmd, tt_cmd)
+        self.assertEqual(self.post(self.order.pk).status_code, 201)  # TT→RTG (H2)
+
+    def assert_noop(self, code):
+        counts = (self.leg_commands().count(), self.dcmd_count(), Handoff.objects.count())
+        response = self.post(self.order.pk)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(response.data["dispatched"])
+        self.assertEqual(response.data["code"], code)
+        self.assertTrue(response.data["detail"])
+        self.assertEqual(
+            (self.leg_commands().count(), self.dcmd_count(), Handoff.objects.count()), counts,
+        )
+
+    def test_already_dispatched_with_a_live_leg_is_200(self):
+        self.through_h1_and_h2()
+        # The RTG leg reads as planned again while H2 exists (e.g. a manual edit).
+        self.order.operations.filter(sequence=3).update(status=ExecutionOperation.PLANNED)
+        self.assert_noop("already_dispatched")
+
+    def test_earlier_operation_incomplete_with_a_live_leg_is_200(self):
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        # The TT leg reads as complete while the QC leg is still dispatched.
+        self.order.operations.filter(sequence=2).update(status=ExecutionOperation.COMPLETE)
+        self.assert_noop("earlier_operation_incomplete")
+
+    def test_earlier_operation_incomplete_without_a_live_leg_is_409(self):
+        self.order.operations.filter(sequence=1).update(status=ExecutionOperation.CANCELLED)
+        response = self.post(self.order.pk)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.data["code"], "earlier_operation_incomplete")
+        self.assertEqual(set(response.data), {"code", "detail"})
+        self.assertFalse(EquipmentCommand.objects.exists())
+
+    def test_already_dispatched_without_a_live_leg_is_409(self):
+        # Not reachable from real state (the code needs an active giver leg),
+        # so the service refusal is mocked to check the view's mapping.
+        with mock.patch(
+            "execution.views.dispatch_next_operation",
+            side_effect=ValidationError("already sent", code="already_dispatched"),
+        ):
+            response = self.post(self.order.pk)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.data, {"code": "already_dispatched", "detail": "already sent"})
+
+
+class DispatchNextEquipmentInvalidTests(DispatchNextApiTestBase):
+    """QA M3: every way an explicit ``equipment_id`` is refused is 400 equipment_invalid."""
+
+    def assert_equipment_invalid(self, equipment_id):
+        counts = (self.leg_commands().count(), self.dcmd_count(), Handoff.objects.count())
+        response = self.post(self.order.pk, {"equipment_id": equipment_id})
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.data["code"], "equipment_invalid")
+        self.assertTrue(response.data["detail"])
+        self.assertEqual(
+            (self.leg_commands().count(), self.dcmd_count(), Handoff.objects.count()), counts,
+        )
+
+    def test_unknown_equipment_id(self):
+        self.assert_equipment_invalid(999_999)
+
+    def test_right_type_but_unavailable(self):
+        EquipmentState.objects.filter(pk=self.qc.pk).update(is_available=False)
+        self.assert_equipment_invalid(self.qc.pk)
+
+    def test_right_type_but_busy(self):
+        EquipmentState.objects.filter(pk=self.qc.pk).update(is_dispatched=True)
+        self.assert_equipment_invalid(self.qc.pk)
+
+    def test_che_of_another_simulation_session(self):
+        old = SimulationSession.objects.create(
+            site=self.site, configuration_revision=1, configuration_checksum="a" * 64,
+            sparkplug_group_id="ENTERPRISE_A", sparkplug_node_id="SCMS_ENTERPRISE_A_SITE_A",
+            actual_state=SimulationSession.STOPPED, desired_state=SimulationSession.STOPPED_DESIRED,
+        )
+        EquipmentState.objects.filter(pk=self.qc.pk).update(simulation_session=old)
+        self.assert_equipment_invalid(self.qc.pk)
+
+    def test_chained_receiver_of_the_wrong_type(self):
+        # TT→RTG step: the named CHE is for the receiver (RTG) leg.
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        qc_cmd, tt_cmd = self.command_for(self.qc), self.command_for(self.chosen_tt())
+        for cmd in (qc_cmd, tt_cmd):
+            self.result(cmd, "acknowledged", 0)
+            self.result(cmd, "started", 0)
+        self.transfer_h1(qc_cmd, tt_cmd)
+        other_tt = next(tt for tt in self.tts if tt.pk != self.chosen_tt().pk)
+        self.assert_equipment_invalid(other_tt.pk)
+        self.assertFalse(EquipmentCommand.objects.filter(command_type="assign_handoff").exists())
+        self.assertEqual(
+            self.order.operations.get(sequence=3).status, ExecutionOperation.PLANNED,
+        )
+
+
 class DispatchNextSessionStateTests(DispatchNextApiTestBase):
     """TL review S-1: the 200 no-op only while the leg's session is running and connected."""
 
