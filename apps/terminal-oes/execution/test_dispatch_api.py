@@ -224,3 +224,59 @@ class GodotFailureCodeTests(DispatchNextApiTestBase):
             (operation.failure_reason, operation.failure_detail),
             ("operator_abort", "crane stopped"),
         )
+
+
+class FailedResultContainerMismatchTests(DispatchNextApiTestBase):
+    """TL TCL-028: a failed result with another container number still fails the leg."""
+
+    def test_failed_result_with_mismatching_number_is_applied_and_flagged(self):
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        tt_cmd = self.command_for(self.chosen_tt())
+        with self.assertLogs("execution", level="WARNING") as logs:
+            receipt = self.result(tt_cmd, "failed", 3_000, **{
+                "Command/Result/Reason": "container_number_invalid",
+                "Command/Result/Detail": "bad number",
+                "Command/Result/ContainerNumber": "TGHU0000000",
+            })
+        self.assertTrue(any("TGHU0000000" in line for line in logs.output))
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        self.assertEqual(receipt.raw_metrics["Command/Result/ContainerNumber"], "TGHU0000000")
+        operation = self.order.operations.get(sequence=2)
+        self.assertEqual(operation.status, ExecutionOperation.FAILED)
+        self.assertEqual(operation.failure_reason, "container_number_invalid")
+        expected = f"bad number; container mismatch: reported TGHU0000000, expected {CONTAINER}"
+        self.assertEqual(operation.failure_detail, expected)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, ExecutionOrder.FAILED)
+        self.assertEqual(self.order.failure_detail, expected)
+        failed = OutboxEvent.objects.get(payload__data__event="leg_failed")
+        self.assertEqual(failed.payload["data"]["detail"], expected)
+
+    def test_failed_result_mismatch_without_detail_gets_only_the_note(self):
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        qc_cmd = self.command_for(self.qc)
+        self.result(qc_cmd, "failed", 0, **{
+            "Command/Result/Reason": "che_busy",
+            "Command/Result/ContainerNumber": "TGHU0000000",
+        })
+        self.assertEqual(
+            self.order.operations.get(sequence=1).failure_detail,
+            f"container mismatch: reported TGHU0000000, expected {CONTAINER}",
+        )
+
+    def test_success_results_with_mismatching_number_stay_rejected(self):
+        self.assertEqual(self.post(self.order.pk).status_code, 201)
+        qc_cmd = self.command_for(self.qc)
+        status_before = qc_cmd.status
+        for event in ("acknowledged", "started", "completed"):
+            receipt = self.result(qc_cmd, event, 0, **{
+                "Command/Result/ContainerNumber": "TGHU0000000",
+            })
+            self.assertEqual(receipt.status, CommandResultReceipt.REJECTED, event)
+            self.assertEqual(receipt.reason, "container_number_mismatch")
+        qc_cmd.refresh_from_db()
+        self.assertEqual(qc_cmd.status, status_before)
+        self.assertEqual(
+            self.order.operations.get(sequence=1).status, ExecutionOperation.DISPATCHED,
+        )
+        self.assertFalse(OutboxEvent.objects.filter(payload__data__event="leg_failed").exists())
