@@ -64,6 +64,7 @@ def reset_execution_tables(*, force=False):
     statements = connection.ops.sql_flush(no_style(), tables, reset_sequences=True, allow_cascade=False)
     if connection.vendor == "postgresql":
         # TRUNCATE fails while deferred FK checks are pending in this transaction.
+        # ALL DEFERRED restores Django's default only while no constraint is Deferrable.IMMEDIATE.
         with connection.cursor() as cursor:
             cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
         connection.ops.execute_sql_flush(statements)

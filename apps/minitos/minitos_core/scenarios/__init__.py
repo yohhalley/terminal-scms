@@ -25,7 +25,7 @@ def reset_scenario(name, *, seed=None, containers=1):
 
     Runs in one transaction: a failing seed leaves the previous state intact.
     MQTT is not touched here; the outbox rows are published by the normal
-    ``publish_uns_outbox`` worker (or ``scenario_reset --publish``).
+    ``publish_uns_outbox`` worker.
     """
     import random
 

@@ -43,7 +43,7 @@ def scenario_uuid(*parts):
 
 
 def iso6346_check_digit(owner_and_serial):
-    """ISO 6346 check digit for the first 10 characters (e.g. ``TVLU123456``)."""
+    """ISO 6346 check digit for the first 10 characters (e.g. ``MSCU123456``)."""
     value = owner_and_serial.upper()
     if len(value) != 10:
         raise ValueError('ISO 6346 needs 4 letters and 6 digits.')
@@ -97,6 +97,7 @@ def _execute_flush(statements):
     # PostgreSQL refuses TRUNCATE while deferred FK checks are pending in the
     # same transaction (e.g. a second reset inside one test transaction).
     # Running them now, then restoring Django's deferred default, avoids that.
+    # ALL DEFERRED is only that default while no constraint is Deferrable.IMMEDIATE.
     with connection.cursor() as cursor:
         cursor.execute('SET CONSTRAINTS ALL IMMEDIATE')
     connection.ops.execute_sql_flush(statements)
