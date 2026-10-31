@@ -48,7 +48,10 @@ MAX_CONTAINERS = 5
 LOCATION_NAME = 'Test Terminal'
 SITE_CODE = 'test-terminal'
 VISIT_NAME = 'V001'
-OWNER_CODE = 'TVLU'  # Fictional owner prefix; check digits are real ISO 6346.
+OWNER_CODE = 'MSCU'  # Check digits are real ISO 6346.
+# The first container is the demo fixture MSCU1234566 (docs/scenarios/import_v1.md
+# K5, S1 demo checklist); extra containers get seeded RNG serials.
+FIRST_SERIAL = 123456
 WORK_QUEUE_NAME = 'QC01-WQ'
 # Scenario clock: 2026-10-26 06:00 UTC (Sprint 1 start). Business times are
 # constants so a rerun produces the same visit/order data.
@@ -282,8 +285,12 @@ def _seed_discharge(location, types, site_layout, rng, containers):
     qc_position = site_layout['qc_lane'].positions.order_by('sequence').first().operational_position
     tl_position = site_layout['block_lane'].positions.order_by('sequence').first().operational_position
 
-    # RNG draws, in a fixed order: serials, weights, then yard slots.
-    serials = rng.sample(range(100000, 1000000), containers)
+    # RNG draws, in a fixed order: serials, weights, then yard slots. Serials
+    # for containers 2..n skip FIRST_SERIAL so numbers stay unique.
+    serials = [FIRST_SERIAL] + [
+        serial + 1 if serial >= FIRST_SERIAL else serial
+        for serial in rng.sample(range(100000, 999999), containers - 1)
+    ]
     weights = [rng.randrange(8000, 28001, 100) for _ in range(containers)]
     free_slots = list(
         Position.objects.filter(pile__storage_grid=site_layout['grid'], tier=1)

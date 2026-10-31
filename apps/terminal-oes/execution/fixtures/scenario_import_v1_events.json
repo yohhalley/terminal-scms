@@ -44,11 +44,11 @@
        "status": "planned"
       },
       {
-       "destination_inventory_position_id": 25,
-       "destination_latitude": 17.956426288119264,
-       "destination_longitude": -102.16158718649558,
-       "destination_position_code": "BLOCK01.3.1.01",
-       "end_position": 25,
+       "destination_inventory_position_id": 43,
+       "destination_latitude": 17.956484301320312,
+       "destination_longitude": -102.16153547603876,
+       "destination_position_code": "BLOCK01.4.3.01",
+       "end_position": 43,
        "equipment_type": 3,
        "id": 3,
        "leg_kind": "handle",
@@ -65,13 +65,13 @@
      ],
      "order": {
       "container_number": 1,
-      "container_unit_number": "TVLU2189883",
+      "container_unit_number": "MSCU1234566",
       "from_position": 124,
       "id": 1,
       "priority": 10,
-      "released_at": "2026-10-27T13:11:29.220344+00:00",
+      "released_at": "2026-10-31T16:49:47.635995+00:00",
       "status": "released",
-      "to_position": 25
+      "to_position": 43
      }
     },
     "enterprise": {
@@ -79,8 +79,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "f9649600-4fbd-41f6-90f9-8ffb0f74cd15",
-    "occurred_at": "2026-10-27T13:11:29.220344+00:00",
+    "event_id": "7ae837ae-967d-497d-b371-c4e839bfb2f3",
+    "occurred_at": "2026-10-31T16:49:47.635995+00:00",
     "schema": "scms.order.released.v1",
     "site": {
      "code": "test-terminal",
@@ -104,7 +104,7 @@
      "layout_version_id": 1,
      "lifecycle_status": "published",
      "simulation_enabled": true,
-     "snapshot_checksum": "12504ecc717810541dee4effd3ec34166e5794cb7e6e6e549d5df0524ad109dd",
+     "snapshot_checksum": "ce26e9822b7024bd9f8858d99a1e6b6f065c6c5c98b665ab3d0221ba06836e62",
      "snapshot_path": "/minitos_core/sites/2ae1455e-25a2-575c-88f3-d4b918b0def1/execution-snapshot/?revision=1",
      "snapshot_schema": "scms.site.execution-snapshot.v1"
     },
@@ -113,8 +113,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "585888a1-42aa-4a60-aa4b-a97ec8128f97",
-    "occurred_at": "2026-10-27T13:11:29.217188+00:00",
+    "event_id": "87d84a44-4ea1-4d3b-b44d-fd5f9e64874e",
+    "occurred_at": "2026-10-31T16:49:47.632976+00:00",
     "schema": "scms.site.configuration.published.v1",
     "site": {
      "code": "test-terminal",
@@ -138,8 +138,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "9a1baa25-aca4-44c8-a19b-56060f58b2e7",
-    "occurred_at": "2026-10-27T13:11:28.748190+00:00",
+    "event_id": "5ca1829c-2fbf-45d4-866d-d09f3ea91233",
+    "occurred_at": "2026-10-31T16:49:47.178749+00:00",
     "schema": "scms.site.created.v1",
     "site": {
      "code": "test-terminal",
@@ -153,7 +153,7 @@
   }
  },
  "snapshot_document": {
-  "checksum": "12504ecc717810541dee4effd3ec34166e5794cb7e6e6e549d5df0524ad109dd",
+  "checksum": "ce26e9822b7024bd9f8858d99a1e6b6f065c6c5c98b665ab3d0221ba06836e62",
   "layout_version": 1,
   "payload": {
    "enterprise": {
@@ -179,7 +179,7 @@
       "name": "QC01",
       "powered_on": false,
       "rotation": 0.0,
-      "state_updated_at": "2026-10-27T13:11:28.967260+00:00",
+      "state_updated_at": "2026-10-31T16:49:47.385906+00:00",
       "working": false
      },
      {
@@ -197,7 +197,7 @@
       "name": "TT01",
       "powered_on": false,
       "rotation": 0.0,
-      "state_updated_at": "2026-10-27T13:11:29.021077+00:00",
+      "state_updated_at": "2026-10-31T16:49:47.443155+00:00",
       "working": false
      },
      {
@@ -215,7 +215,7 @@
       "name": "TT02",
       "powered_on": false,
       "rotation": 0.0,
-      "state_updated_at": "2026-10-27T13:11:29.067213+00:00",
+      "state_updated_at": "2026-10-31T16:49:47.488582+00:00",
       "working": false
      },
      {
@@ -233,7 +233,7 @@
       "name": "RTG01",
       "powered_on": false,
       "rotation": 0.0,
-      "state_updated_at": "2026-10-27T13:11:29.113203+00:00",
+      "state_updated_at": "2026-10-31T16:49:47.531409+00:00",
       "working": false
      }
     ],
@@ -1766,7 +1766,7 @@
      }
     ]
    },
-   "generated_at": "2026-10-27T13:11:29.189652+00:00",
+   "generated_at": "2026-10-31T16:49:47.606770+00:00",
    "layout": {
     "access_policies": [
      {
@@ -6076,7 +6076,7 @@
       "id": 25,
       "is_occupied": false,
       "is_powered": false,
-      "is_reserved": true,
+      "is_reserved": false,
       "pile_id": 9,
       "tier": 1
      },
@@ -6238,7 +6238,7 @@
       "id": 43,
       "is_occupied": false,
       "is_powered": false,
-      "is_reserved": false,
+      "is_reserved": true,
       "pile_id": 15,
       "tier": 1
      },
@@ -7948,16 +7948,16 @@
     ],
     "version": {
      "based_on_id": null,
-     "created_at": "2026-10-27T13:11:28.750198+00:00",
+     "created_at": "2026-10-31T16:49:47.180426+00:00",
      "created_by_id": null,
      "id": 1,
      "is_current": true,
      "location_id": 1,
      "name": "Working layout",
      "notes": "",
-     "published_at": "2026-10-27T13:11:29.184882+00:00",
+     "published_at": "2026-10-31T16:49:47.602398+00:00",
      "status": "published",
-     "updated_at": "2026-10-27T13:11:29.184950+00:00",
+     "updated_at": "2026-10-31T16:49:47.602458+00:00",
      "version": 1
     }
    },

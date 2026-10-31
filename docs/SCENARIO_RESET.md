@@ -43,15 +43,16 @@ nothing writes across databases. Django users (admin accounts) are kept.
   and `BLOCK01.TL`, both joined to the road.
 - CHEs `QC01` (STS), `TT01`, `TT02` (TT), `RTG01` (RTG); work queue `QC01-WQ`.
 - Vessel visit `V001` (Arrived), and 1 (up to 5) pre-advised import container(s)
-  owned by `TVLU` with a valid ISO 6346 check digit, in vessel slot `0340682`
-  (then `0340684`, ...).
+  owned by `MSCU` with a valid ISO 6346 check digit, in vessel slot `0340682`
+  (then `0340684`, ...). The first container is always `MSCU1234566`; any extra
+  containers get seeded serials.
 - One PLANNED discharge order per container with an active route plan:
   QC handle (vessel slot -> QC01 lane, hand-off), TT move (QC01 lane -> BLOCK01.TL,
   hand-off, `movement_mode` road), RTG handle (BLOCK01.TL -> yard slot).
 
 Determinism: auto ids restart at 1, Enterprise/Site ids are uuid5 under the
-fixed namespace `7c0e5b1a-6d1e-4c55-9a2b-0000000000c6`, and container serials,
-weights and yard slots come from `random.Random(SEED)` (default `20261026`).
+fixed namespace `7c0e5b1a-6d1e-4c55-9a2b-0000000000c6`, and extra container
+serials, weights and yard slots come from `random.Random(SEED)` (default `20261026`).
 Event ids, wall-clock timestamps and the snapshot checksum (it embeds
 `generated_at`) still differ per run; the canonical dump masks exactly those.
 Outbox delivery bookkeeping (`attempts`, `last_error`, `published_at`) is also

@@ -119,7 +119,7 @@ headings with real MapLibre rendering. Input/assignment event automation was
 blocked by browser instrumentation errors; those workflows pass the DOM-adapter
 tests but still need a native-browser smoke check.
 
-TCL-006 (2026-10-27) adds `minitos_core/test_scenario_import_v1.py` (27 tests):
+TCL-006 (2026-10-27) adds `minitos_core/test_scenario_import_v1.py` (28 tests):
 two `import_v1` resets give an identical canonical dump of every `minitos_core`
 table (also with 5 containers and a custom seed, and after a release); stable
 auto ids and uuid5 Site/Enterprise ids; seed changes RNG choices only; auth users

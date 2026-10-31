@@ -112,11 +112,18 @@ class ImportV1ResetDeterminismTests(TestCase):
 
     def test_seed_changes_rng_choices_but_not_identities(self):
         default = reset_scenario('import_v1')
-        default_number = default['orders'][0].container_number.container_number_id
+        default_order = default['orders'][0]
+        default_number = default_order.container_number.container_number_id
+        default_choices = (default_order.container_number.weight, default_order.to_position_id)
         default_site = default['site'].pk
         other = reset_scenario('import_v1', seed=12345)
+        other_order = other['orders'][0]
         self.assertEqual(other['site'].pk, default_site)
-        self.assertNotEqual(other['orders'][0].container_number.container_number_id, default_number)
+        # The demo fixture number is fixed; weight and yard slot come from the RNG.
+        self.assertEqual(other_order.container_number.container_number_id, default_number)
+        self.assertNotEqual(
+            (other_order.container_number.weight, other_order.to_position_id), default_choices,
+        )
 
     def test_reset_keeps_auth_users(self):
         get_user_model().objects.create_user('planner', password='not-a-real-password')
@@ -166,6 +173,7 @@ class ImportV1SeedContentTests(TestCase):
         self.assertEqual(container.status, ContainerVisit.PREADVISED)
         self.assertEqual(container.ib_carrier, visit)
         number = container.container_number_id
+        self.assertEqual(number, 'MSCU1234566')
         self.assertEqual(int(number[-1]), iso6346_check_digit(number[:10]))
 
         order = Order.objects.get()
@@ -276,6 +284,8 @@ class ContainerNumberTests(TestCase):
         self.assertEqual(iso6346_check_digit('CSQU305438'), 3)
         self.assertEqual(container_number('CSQU', 305438), 'CSQU3054383')
         self.assertEqual(iso6346_check_digit('TVLU218988'), 3)
+        # Demo fixture: MSCU1234566 is valid, the old goldens' MSCU1234565 is not.
+        self.assertEqual(container_number('MSCU', 123456), 'MSCU1234566')
 
     def test_seeded_rng_is_reproducible(self):
         self.assertEqual(
