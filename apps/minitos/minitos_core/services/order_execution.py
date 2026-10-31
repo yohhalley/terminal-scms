@@ -82,8 +82,10 @@ def _terminal_code(location_id):
 
 
 def _leg_movement_mode(leg):
+    # order_by() drops OrderLegRouteEdge.Meta.ordering: otherwise "sequence"
+    # joins the SELECT DISTINCT and a two-edge road leg reports 'multi'.
     modes = list(
-        leg.route_edges.values_list('route_edge__movement_mode', flat=True).distinct()
+        leg.route_edges.order_by().values_list('route_edge__movement_mode', flat=True).distinct()
     )
     if len(modes) == 1:
         return modes[0]

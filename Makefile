@@ -1,10 +1,15 @@
 COMPOSE ?= docker compose
+SCENARIO ?= import_v1
+STEP ?=
+SEED ?= 1
+CONTAINERS ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help init setup config build pull up stop down restart ps logs \
 	test test-minitos test-oes migrations shell-minitos shell-oes \
 	create-minitos-admin create-oes-admin run-simulator-runner \
-		logs-simulator logs-mqtt diagnose build-simulator test-runner test-godot
+		logs-simulator logs-mqtt diagnose build-simulator test-runner test-godot \
+	scenario-reset scenario-step scenario-dump
 
 help:
 	@printf '%s\n' \
@@ -27,7 +32,12 @@ help:
 		'  make shell-oes      Open a Terminal OES Django shell' \
 		'  make create-minitos-admin Create a MiniTOS administrator' \
 		'  make create-oes-admin     Create an OES console administrator' \
-		'  make run-simulator-runner Start the restricted host-side Godot runner'
+		'  make run-simulator-runner Start the restricted host-side Godot runner' \
+		'  make scenario-reset [SCENARIO=import_v1] [SEED=n] [CONTAINERS=1-5]' \
+		'                      Wipe OES + MiniTOS data, clear retained MQTT, seed and publish the Site' \
+		'  make scenario-step STEP=release-discharge|dispatch-next [ORDER=id]' \
+		'                      Run one scripted demo step (MiniTOS release / OES dispatch)' \
+		'  make scenario-dump  Print canonical-state checksums of both databases'
 
 init:
 	@test -f .env || cp .env.example .env
@@ -121,3 +131,33 @@ create-minitos-admin: init
 
 create-oes-admin: init
 	$(COMPOSE) exec terminal-oes python manage.py createsuperuser
+
+# TCL-006: reproducible demo scenarios. Each service resets its own database
+# through its own management command (no cross-database writes). Order matters:
+# OES first (it must forget the old Site revision), then retained MQTT, then
+# MiniTOS seeds and publishes through its outbox, then we wait for OES to project.
+# SEED (default 1, spec K7) is one knob for both seeds: terminal-oes is recreated
+# with SIMULATOR_SEED=$(SEED) when it differs (a no-op otherwise), so the next
+# simulator session gets the same seed as the MiniTOS scenario RNG.
+SCENARIO_ORDER_ARG = $(if $(ORDER),--order $(ORDER),)
+
+scenario-reset: init
+	SIMULATOR_SEED=$(SEED) $(COMPOSE) up --detach --no-deps --wait terminal-oes
+	$(COMPOSE) exec -T terminal-oes python manage.py scenario_reset $(SCENARIO) --noinput --seed $(SEED)
+	$(COMPOSE) exec -T minitos python manage.py clear_retained_mqtt
+	$(COMPOSE) exec -T minitos python manage.py scenario_reset $(SCENARIO) --noinput \
+		--seed $(SEED) --containers $(CONTAINERS)
+	$(COMPOSE) exec -T terminal-oes python manage.py scenario_wait_ready --timeout 60
+
+scenario-step: init
+	@case '$(STEP)' in \
+	release-discharge) \
+		$(COMPOSE) exec -T minitos python manage.py scenario_step $(SCENARIO) $(STEP) $(SCENARIO_ORDER_ARG) ;; \
+	dispatch-next) \
+		$(COMPOSE) exec -T terminal-oes python manage.py scenario_step $(SCENARIO) $(STEP) $(SCENARIO_ORDER_ARG) ;; \
+	*) echo 'Usage: make scenario-step STEP=release-discharge|dispatch-next [ORDER=id]'; exit 2 ;; \
+	esac
+
+scenario-dump: init
+	@printf 'minitos      '; $(COMPOSE) exec -T minitos python manage.py scenario_dump --checksum
+	@printf 'terminal-oes '; $(COMPOSE) exec -T terminal-oes python manage.py scenario_dump --checksum

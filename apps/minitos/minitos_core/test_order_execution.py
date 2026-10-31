@@ -2,7 +2,7 @@ import json
 import uuid
 
 from django.core.exceptions import ValidationError
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 
@@ -17,8 +17,10 @@ from minitos_core.models import (
     ISOType,
     Order,
     OrderLeg,
+    OrderLegRouteEdge,
     OrderRoutePlan,
     Position,
+    RouteEdge,
     Site,
     WorkQueue,
 )
@@ -28,6 +30,7 @@ from minitos_core.services import (
     pickup_container,
     sync_yard_grid,
 )
+from minitos_core.services.order_execution import _leg_movement_mode
 from minitos_core.test_yard_grid import LayoutTestCase
 
 
@@ -301,3 +304,37 @@ class OrderExecutionTests(LayoutTestCase):
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class LegMovementModeTests(TestCase):
+    """BE review S-1: pin the _leg_movement_mode DISTINCT/ordering fix directly."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from minitos_core.scenarios import reset_scenario
+
+        reset_scenario('import_v1')
+        cls.leg = OrderLeg.objects.get(sequence=2)
+        cls.road_edges = list(
+            RouteEdge.objects.filter(movement_mode=RouteEdge.ROAD).order_by('pk')[:4]
+        )
+
+    def _set_edges(self, edges_by_sequence):
+        self.leg.route_edges.all().delete()
+        for sequence, edge in edges_by_sequence:
+            OrderLegRouteEdge.objects.create(order_leg=self.leg, route_edge=edge, sequence=sequence)
+
+    def test_same_mode_with_out_of_order_sequences_is_that_mode(self):
+        first, second, third = self.road_edges[:3]
+        self._set_edges([(3, first), (1, second), (2, third)])
+        self.assertEqual(_leg_movement_mode(self.leg), RouteEdge.ROAD)
+
+    def test_mixed_modes_are_multi(self):
+        crane = self.road_edges[3]
+        RouteEdge.objects.filter(pk=crane.pk).update(movement_mode=RouteEdge.CRANE)
+        self._set_edges([(2, self.road_edges[0]), (1, crane), (3, self.road_edges[1])])
+        self.assertEqual(_leg_movement_mode(self.leg), 'multi')
+
+    def test_no_edges_is_empty(self):
+        self._set_edges([])
+        self.assertEqual(_leg_movement_mode(self.leg), '')
