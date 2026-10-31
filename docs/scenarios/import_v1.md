@@ -2,7 +2,7 @@
 
 - **Scenario:** import container visit, issue [#1](https://github.com/yohhalley/terminal-scms/issues/1). The export visit (#2) is out of scope here (D-002: import first).
 - **Owner:** QA (Moon Unit). **Reviewers:** SME (TCL-015) and Tech Lead.
-- **Status:** draft v2.1, 27 Oct 2026. v2 addresses the Tech Lead's and SME's reviews of PR #19. v2.1 (TCL-001a) rewrites step 2 for the fixed visit-transition API (TCL-032, #21) and updates the merge notes. Steps 1–4 are complete. Steps 5–9 are an outline. The KG and historian columns stay `TBD (Yael decides Fri)` until Yael decides on Fri 30 Oct (D-004, TCL-013).
+- **Status:** draft v2.1, 27 Oct 2026. v2 addresses the Tech Lead's and SME's reviews of PR #19. v2.1 (TCL-001a) rewrites step 2 for the fixed visit-transition API (TCL-032, #21) and updates the merge notes. v2.2 (31 Oct 2026) applies Yael's decision D-018: the seeded vessel visit starts as `Arrived` (K4, step 2). Steps 1–4 are complete. Steps 5–9 are an outline. The KG and historian columns stay `TBD (Yael decides Fri)` until Yael decides on Fri 30 Oct (D-004, TCL-013).
 - **Code base read:** `main` @ `83949ef` (27 Oct 2026). These PRs are merged into `main`:
   - #13 TCL-003a (OES hand-off dispatch)
   - #14 TCL-005 (contract tests)
@@ -48,7 +48,7 @@ There is no seed or reset yet. It is TCL-006 (FE), which is not on origin. The S
 | K1 | Enterprise + Site published: OES `SiteProjection.projection_status = ready`, revision N, checksum matches | MiniTOS `site_sync.py` → `tos/site/created`, `tos/configuration/published`; OES `execution/services/site_sync.py` |
 | K2 | Layout with quay/berth, block `BLOCK01` with free ground slots, transfer lane(s), roads | MiniTOS `Position`, `OperationalPosition`, `StorageGrid` (`BLOCK01` is the exception block in `order_execution.py::EXCEPTION_BLOCK_NAME`) [PR #13] |
 | K3 | CHEs `QC01` (type STS/QC), `TT01`, `TT02`, `RTG01`, all available and not dispatched | MiniTOS `Che`; OES `EquipmentState` after DBIRTH |
-| K4 | One vessel `CarrierVisit` (`visit_type='Vessel'`, status `Created`) | `models.py::CarrierVisit` |
+| K4 | One vessel `CarrierVisit` (`visit_type='Vessel'`, status `Arrived`, `ata` = the seed epoch). Yael's decision D-018 (31 Oct 2026): the seed starts the visit as `Arrived`, not `Created`; the `Created` → `Arrived` transition is deferred to after the MVP (backlog). | `models.py::CarrierVisit`; `scenarios/import_v1.py` |
 | K5 | One `ContainerUnit` with a valid ISO 6346 number, e.g. `MSCU1234566` (check digit 6, computed by QA), `is_in_terminal=False`, and its import `ContainerVisit` **seeded** as inbound, advised on the vessel (S1 sprint plan and TCL-006 acceptance; see Q1). Note: the existing test fixtures and goldens use `MSCU1234565`, whose check digit is wrong (follow-up F2). | `models.py::ContainerUnit` |
 | K6 | No OES orders; one planned MiniTOS order: the 3-leg discharge order for `MSCU1234566` (`Order(order_type='IN', status='planned')`, legs QC → TT → RTG; see step 3 preconditions). No commands or hand-offs in either DB. MQTT retained topics are cleared except `spBv1.0/STATE/{host}`. | — |
 | K7 | Seed values: `SIMULATOR_SEED=1`, `SIMULATOR_START_EPOCH_MS=1792886400000`, QC hold 10..30 s (compressed time), TT no-show timeout configurable per D-017: NBIRTH `Sim/Timing/TtNoShowTimeoutS`, else `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, else 300 s | `compose.yaml` [PR #13], NOTES-TCL-014a |
@@ -60,7 +60,7 @@ Status of each step today: ✅ built and tested, 🟡 partly built or only on an
 | # | Issue #1 step | Trigger | UNS event(s) | MiniTOS end state | OES end state | UI | KG | Historian | Built | Tests |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Pre-advice (inbound, advised on vessel) | Seed (S1) or MiniTOS user creates the container visit | ❌ none today | `ContainerVisit.status=Preadvised` | none | admin / DRF API | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 MiniTOS only | ❌ |
-| 2 | Vessel arrival (not in the S1 demo; optional check of the seeded state) | Vessel visit → `Arrived` (visit-transition API, `curl`) | ❌ none today | `CarrierVisit.status=Arrived` | Sim session running, CHEs born | admin; OES `/simulations/`, `/equipment/` | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 API works; no transition rules (Q1 in #21) | ❌ (Sparkplug birth ✅) |
+| 2 | Vessel arrival (seeded as `Arrived` per D-018; a check of the seeded state, not a live transition) | Seed sets `Arrived` (K4). The visit-transition API (`curl`) is a 200 no-op on the seeded visit | ❌ none today | `CarrierVisit.status=Arrived` | Sim session running, CHEs born | admin; OES `/simulations/`, `/equipment/` | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 API works; no transition rules (Q1 in #21) | ❌ (Sparkplug birth ✅) |
 | 3 | Discharge QC→TT | Order released; OES `dispatch-next` (token) | `order.released`; `leg_dispatched`×2, `leg_started`, `container_picked_up`(VESSEL), `container_transferred` QC→TT, `leg_completed` | `OnEquipment`/QC01, then `OnEquipment`/TTxx | order `in_progress`, hand-off `transferred` | admin; OES `/equipment/`, `/api/orders/` | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 PR #13, #15 | 🟡 per service |
 | 4 | TT to yard, RTG stacks | 2nd `dispatch-next` (after H1, Q18) | `leg_dispatched`, `leg_started`, `container_transferred` TT→RTG, `leg_completed`, `container_dropped`, `leg_completed` | `AtYard` in slot; order `complete` | order `complete`, all CHEs free | admin | TBD (Yael decides Fri) | TBD (Yael decides Fri) | 🟡 PR #13, #17 | 🟡 per service |
 | 5 | Yard dwell | time passes | TBD | `AtYard` unchanged | none | TBD | TBD (Yael decides Fri) | TBD (Yael decides Fri) | ❌ | ❌ |
@@ -99,9 +99,9 @@ Wording (SME review): for an import, terminals say the container is **inbound, a
 
 ### Step 2: Vessel arrival. The vessel arrives with the container
 
-**S1 scope:** not part of the S1 demo. The S1 script starts from the seeded reset and goes straight to release. In S1 this step is optional: show the seeded vessel visit state, or set it to `Arrived` with the `curl` below. The domain question is Q3a.
+**Scope (D-018, Yael, 31 Oct 2026):** the seed starts the vessel visit as `Arrived` with `ata` set, so this step is a check of the seeded state, not a live transition. The demo script starts from the seeded reset and goes straight to release. The `Created` → `Arrived` transition and its triggers (e.g. no order dispatch before the vessel has arrived) are deferred to after the MVP (backlog). The `curl` below still works and returns a 200 no-op on the seeded visit. The domain question is Q3a.
 
-**Preconditions:** step 1 passed. The vessel visit is in `Created` or `Announced`.
+**Preconditions:** step 1 passed. The seeded vessel visit is `Arrived` (K4, D-018). A visit in `Created` or `Announced` (created by hand, not by the seed) can still be moved to `Arrived` with the API below.
 
 | Aspect | Expected | Evidence |
 |---|---|---|
@@ -109,14 +109,14 @@ Wording (SME review): for an import, terminals say the container is **inbound, a
 | Simulator start (S1 precondition for step 3) | The Godot session is started from the OES console `/simulations/` with `make run-simulator-runner` running. | `README.md` |
 | UNS/MQTT | **None today** for the visit status (same gap as step 1, Q2). Expected: a carrier-visit status event on `scms/v2/{ent}/{site}/tos/…`, schema TBD, with fields `carrier_visit_id`, `visit_type`, `status`, `ata`. | [code] |
 | Sparkplug | When the session starts:<br>- **STATE:** `spBv1.0/STATE/{host}` = ONLINE (retained).<br>- **NBIRTH:** carries `Session/Id`, `Site/Id`, `Configuration/Revision`, `Configuration/Checksum` and `bdSeq`, plus [PR #15] `Contract/Version`, `Sim/Seed`, `Sim/StartEpochMs`, `Sim/Timing/QcHoldMinS`/`QcHoldMaxS`/`TtNoShowTimeoutS`/`CommandTtlS`.<br>- **DBIRTH:** one per CHE (`QC01`, `TT01`, `TT02`, `RTG01`), each with `Identity/*`, `State/*`, `Position/*` and `Carrying/ContainerVisitId=0`. | `UNS_CONTRACT.md`; NOTES-TCL-014a |
-| MiniTOS state | `CarrierVisit.status='Arrived'`. Setting `ata` isn't implemented anywhere [code]. The container visit stays `Preadvised`: nothing in the code sets `OnVessel`, although the TCL-003a test fixture starts from `OnVessel` (`test_handoff_execution.py:48`). See Q4. | `models.py::CarrierVisit` |
+| MiniTOS state | `CarrierVisit.status='Arrived'`, set by the seed (D-018). The seed also sets `ata` to the seed epoch; the transition API doesn't set `ata` [code]. The container visit stays `Preadvised`: nothing in the code sets `OnVessel`, although the TCL-003a test fixture starts from `OnVessel` (`test_handoff_execution.py:48`). See Q4. | `models.py::CarrierVisit` |
 | OES state | `SimulationSession` status `running`. `EquipmentState` exists per CHE: `device_connected`, `data_valid`, `is_available`, not `working`/`is_dispatched`, and `idle_since_event_ms` = session start [PR #13]. | `execution/models.py`; `test_handoffs.py::test_dbirth_sets_idle_since_from_session_start` |
 | UI | MiniTOS admin `CarrierVisit` ("Arrived"); berth plan `/terminals/{id}/berth-plan/` shows generated visits (it doesn't display status, unverified). OES `/simulations/` shows the session; `/equipment/` lists the 4 CHEs. | templates |
 | KG | TBD (Yael decides Fri) | D-004 |
 | Historian | TBD (Yael decides Fri) | D-004 |
 
 **Acceptance checks**
-- **AC2.1** The vessel visit's status is `Arrived`, set through a supported path (the transition API above, or the panel once TCL-009 exists), not a DB edit (MVP DoD 2).
+- **AC2.1** The vessel visit's status is `Arrived`, set through a supported path (the seed per D-018; or the transition API above, or the panel once TCL-009 exists, for a visit that isn't seeded), not a DB edit (MVP DoD 2).
 - **AC2.2** The container visit's status matches Q4's answer (`Preadvised` or `OnVessel`).
 - **AC2.3** OES shows one running session for the Site. NBIRTH revision/checksum = OES projection revision/checksum. All 4 CHEs are born, available and idle.
 - **AC2.4** *(blocked, Q2)* A visit-status event is on the UNS and validates.
@@ -313,7 +313,7 @@ These issue-level requirements apply after step 9:
 **Gaps found while writing this spec** (not fixed here; for the Tech Lead to assign):
 - **G1:** MiniTOS emits no UNS event for container-visit or carrier-visit status (steps 1, 2, 9).
 - **G2:** *(resolved by TCL-032, #21)* the transition views referenced undefined names and returned 500. On `main` they validate the status against `STATUS_CHOICES` only; transition rules and `ata`/`atd` are open questions Q1/Q2 in #21.
-- **G3:** Nothing sets `ContainerVisit.status='OnVessel'` or `CarrierVisit.ata`/`atd`.
+- **G3:** Nothing sets `ContainerVisit.status='OnVessel'` or `CarrierVisit.atd`. `CarrierVisit.ata` is set only by the seed (D-018); the transition API doesn't set it.
 - **G4:** There's no JSON Schema or golden for `scms.order.released.v1` (TCL-005 covers only `scms.execution.event.v1`).
 - **G5:** `ContainerUnit.is_in_terminal` turns True only at the yard drop, not when the container appears on the QC.
 - **G6:** No MiniTOS path creates the 3-leg discharge order (QC→TT→RTG). The tests build it by hand.
