@@ -119,6 +119,24 @@ headings with real MapLibre rendering. Input/assignment event automation was
 blocked by browser instrumentation errors; those workflows pass the DOM-adapter
 tests but still need a native-browser smoke check.
 
+TCL-006 (2026-10-27) adds `minitos_core/test_scenario_import_v1.py` (28 tests):
+two `import_v1` resets give an identical canonical dump of every `minitos_core`
+table (also with 5 containers and a custom seed, and after a release); stable
+auto ids and uuid5 Site/Enterprise ids; seed changes RNG choices only; auth users
+survive; a failed seed rolls back; seed content (1 quay, 1 block, 1 road, QC01,
+TT01, TT02, RTG01, V001 with a pre-advised import, room for 5); the QC -> TT -> RTG
+hand-off leg chain; Site publish through the outbox; the `release-discharge`
+step's `scms.order.released.v1` payload (equipment types, hand-off boundaries,
+road movement mode); command errors; ISO 6346 check digits; retained-MQTT clearing
+with a fake client (Sparkplug host STATE preserved); and drift of the OES event
+fixture. Not covered without Docker: PostgreSQL sequence reset, a real broker.
+The PR #24 review round (2026-10-31) brings it to 35 tests: CHEs seeded powered on
+and available (spec K3); K7 seed 1 and simulator-clock epoch, pinned against
+`compose.yaml` and the Makefile; an unroutable or empty TT route fails the reset
+and rolls it back (BE S-2). `test_order_execution.LegMovementModeTests` (3 tests)
+pins `_leg_movement_mode` directly: out-of-order sequences, mixed modes, no edges
+(BE S-1).
+
 `test_pow_models.py` and `test_visit_cargo_routes.py` are demonstration scripts,
 not Django `TestCase` classes, so `manage.py test` does not discover them.
 
