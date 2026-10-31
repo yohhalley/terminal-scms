@@ -50,7 +50,7 @@ There is no seed or reset yet. It is TCL-006 (FE), which is not on origin. The S
 | K3 | CHEs `QC01` (type STS/QC), `TT01`, `TT02`, `RTG01`, all available and not dispatched | MiniTOS `Che`; OES `EquipmentState` after DBIRTH |
 | K4 | One vessel `CarrierVisit` (`visit_type='Vessel'`, status `Created`) | `models.py::CarrierVisit` |
 | K5 | One `ContainerUnit` with a valid ISO 6346 number, e.g. `MSCU1234566` (check digit 6, computed by QA), `is_in_terminal=False`, and its import `ContainerVisit` **seeded** as inbound, advised on the vessel (S1 sprint plan and TCL-006 acceptance; see Q1). Note: the existing test fixtures and goldens use `MSCU1234565`, whose check digit is wrong (follow-up F2). | `models.py::ContainerUnit` |
-| K6 | No orders, commands or hand-offs in either DB. MQTT retained topics are cleared except `spBv1.0/STATE/{host}`. | — |
+| K6 | No OES orders; one planned MiniTOS order: the 3-leg discharge order for `MSCU1234566` (`Order(order_type='IN', status='planned')`, legs QC → TT → RTG; see step 3 preconditions). No commands or hand-offs in either DB. MQTT retained topics are cleared except `spBv1.0/STATE/{host}`. | — |
 | K7 | Seed values: `SIMULATOR_SEED=1`, `SIMULATOR_START_EPOCH_MS=1792886400000`, QC hold 10..30 s (compressed time), TT no-show timeout configurable per D-017: NBIRTH `Sim/Timing/TtNoShowTimeoutS`, else `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, else 300 s | `compose.yaml` [PR #13], NOTES-TCL-014a |
 
 ## 2. Step summary
