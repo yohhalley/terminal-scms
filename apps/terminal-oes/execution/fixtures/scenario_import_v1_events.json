@@ -44,11 +44,11 @@
        "status": "planned"
       },
       {
-       "destination_inventory_position_id": 43,
-       "destination_latitude": 17.956484301320312,
-       "destination_longitude": -102.16153547603876,
-       "destination_position_code": "BLOCK01.4.3.01",
-       "end_position": 43,
+       "destination_inventory_position_id": 109,
+       "destination_latitude": 17.956832380526603,
+       "destination_longitude": -102.16158718649558,
+       "destination_position_code": "BLOCK01.10.1.01",
+       "end_position": 109,
        "equipment_type": 3,
        "id": 3,
        "leg_kind": "handle",
@@ -69,9 +69,9 @@
       "from_position": 124,
       "id": 1,
       "priority": 10,
-      "released_at": "2026-10-31T16:49:47.635995+00:00",
+      "released_at": "2026-10-31T17:09:31.881070+00:00",
       "status": "released",
-      "to_position": 43
+      "to_position": 109
      }
     },
     "enterprise": {
@@ -79,8 +79,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "7ae837ae-967d-497d-b371-c4e839bfb2f3",
-    "occurred_at": "2026-10-31T16:49:47.635995+00:00",
+    "event_id": "681d6344-9f03-4734-ba60-7ae719dae322",
+    "occurred_at": "2026-10-31T17:09:31.881070+00:00",
     "schema": "scms.order.released.v1",
     "site": {
      "code": "test-terminal",
@@ -104,7 +104,7 @@
      "layout_version_id": 1,
      "lifecycle_status": "published",
      "simulation_enabled": true,
-     "snapshot_checksum": "ce26e9822b7024bd9f8858d99a1e6b6f065c6c5c98b665ab3d0221ba06836e62",
+     "snapshot_checksum": "fbe0e385ed9eebb210f7f88a28ae701e9048f6ebe60a6052d5012fbfca2ee363",
      "snapshot_path": "/minitos_core/sites/2ae1455e-25a2-575c-88f3-d4b918b0def1/execution-snapshot/?revision=1",
      "snapshot_schema": "scms.site.execution-snapshot.v1"
     },
@@ -113,8 +113,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "87d84a44-4ea1-4d3b-b44d-fd5f9e64874e",
-    "occurred_at": "2026-10-31T16:49:47.632976+00:00",
+    "event_id": "70e9580e-61b1-491a-afcf-f736e413a056",
+    "occurred_at": "2026-10-31T17:09:31.877898+00:00",
     "schema": "scms.site.configuration.published.v1",
     "site": {
      "code": "test-terminal",
@@ -138,8 +138,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "5ca1829c-2fbf-45d4-866d-d09f3ea91233",
-    "occurred_at": "2026-10-31T16:49:47.178749+00:00",
+    "event_id": "9dc4d527-7c19-44ed-9902-e0add12fed72",
+    "occurred_at": "2026-10-31T17:09:31.420010+00:00",
     "schema": "scms.site.created.v1",
     "site": {
      "code": "test-terminal",
@@ -153,7 +153,7 @@
   }
  },
  "snapshot_document": {
-  "checksum": "ce26e9822b7024bd9f8858d99a1e6b6f065c6c5c98b665ab3d0221ba06836e62",
+  "checksum": "fbe0e385ed9eebb210f7f88a28ae701e9048f6ebe60a6052d5012fbfca2ee363",
   "layout_version": 1,
   "payload": {
    "enterprise": {
@@ -169,7 +169,7 @@
       "current_user_id": null,
       "equipment_type_id": 1,
       "id": 1,
-      "is_available": false,
+      "is_available": true,
       "is_dispatched": false,
       "is_in_maintenance": false,
       "last_maintenance": null,
@@ -177,9 +177,9 @@
       "location_id": 1,
       "longitude": -102.16112654646548,
       "name": "QC01",
-      "powered_on": false,
+      "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-10-31T16:49:47.385906+00:00",
+      "state_updated_at": "2026-10-31T17:09:31.628037+00:00",
       "working": false
      },
      {
@@ -187,7 +187,7 @@
       "current_user_id": null,
       "equipment_type_id": 2,
       "id": 2,
-      "is_available": false,
+      "is_available": true,
       "is_dispatched": false,
       "is_in_maintenance": false,
       "last_maintenance": null,
@@ -195,9 +195,9 @@
       "location_id": 1,
       "longitude": -102.16197641858619,
       "name": "TT01",
-      "powered_on": false,
+      "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-10-31T16:49:47.443155+00:00",
+      "state_updated_at": "2026-10-31T17:09:31.685785+00:00",
       "working": false
      },
      {
@@ -205,7 +205,7 @@
       "current_user_id": null,
       "equipment_type_id": 2,
       "id": 3,
-      "is_available": false,
+      "is_available": true,
       "is_dispatched": false,
       "is_in_maintenance": false,
       "last_maintenance": null,
@@ -213,9 +213,9 @@
       "location_id": 1,
       "longitude": -102.16178755811492,
       "name": "TT02",
-      "powered_on": false,
+      "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-10-31T16:49:47.488582+00:00",
+      "state_updated_at": "2026-10-31T17:09:31.728843+00:00",
       "working": false
      },
      {
@@ -223,7 +223,7 @@
       "current_user_id": null,
       "equipment_type_id": 3,
       "id": 4,
-      "is_available": false,
+      "is_available": true,
       "is_dispatched": false,
       "is_in_maintenance": false,
       "last_maintenance": null,
@@ -231,9 +231,9 @@
       "location_id": 1,
       "longitude": -102.16150426740802,
       "name": "RTG01",
-      "powered_on": false,
+      "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-10-31T16:49:47.531409+00:00",
+      "state_updated_at": "2026-10-31T17:09:31.778880+00:00",
       "working": false
      }
     ],
@@ -1766,7 +1766,7 @@
      }
     ]
    },
-   "generated_at": "2026-10-31T16:49:47.606770+00:00",
+   "generated_at": "2026-10-31T17:09:31.851862+00:00",
    "layout": {
     "access_policies": [
      {
@@ -6238,7 +6238,7 @@
       "id": 43,
       "is_occupied": false,
       "is_powered": false,
-      "is_reserved": true,
+      "is_reserved": false,
       "pile_id": 15,
       "tier": 1
      },
@@ -6832,7 +6832,7 @@
       "id": 109,
       "is_occupied": false,
       "is_powered": false,
-      "is_reserved": false,
+      "is_reserved": true,
       "pile_id": 37,
       "tier": 1
      },
@@ -7948,16 +7948,16 @@
     ],
     "version": {
      "based_on_id": null,
-     "created_at": "2026-10-31T16:49:47.180426+00:00",
+     "created_at": "2026-10-31T17:09:31.421835+00:00",
      "created_by_id": null,
      "id": 1,
      "is_current": true,
      "location_id": 1,
      "name": "Working layout",
      "notes": "",
-     "published_at": "2026-10-31T16:49:47.602398+00:00",
+     "published_at": "2026-10-31T17:09:31.847578+00:00",
      "status": "published",
-     "updated_at": "2026-10-31T16:49:47.602458+00:00",
+     "updated_at": "2026-10-31T17:09:31.847650+00:00",
      "version": 1
     }
    },

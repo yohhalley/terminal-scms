@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 
@@ -20,8 +21,24 @@ class Command(BaseCommand):
             "--force", action="store_true",
             help="Reset even if a simulation session is still active.",
         )
+        parser.add_argument(
+            "--seed", type=int, default=None,
+            help=(
+                "Expected simulator seed (make scenario-reset SEED=n). Fails before wiping "
+                "if this OES process would hand the runner a different SIMULATOR_SEED."
+            ),
+        )
 
     def handle(self, *args, **options):
+        configured_seed = getattr(settings, "SIMULATOR_SIM_SETTINGS", {}).get("SIMULATOR_SEED")
+        if options["seed"] is not None and configured_seed != str(options["seed"]):
+            # K7 / QA Y3: the simulator seed is this process's SIMULATOR_SEED,
+            # forwarded in the runner claim environment.
+            raise CommandError(
+                f"terminal-oes SIMULATOR_SEED is {configured_seed or 'unset'}, expected "
+                f"{options['seed']}. Recreate terminal-oes with SIMULATOR_SEED={options['seed']} "
+                "(make scenario-reset does this)."
+            )
         if options["interactive"]:
             answer = input("This deletes ALL terminal-oes execution data. Type \"yes\" to continue: ")
             if answer.strip().lower() != "yes":
@@ -32,5 +49,5 @@ class Command(BaseCommand):
             raise CommandError("; ".join(exc.messages)) from exc
         self.stdout.write(self.style.SUCCESS(
             f"{options['scenario']}: wiped {tables} terminal-oes tables; "
-            "waiting for MiniTOS to publish the Site."
+            f"simulator seed {configured_seed or 'unset'}; waiting for MiniTOS to publish the Site."
         ))

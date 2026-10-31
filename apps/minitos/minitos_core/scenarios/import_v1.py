@@ -42,7 +42,9 @@ from ..services.site_sync import (
 from .base import container_number, scenario_uuid
 
 NAME = 'import_v1'
-DEFAULT_SEED = 20261026
+# K7 (docs/scenarios/import_v1.md): SIMULATOR_SEED=1. `make scenario-reset SEED=n`
+# passes the same n to this seed and to the simulator (OES SIMULATOR_SEED).
+DEFAULT_SEED = 1
 MAX_CONTAINERS = 5
 
 LOCATION_NAME = 'Test Terminal'
@@ -53,9 +55,12 @@ OWNER_CODE = 'MSCU'  # Check digits are real ISO 6346.
 # K5, S1 demo checklist); extra containers get seeded RNG serials.
 FIRST_SERIAL = 123456
 WORK_QUEUE_NAME = 'QC01-WQ'
-# Scenario clock: 2026-10-26 06:00 UTC (Sprint 1 start). Business times are
-# constants so a rerun produces the same visit/order data.
-SCENARIO_EPOCH = datetime(2026, 10, 26, 6, 0, tzinfo=dt_timezone.utc)
+# Scenario clock = the simulator clock origin (K7): SIMULATOR_START_EPOCH_MS
+# 1792886400000 is 2026-10-25 00:00 UTC (compose.yaml default). Business times
+# are constants on that clock, so a rerun produces the same visit/order data and
+# the vessel's ATA is sim time 0.
+SIMULATOR_START_EPOCH_MS = 1792886400000
+SCENARIO_EPOCH = datetime.fromtimestamp(SIMULATOR_START_EPOCH_MS / 1000, tz=dt_timezone.utc)
 # Vessel stowage for container n: bay 034, row 06, tier 82 + 2n (ISO 9711).
 VESSEL_BAY, VESSEL_ROW, VESSEL_FIRST_TIER = 34, 6, 82
 
@@ -242,7 +247,8 @@ def _seed_ches(location, types, site_layout):
         ches[name] = Che.objects.create(
             name=name, equipment_type=types[code], location=location,
             current_asset=current_asset, longitude=longitude, latitude=latitude,
-            powered_on=False, working=False, is_available=False,
+            # K3: every CHE starts powered on, available and not dispatched.
+            powered_on=True, working=False, is_available=True, is_dispatched=False,
         )
     CheOperatingScope.objects.create(
         che=ches['QC01'], asset=site_layout['quay'], axis=site_layout['quay_axis'],
@@ -260,11 +266,20 @@ def _seed_ches(location, types, site_layout):
 
 
 def _route_edges(layout, start, end):
-    """Shortest path between two operational positions (empty if not connected)."""
+    """Shortest path between two operational positions.
+
+    BE review S-2: an unroutable TT leg must fail the seed (and so roll back
+    the whole reset) instead of silently seeding a leg with no edges.
+    """
     try:
-        return _shortest_path(layout, _endpoint_node(start), _endpoint_node(end))
-    except ValidationError:
-        return []
+        edges = _shortest_path(layout, _endpoint_node(start), _endpoint_node(end))
+    except ValidationError as exc:
+        raise ValidationError(
+            f'import_v1: no road route from {start.code} to {end.code}: {"; ".join(exc.messages)}'
+        ) from exc
+    if not edges:
+        raise ValidationError(f'import_v1: no road route from {start.code} to {end.code}.')
+    return list(edges)
 
 
 def _seed_discharge(location, types, site_layout, rng, containers):

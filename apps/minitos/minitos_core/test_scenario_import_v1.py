@@ -10,8 +10,10 @@ import json
 import random
 import unittest
 import uuid
+import re
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -31,6 +33,7 @@ from minitos_core.scenarios.base import (
 from minitos_core.scenarios.export import scenario_events
 from minitos_core.scenarios.mqtt_reset import clear_retained
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
 OES_FIXTURE = (
     Path(__file__).resolve().parents[2]
     / 'terminal-oes' / 'execution' / 'fixtures' / 'scenario_import_v1_events.json'
@@ -164,10 +167,22 @@ class ImportV1SeedContentTests(TestCase):
             'TT02': EquipmentType.TT, 'RTG01': EquipmentType.RTG,
         })
 
+    def test_ches_start_powered_on_available_and_not_dispatched(self):
+        # Spec K3 (QA Y2): QC01, TT01, TT02, RTG01 all available and not dispatched.
+        states = {
+            che.name: (che.powered_on, che.is_available, che.is_dispatched, che.working)
+            for che in Che.objects.all()
+        }
+        self.assertEqual(states, {
+            name: (True, True, False, False) for name in ('QC01', 'TT01', 'TT02', 'RTG01')
+        })
+
     def test_seeds_one_vessel_visit_with_one_preadvised_import(self):
         visit = CarrierVisit.objects.get()
         self.assertEqual((visit.name, visit.visit_type), ('V001', CarrierVisit.VESSEL))
         self.assertEqual(visit.eta, import_v1.SCENARIO_EPOCH)
+        # K7 (QA Y3): business times are on the simulator clock, ATA = sim time 0.
+        self.assertEqual(visit.ata, import_v1.SCENARIO_EPOCH)
         container = ContainerVisit.objects.get()
         self.assertEqual(container.category, ContainerVisit.IMPORT)
         self.assertEqual(container.status, ContainerVisit.PREADVISED)
@@ -230,7 +245,8 @@ class ImportV1ReleaseStepTests(TestCase):
         self.assertEqual(
             [leg['destination_inventory_position_id'] is None for leg in legs], [True, True, False],
         )
-        self.assertEqual(legs[1]['movement_mode'], 'road')
+        # QC and RTG legs have no route edges (S2 will give them crane modes).
+        self.assertEqual([leg['movement_mode'] for leg in legs], ['', 'road', ''])
         self.assertEqual(legs[1]['destination_position_code'], 'BLOCK01.TL.01')
         self.assertIn('order 1 is released', out.getvalue())
 
@@ -269,13 +285,71 @@ class ScenarioCommandTests(TestCase):
             call_command('scenario_reset', 'import_v1', '--noinput', '--containers', '0', stdout=io.StringIO())
 
     def test_scenario_reset_requires_confirmation_when_interactive(self):
-        from unittest import mock
-
         with mock.patch('builtins.input', return_value='no'):
             with self.assertRaises(CommandError):
                 call_command('scenario_reset', 'import_v1', stdout=io.StringIO())
         self.assertFalse(Site.objects.exists())
         self.assertFalse(Enterprise.objects.filter(pk=scenario_uuid('enterprise', 'terminal-velocity')).exists())
+
+
+class ImportV1UnroutableSeedTests(TestCase):
+    """BE review S-2: an unroutable TT leg fails the reset and rolls it back."""
+
+    def setUp(self):
+        reset_scenario('import_v1')
+        self.before = canonical_checksum(canonical_dump())
+
+    def test_unroutable_tt_leg_raises_and_keeps_the_previous_state(self):
+        with mock.patch.object(
+            import_v1, '_shortest_path', side_effect=ValidationError('No route found.'),
+        ):
+            with self.assertRaisesMessage(ValidationError, 'no road route from QC01.LANE'):
+                reset_scenario('import_v1')
+        self.assertEqual(canonical_checksum(canonical_dump()), self.before)
+
+    def test_empty_tt_route_raises(self):
+        with mock.patch.object(import_v1, '_shortest_path', return_value=[]):
+            with self.assertRaises(ValidationError):
+                reset_scenario('import_v1')
+        self.assertEqual(canonical_checksum(canonical_dump()), self.before)
+
+    def test_command_reports_the_rollback(self):
+        with mock.patch.object(
+            import_v1, '_shortest_path', side_effect=ValidationError('No route found.'),
+        ):
+            with self.assertRaisesMessage(CommandError, 'Reset rolled back'):
+                call_command('scenario_reset', 'import_v1', '--noinput', stdout=io.StringIO())
+        self.assertEqual(canonical_checksum(canonical_dump()), self.before)
+
+
+class ImportV1SimulatorClockAndSeedTests(TestCase):
+    """Spec K7 (QA Y3): one seed and one clock for the scenario and the simulator."""
+
+    def test_defaults_match_k7(self):
+        self.assertEqual(import_v1.DEFAULT_SEED, 1)
+        self.assertEqual(import_v1.SIMULATOR_START_EPOCH_MS, 1792886400000)
+        self.assertEqual(
+            int(import_v1.SCENARIO_EPOCH.timestamp() * 1000), import_v1.SIMULATOR_START_EPOCH_MS,
+        )
+        self.assertEqual(import_v1.SCENARIO_EPOCH.isoformat(), '2026-10-25T00:00:00+00:00')
+
+    def test_reset_reports_the_default_seed(self):
+        self.assertEqual(reset_scenario('import_v1')['seed'], 1)
+
+    @unittest.skipUnless((REPO_ROOT / 'compose.yaml').exists(), 'monorepo checkout required')
+    def test_compose_and_makefile_use_the_same_seed_and_epoch(self):
+        compose = (REPO_ROOT / 'compose.yaml').read_text()
+        self.assertIn(f'SIMULATOR_SEED: ${{SIMULATOR_SEED:-{import_v1.DEFAULT_SEED}}}', compose)
+        self.assertIn(
+            f'SIMULATOR_START_EPOCH_MS: ${{SIMULATOR_START_EPOCH_MS:-{import_v1.SIMULATOR_START_EPOCH_MS}}}',
+            compose,
+        )
+        makefile = (REPO_ROOT / 'Makefile').read_text()
+        self.assertRegex(makefile, rf'(?m)^SEED \?= {import_v1.DEFAULT_SEED}$')
+        target = re.search(r'(?ms)^scenario-reset:.*?(?=^\S)', makefile).group(0)
+        self.assertIn('SIMULATOR_SEED=$(SEED)', target)
+        self.assertIn('terminal-oes python manage.py scenario_reset $(SCENARIO) --noinput --seed $(SEED)', target)
+        self.assertIn('--seed $(SEED) --containers $(CONTAINERS)', target)
 
 
 class ContainerNumberTests(TestCase):

@@ -1,7 +1,7 @@
 COMPOSE ?= docker compose
 SCENARIO ?= import_v1
 STEP ?=
-SEED ?=
+SEED ?= 1
 CONTAINERS ?= 1
 
 .DEFAULT_GOAL := help
@@ -136,14 +136,17 @@ create-oes-admin: init
 # through its own management command (no cross-database writes). Order matters:
 # OES first (it must forget the old Site revision), then retained MQTT, then
 # MiniTOS seeds and publishes through its outbox, then we wait for OES to project.
-SCENARIO_SEED_ARG = $(if $(SEED),--seed $(SEED),)
+# SEED (default 1, spec K7) is one knob for both seeds: terminal-oes is recreated
+# with SIMULATOR_SEED=$(SEED) when it differs (a no-op otherwise), so the next
+# simulator session gets the same seed as the MiniTOS scenario RNG.
 SCENARIO_ORDER_ARG = $(if $(ORDER),--order $(ORDER),)
 
 scenario-reset: init
-	$(COMPOSE) exec -T terminal-oes python manage.py scenario_reset $(SCENARIO) --noinput
+	SIMULATOR_SEED=$(SEED) $(COMPOSE) up --detach --no-deps --wait terminal-oes
+	$(COMPOSE) exec -T terminal-oes python manage.py scenario_reset $(SCENARIO) --noinput --seed $(SEED)
 	$(COMPOSE) exec -T minitos python manage.py clear_retained_mqtt
 	$(COMPOSE) exec -T minitos python manage.py scenario_reset $(SCENARIO) --noinput \
-		$(SCENARIO_SEED_ARG) --containers $(CONTAINERS)
+		--seed $(SEED) --containers $(CONTAINERS)
 	$(COMPOSE) exec -T terminal-oes python manage.py scenario_wait_ready --timeout 60
 
 scenario-step: init

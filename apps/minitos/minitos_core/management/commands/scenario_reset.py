@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 
 from minitos_core.scenarios import SCENARIOS, reset_scenario
@@ -12,7 +13,10 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('scenario', choices=sorted(SCENARIOS))
-        parser.add_argument('--seed', type=int, default=None, help='RNG seed (default: the scenario default).')
+        parser.add_argument(
+            '--seed', type=int, default=None,
+            help='Scenario RNG seed; make scenario-reset passes SEED (default 1, the K7 SIMULATOR_SEED).',
+        )
         parser.add_argument('--containers', type=int, default=1, help='Import containers to pre-advise (1-5).')
         parser.add_argument(
             '--noinput', '--no-input', action='store_false', dest='interactive',
@@ -31,6 +35,9 @@ class Command(BaseCommand):
             result = reset_scenario(name, seed=options['seed'], containers=options['containers'])
         except (LookupError, ValueError) as exc:
             raise CommandError(str(exc)) from exc
+        except ValidationError as exc:
+            # BE review S-2: e.g. an unroutable TT leg; the reset was rolled back.
+            raise CommandError('Reset rolled back: ' + '; '.join(exc.messages)) from exc
         site = result['site']
         self.stdout.write(self.style.SUCCESS(
             f'{name}: wiped {result["tables_wiped"]} tables, seed {result["seed"]}; '

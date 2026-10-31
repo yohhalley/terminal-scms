@@ -16,7 +16,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from .models import (
@@ -137,6 +137,24 @@ class ScenarioResetTests(TestCase):
 
         call_command("scenario_reset", "import_v1", "--noinput", "--force", stdout=io.StringIO())
         self.assertFalse(SimulationSession.objects.exists())
+
+    @override_settings(SIMULATOR_SIM_SETTINGS={"SIMULATOR_SEED": "7"})
+    def test_seed_must_match_the_simulator_seed_before_wiping(self):
+        # K7 / QA Y3: make scenario-reset SEED=n also sets the simulator seed.
+        project_import_v1()
+        with self.assertRaisesMessage(CommandError, "SIMULATOR_SEED is 7, expected 1"):
+            call_command("scenario_reset", "import_v1", "--noinput", "--seed", "1", stdout=io.StringIO())
+        self.assertTrue(SiteProjection.objects.exists())
+
+        out = io.StringIO()
+        call_command("scenario_reset", "import_v1", "--noinput", "--seed", "7", stdout=out)
+        self.assertFalse(SiteProjection.objects.exists())
+        self.assertIn("simulator seed 7", out.getvalue())
+
+    @override_settings(SIMULATOR_SIM_SETTINGS={})
+    def test_seed_check_fails_when_the_simulator_seed_is_unset(self):
+        with self.assertRaisesMessage(CommandError, "SIMULATOR_SEED is unset, expected 1"):
+            call_command("scenario_reset", "import_v1", "--noinput", "--seed", "1", stdout=io.StringIO())
 
     def test_interactive_reset_needs_confirmation(self):
         project_import_v1()

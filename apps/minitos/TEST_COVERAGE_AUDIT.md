@@ -130,6 +130,12 @@ step's `scms.order.released.v1` payload (equipment types, hand-off boundaries,
 road movement mode); command errors; ISO 6346 check digits; retained-MQTT clearing
 with a fake client (Sparkplug host STATE preserved); and drift of the OES event
 fixture. Not covered without Docker: PostgreSQL sequence reset, a real broker.
+The PR #24 review round (2026-10-31) brings it to 35 tests: CHEs seeded powered on
+and available (spec K3); K7 seed 1 and simulator-clock epoch, pinned against
+`compose.yaml` and the Makefile; an unroutable or empty TT route fails the reset
+and rolls it back (BE S-2). `test_order_execution.LegMovementModeTests` (3 tests)
+pins `_leg_movement_mode` directly: out-of-order sequences, mixed modes, no edges
+(BE S-1).
 
 `test_pow_models.py` and `test_visit_cargo_routes.py` are demonstration scripts,
 not Django `TestCase` classes, so `manage.py test` does not discover them.

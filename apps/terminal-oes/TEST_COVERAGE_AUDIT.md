@@ -25,7 +25,9 @@ replays the real MiniTOS `import_v1` events from
 mocked: two resets give an identical canonical dump; without a reset a reseeded
 MiniTOS revision is skipped as stale; the reset keeps users and refuses while a
 simulation is active (unless `--force`); wait-ready success and timeout; and the
-`dispatch-next` step pairs QC01 with a TT on the released order.
+`dispatch-next` step pairs QC01 with a TT on the released order. Since the
+PR #24 review (14 tests), `scenario_reset --seed n` refuses before wiping when
+OES's `SIMULATOR_SEED` (the seed it forwards to the simulator) is not n (K7).
 
 Additional cross-process checks:
 
