@@ -7,6 +7,10 @@ set -uo pipefail
 limit="$1"
 script="$2"
 log="$(mktemp)"
+# TCL-034: the simulator's built-in timing profile is `realistic` (D-039, the
+# demo). Tests run `fast` (holds 2..5 s) unless the caller sets a profile.
+export SIMULATOR_TIMING_PROFILE="${SIMULATOR_TIMING_PROFILE:-fast}"
+echo "SIMULATOR_TIMING_PROFILE=${SIMULATOR_TIMING_PROFILE}"
 timeout "$limit" "$GODOT_BIN" --headless --path . --script "$script" 2>&1 | tee "$log"
 rc=${PIPESTATUS[0]}
 if grep -q "SCRIPT ERROR" "$log"; then

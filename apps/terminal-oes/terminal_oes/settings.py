@@ -108,7 +108,8 @@ EQUIPMENT_STALE_SECONDS = int(os.getenv("EQUIPMENT_STALE_SECONDS", "60"))
 EQUIPMENT_COMMAND_TTL_SIM_SECONDS = int(os.getenv("EQUIPMENT_COMMAND_TTL_SIM_SECONDS", "600"))
 # TCL-028: deterministic simulator settings forwarded in the runner claim
 # environment when set on OES (non-secret tuning values only). Must stay a
-# subset of apps/simulator-runner/runner.py ALLOWED_ENVIRONMENT.
+# subset of apps/simulator-runner/runner.py ALLOWED_ENVIRONMENT and match the
+# tuning keys the Godot simulator reads (test_handoffs.ClaimEnvironmentTests).
 SIMULATOR_SIM_SETTING_NAMES = (
     "SIMULATOR_SEED",
     "SIMULATOR_RUN_ID",
@@ -119,7 +120,16 @@ SIMULATOR_SIM_SETTING_NAMES = (
     "SIMULATOR_QC_WAIT_MAX_S",
     "SIMULATOR_QC_HOLD_WAIT_MIN_S",
     "SIMULATOR_QC_HOLD_WAIT_MAX_S",
+    "SIMULATOR_RTG_WAIT_MIN_S",
+    "SIMULATOR_RTG_WAIT_MAX_S",
+    "SIMULATOR_RTG_HOLD_WAIT_MIN_S",
+    "SIMULATOR_RTG_HOLD_WAIT_MAX_S",
     "SIMULATOR_TT_NO_SHOW_TIMEOUT_S",
+    # TCL-034 (TCL-011 hand-off design §6.1/§6.2).
+    "SIMULATOR_TIMING_PROFILE",
+    "SIMULATOR_QC_NO_SHOW_TIMEOUT_S",
+    "SIMULATOR_RTG_NO_SHOW_TIMEOUT_S",
+    "SIMULATOR_LEG_STALL_TIMEOUT_S",
     "SIMULATOR_COMMAND_TTL_S",
     "SIMULATOR_DEFAULT_SPEED_MPS",
 )

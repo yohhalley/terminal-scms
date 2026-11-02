@@ -57,6 +57,8 @@ x-oes: &oes
     SIMULATOR_DEVICE_ID_MODE: name
     SIMULATOR_SEED: ${SIMULATOR_SEED:-1}
     SIMULATOR_START_EPOCH_MS: ${SIMULATOR_START_EPOCH_MS:-1792886400000}
+    # TCL-034: realistic (D-039, the demo) unless .env says fast; OES forwards it.
+    SIMULATOR_TIMING_PROFILE: ${SIMULATOR_TIMING_PROFILE:-realistic}
     RUN_MIGRATIONS: "true"
   depends_on:
     oes-db:
@@ -202,6 +204,7 @@ services:
     environment:
       OES_URL: http://terminal-oes:8000
       SIMULATOR_DEFAULT_SPEED_MPS: ${SIMULATOR_DEFAULT_SPEED_MPS:-4.0}
+      SIMULATOR_TIMING_PROFILE: ${SIMULATOR_TIMING_PROFILE:-realistic}
     depends_on:
       hivemq:
         condition: service_healthy

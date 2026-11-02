@@ -709,6 +709,42 @@ class ClaimEnvironmentTests(HandoffTestBase):
         self.assertLessEqual(set(django_settings.SIMULATOR_SIM_SETTING_NAMES), allowed)
         self.assertLessEqual(set(environment), allowed)
 
+    def test_sim_setting_names_match_what_godot_reads(self):
+        """TCL-034 (TCL-011 §6.2): OES list, runner allowlist and Godot agree both ways."""
+        import re
+        from pathlib import Path
+
+        from django.conf import settings as django_settings
+
+        from .services.simulations import launch_environment
+
+        source = Path(__file__).resolve().parents[3] / "clients" / "godot-open-terminal" / "source"
+        if not source.is_dir():
+            self.skipTest("Godot sources not available in this context")
+        godot_keys = set()
+        for path in source.rglob("*.gd"):
+            godot_keys.update(re.findall(r'"(SIMULATOR_[A-Z0-9_]+)"', path.read_text(encoding="utf-8")))
+        godot_keys.discard("SIMULATOR_FAILURE")  # exception reason code, not an env key
+        # Retired key Godot names only to warn about it (TCL-011 rev 2, S4).
+        godot_keys.discard("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED")
+        # Keys OES sets per session itself (identity, time scale), and the
+        # scenario id (the bootstrap session.scenario_id wins; local runs only).
+        per_session = {key for key in launch_environment(self.session, "t") if key.startswith("SIMULATOR_")}
+        per_session -= set(django_settings.SIMULATOR_SIM_SETTING_NAMES)
+        tuning = godot_keys - per_session - {"SIMULATOR_SCENARIO_ID"}
+        names = set(django_settings.SIMULATOR_SIM_SETTING_NAMES)
+        self.assertEqual(names, tuning, "OES SIMULATOR_SIM_SETTING_NAMES must equal Godot's tuning keys")
+        allowed = self.runner_allowlist()
+        self.assertLessEqual(godot_keys, allowed)
+        self.assertLessEqual(names, allowed)
+        for key in (
+            "SIMULATOR_RTG_WAIT_MIN_S", "SIMULATOR_RTG_WAIT_MAX_S", "SIMULATOR_RTG_HOLD_WAIT_MIN_S",
+            "SIMULATOR_RTG_HOLD_WAIT_MAX_S", "SIMULATOR_TIMING_PROFILE", "SIMULATOR_QC_NO_SHOW_TIMEOUT_S",
+            "SIMULATOR_RTG_NO_SHOW_TIMEOUT_S", "SIMULATOR_LEG_STALL_TIMEOUT_S",
+        ):
+            self.assertIn(key, names)
+        self.assertNotIn("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", names | allowed | godot_keys)
+
 
 class RerunAcrossSessionsTests(HandoffTestBase):
     """TL review B-1: two sessions back to back on the same CHE rows, no rollback."""

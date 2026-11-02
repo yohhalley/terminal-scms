@@ -123,11 +123,16 @@ environment are allowlisted explicitly (see `ALLOWED_ENVIRONMENT`):
 `SIMULATOR_FIXED_STEP_MS`, `SIMULATOR_DEFAULT_SPEED_MPS`, `SIMULATOR_START_EPOCH_MS`, `SIMULATOR_DEVICE_ID_MODE`,
 `SIMULATOR_QC_WAIT_MIN_S`, `SIMULATOR_QC_WAIT_MAX_S`, `SIMULATOR_QC_HOLD_WAIT_MIN_S`,
 `SIMULATOR_QC_HOLD_WAIT_MAX_S`, `SIMULATOR_RTG_WAIT_MIN_S`, `SIMULATOR_RTG_WAIT_MAX_S`,
-`SIMULATOR_RTG_HOLD_WAIT_MIN_S`, `SIMULATOR_RTG_HOLD_WAIT_MAX_S`, `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`,
-`SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED` (default `false`: an RTG waiting for its TT
-never times out; `true` applies `SIMULATOR_TT_NO_SHOW_TIMEOUT_S` to the RTG too, pending O7),
-`SIMULATOR_COMMAND_TTL_S` and `SIMULATOR_SCENARIO_ID` (NBIRTH `Sim/ScenarioId`;
+`SIMULATOR_RTG_HOLD_WAIT_MIN_S`, `SIMULATOR_RTG_HOLD_WAIT_MAX_S`,
+`SIMULATOR_TIMING_PROFILE` (`realistic`, the simulator default per D-039, or
+`fast` for tests and CI; explicit wait keys override the profile), the no-show time-outs per absent CHE
+`SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, `SIMULATOR_QC_NO_SHOW_TIMEOUT_S`,
+`SIMULATOR_RTG_NO_SHOW_TIMEOUT_S` (300 s each), `SIMULATOR_LEG_STALL_TIMEOUT_S`
+(600 s), `SIMULATOR_COMMAND_TTL_S` and `SIMULATOR_SCENARIO_ID` (NBIRTH `Sim/ScenarioId`;
 the OES bootstrap `session.scenario_id` wins when present).
+`SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED` is retired (TCL-034: the RTG no-show is
+always on) and is rejected. `test_runner.py` checks that this allowlist and the
+keys the Godot sources read match both ways.
 
 `SIMULATOR_DEVICE_ID_MODE` defaults to `name` in the simulator (device id =
 MiniTOS `Che.name`, e.g. `QC01`, as the contract and OES expect); set it to
