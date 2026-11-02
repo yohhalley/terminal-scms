@@ -1371,37 +1371,54 @@ def bulk_create_container_visits(request):
 def transition_visit_status(request, visit_id):
     """
     API endpoint for transitioning visit status.
+
+    D-025: the status only moves forward, one step at a time
+    (Created -> Announced -> Arrived -> InOperation -> Complete -> Departed).
+    - 200: changed, or same status (no-op, nothing saved).
+    - 400: missing status, or a value that is not a visit status.
+    - 404: unknown visit.
+    - 409 {success: false, code, message, from_status, to_status, allowed_next}:
+      code ``visit_status_backward`` or ``visit_status_skipped``.
     """
-    try:
-        visit = CarrierVisit.objects.get(id=visit_id)
-    except CarrierVisit.DoesNotExist:
-        return Response({'error': 'Visit not found'}, status=status.HTTP_404_NOT_FOUND)
-
     new_status = request.data.get('status')
-    if not new_status:
-        return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
+    with transaction.atomic():
+        try:
+            visit = CarrierVisit.objects.select_for_update().get(id=visit_id)
+        except CarrierVisit.DoesNotExist:
+            return Response({'error': 'Visit not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    # TCL-032: the legacy VisitStateManager/VisitSerializer never existed in this
-    # codebase. Use the same rules as the CarrierVisit API (CarrierVisitSerializer:
-    # status must be one of CarrierVisit.STATUS_CHOICES); no transition graph is
-    # enforced because none is defined yet (open question for the PO).
-    # A same-status request is a 200 no-op: nothing is saved, so save() does not
-    # recompute etd or bump last_updated.
-    old_status = visit.status
-    if new_status == old_status:
-        return Response({
-            'success': True,
-            'message': f'Visit {visit.name} is already {old_status}; no change.',
-            'visit': CarrierVisitSerializer(visit).data,
-        })
-    serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
-    if not serializer.is_valid():
-        return Response({
-            'success': False,
-            'message': f'Invalid status {new_status!r} for visit {visit.name}.',
-            'errors': serializer.errors,
-        }, status=status.HTTP_400_BAD_REQUEST)
-    serializer.save()
+        if not new_status:
+            return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # TCL-032: validate through CarrierVisitSerializer (status choices).
+        # A same-status request is a 200 no-op: nothing is saved, so save() does not
+        # recompute etd or bump last_updated.
+        old_status = visit.status
+        if new_status == old_status:
+            return Response({
+                'success': True,
+                'message': f'Visit {visit.name} is already {old_status}; no change.',
+                'visit': CarrierVisitSerializer(visit).data,
+            })
+        refusal = CarrierVisit.status_transition_error(visit.name, old_status, new_status)
+        if refusal is not None:
+            return Response({
+                'success': False,
+                'code': refusal.transition_code,
+                'message': refusal.transition_message,
+                'from_status': refusal.from_status,
+                'to_status': refusal.to_status,
+                'allowed_next': refusal.allowed_next,
+            }, status=status.HTTP_409_CONFLICT)
+        serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'code': 'visit_status_unknown',
+                'message': f'Invalid status {new_status!r} for visit {visit.name}.',
+                'errors': serializer.errors,
+            }, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
     return Response({
         'success': True,
         'message': f'Visit {visit.name} status changed from {old_status} to {visit.status}.',

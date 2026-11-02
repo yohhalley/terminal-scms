@@ -2554,6 +2554,22 @@ class CarrierServiceEquipmentRequirement(models.Model):
 
 
 ###################################
+class VisitStatusTransitionError(ValidationError):
+    """D-025: a refused vessel-visit status change (backward or skipped).
+
+    A ``ValidationError`` keyed on ``status`` so the Django admin form shows it
+    next to the field; ``code`` is one of ``CarrierVisit.STATUS_TRANSITION_CODES``.
+    """
+
+    def __init__(self, message, code, from_status, to_status, allowed_next):
+        self.transition_code = code
+        self.transition_message = message
+        self.from_status = from_status
+        self.to_status = to_status
+        self.allowed_next = list(allowed_next)
+        super().__init__({'status': ValidationError(message, code=code)})
+
+
 class CarrierVisit(models.Model):
     PLANNED = 'Created'
     ANNOUNCED = 'Announced'
@@ -2676,7 +2692,90 @@ class CarrierVisit(models.Model):
     def calculated_duration_display(self):
         return format_duration_minutes(self.calculated_duration_minutes)
 
+    # D-025 (Yael, 2 Nov 2026): in the MVP the visit status only moves forward,
+    # one step at a time. A backward or skipped change is refused; setting the
+    # current status again is a no-op. The initial status of a new visit is not
+    # a transition (the import_v1 seed creates the visit as Arrived, D-018).
+    # Backward moves with a tracked reason are post-MVP (backlog).
+    STATUS_ORDER = (PLANNED, ANNOUNCED, ARRIVED, IN_OPERATION, COMPLETE, DEPARTED)
+    STATUS_BACKWARD = 'visit_status_backward'
+    STATUS_SKIPPED = 'visit_status_skipped'
+    STATUS_TRANSITION_CODES = (STATUS_BACKWARD, STATUS_SKIPPED)
+
+    @classmethod
+    def next_status(cls, current):
+        """The only status a visit in ``current`` may move to, or None at the end."""
+        if current not in cls.STATUS_ORDER:
+            return None
+        index = cls.STATUS_ORDER.index(current)
+        return cls.STATUS_ORDER[index + 1] if index + 1 < len(cls.STATUS_ORDER) else None
+
+    @classmethod
+    def allowed_next_statuses(cls, current):
+        nxt = cls.next_status(current)
+        return [nxt] if nxt else []
+
+    @classmethod
+    def status_transition_error(cls, name, from_status, to_status):
+        """Return a VisitStatusTransitionError if ``from_status -> to_status`` is
+        refused by D-025, else None. Same status and unknown statuses return None
+        (unknown values are left to the field's choices validation)."""
+        if from_status == to_status:
+            return None
+        if from_status not in cls.STATUS_ORDER or to_status not in cls.STATUS_ORDER:
+            return None
+        old_i = cls.STATUS_ORDER.index(from_status)
+        new_i = cls.STATUS_ORDER.index(to_status)
+        if new_i == old_i + 1:
+            return None
+        allowed = cls.allowed_next_statuses(from_status)
+        allowed_text = (
+            f'The only allowed next status is {allowed[0]}.' if allowed
+            else f'{from_status} is the final status.'
+        )
+        if new_i < old_i:
+            code = cls.STATUS_BACKWARD
+            message = (
+                f'Visit {name} cannot go back from {from_status} to {to_status}: '
+                f'vessel-visit status only moves forward (D-025). {allowed_text}'
+            )
+        else:
+            code = cls.STATUS_SKIPPED
+            message = (
+                f'Visit {name} cannot skip from {from_status} to {to_status}: '
+                f'vessel-visit status moves one step at a time '
+                f'(Created, Announced, Arrived, InOperation, Complete, Departed; D-025). '
+                f'{allowed_text}'
+            )
+        return VisitStatusTransitionError(message, code, from_status, to_status, allowed)
+
+    def _stored_status(self):
+        """The status currently in the database, or None for a new visit."""
+        if self._state.adding or self.pk is None:
+            return None
+        return type(self).objects.filter(pk=self.pk).values_list('status', flat=True).first()
+
+    def validate_status_transition(self):
+        """Raise VisitStatusTransitionError if saving would break D-025."""
+        stored = self._stored_status()
+        if stored is None:
+            return
+        error = self.status_transition_error(self.name, stored, self.status)
+        if error is not None:
+            raise error
+
+    def clean(self):
+        # Called by ModelForm validation, so the Django admin refuses the change
+        # with the message shown on the status field.
+        super().clean()
+        self.validate_status_transition()
+
     def save(self, *args, **kwargs):
+        # Enforced on every save, not only in forms/serializers, so no code path
+        # (API, admin, shell, services) can move a visit backward or skip.
+        update_fields = kwargs.get('update_fields')
+        if update_fields is None or 'status' in update_fields:
+            self.validate_status_transition()
         duration_minutes = self.calculated_duration_minutes
         if self.eta and duration_minutes is not None:
             self.etd = self.eta + timedelta(minutes=duration_minutes)
