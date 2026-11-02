@@ -18,6 +18,26 @@ not carry the key. Producer check: `execution/test_scenario_reset_isolation.py`
 `minitos_core/test_contract_execution_events.py` (goldens with the current epoch
 apply, goldens without it are ignored under a fence).
 
+## `schemas/scms.visit.status_changed.v1.schema.json`
+TCL-003b (S2 slice of D-026, timestamps per D-024): the MiniTOS -> UNS visit
+milestone event. One event per saved status change of a carrier visit (vessel,
+barge, truck, train) or a container visit, including the first status at
+creation (`from_status` null). Topics, QoS 1, not retained:
+
+    scms/v2/{enterprise}/{site}/tos/carrier-visits/{id}/status-changed
+    scms/v2/{enterprise}/{site}/tos/container-visits/{id}/status-changed
+
+`occurred_at` is the MiniTOS wall clock at the save; `data.sim_time_ms` is the
+simulation time of the triggering OES event when it carries
+`source_sim_time_ms`, else null; `data.source` is one of `minitos.api`,
+`minitos.admin`, `minitos.scenario`, `minitos.system`, `oes.execution`. The outbox
+row is written in `transaction.on_commit`, so a rolled-back change is never
+published, and a same-status save publishes nothing. Producer
+`minitos_core/services/status_events.py`; contract test
+`minitos_core/test_contract_status_events.py` validates every produced payload
+and topic (skips without this folder, fails under `SCMS_CONTRACT_STRICT=1`) and
+checks the status/source enums against the models.
+
 ## `golden/scms.execution.event.v1/*.json`
 One full leg (`leg_dispatched` ... `leg_completed`) exactly as the real OES outbox
 publisher (`publish_outbox._publish_batch`) puts it on the wire: topic, QoS,
