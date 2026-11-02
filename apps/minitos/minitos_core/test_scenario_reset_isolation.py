@@ -27,7 +27,7 @@ from minitos_core.models import (
 from minitos_core.scenarios import reset_scenario, run_step
 from minitos_core.scenarios.base import canonical_checksum, canonical_dump
 from minitos_core.services import apply_execution_message
-from minitos_core.services.reset_epoch import current_epoch, stale_reason
+from minitos_core.services.reset_epoch import current_epoch, ignored_count, stale_reason
 
 RUN_1 = '20261102T080000Z-0000aaaa'
 RUN_2 = '20261102T090000Z-0000bbbb'
@@ -105,11 +105,11 @@ class StaleExecutionEventAfterResetTests(TestCase):
 
     def test_stale_leg_dispatched_from_the_previous_run_is_ignored(self):
         self.assertEqual(self.stale['data']['order_id'], 1)  # same ids as run 2
-        with self.assertLogs(LOGGER, 'WARNING') as logs:
+        with self.assertLogs(LOGGER, 'INFO') as logs:
             result = deliver(self.stale_topic, self.stale)
 
         self.assertIsNone(result)
-        self.assertIn(f"reset_epoch '{RUN_1}' is not the current epoch {RUN_2}", logs.output[0])
+        self.assertIn(f"reset_epoch seen={RUN_1} stored={RUN_2}", logs.output[0])
         self.assertEqual(new_run_state(), self.before)
         self.assertEqual(self.before[2], False)  # QC01 not dispatched
         self.assertFalse(IntegrationInbox.objects.exists())
@@ -117,16 +117,35 @@ class StaleExecutionEventAfterResetTests(TestCase):
 
     def test_stale_event_is_ignored_even_when_it_arrives_before_the_release(self):
         reset_scenario('import_v1', reset_epoch=RUN_2)
-        with self.assertLogs(LOGGER, 'WARNING'):
+        with self.assertLogs(LOGGER, 'INFO'):
             self.assertIsNone(deliver(self.stale_topic, self.stale))
         self.assertEqual(canonical_checksum(canonical_dump()), self.clean)
 
     def test_unfenced_envelope_is_ignored_while_an_epoch_is_set(self):
         topic, payload = oes_leg_dispatched(None)
-        with self.assertLogs(LOGGER, 'WARNING'):
+        with self.assertLogs(LOGGER, 'INFO'):
             self.assertIsNone(deliver(topic, payload))
         self.assertEqual(new_run_state(), self.before)
         self.assertIn('no reset_epoch', stale_reason(payload))
+
+    def test_ignored_message_is_logged_at_info_and_counted(self):
+        """TL 2026-11-02: drops are visible (INFO log with type and epochs) and counted."""
+        schema = 'scms.execution.event.v1'
+        before, before_type = ignored_count(), ignored_count(schema)
+        with self.assertLogs(LOGGER, 'INFO') as logs:
+            deliver(self.stale_topic, self.stale)
+            deliver(*oes_leg_dispatched(None))
+        self.assertEqual([record.levelname for record in logs.records], ['INFO', 'INFO'])
+        self.assertIn(f'type={schema}', logs.output[0])
+        self.assertIn(f'reset_epoch seen={RUN_1} stored={RUN_2}', logs.output[0])
+        self.assertIn(f'reset_epoch seen=none stored={RUN_2}', logs.output[1])
+        self.assertIn(f'ignored_total={before + 2}', logs.output[1])
+        self.assertEqual(ignored_count(), before + 2)
+        self.assertEqual(ignored_count(schema), before_type + 2)
+
+        # Accepted messages are not counted.
+        deliver(*oes_leg_dispatched(RUN_2))
+        self.assertEqual(ignored_count(), before + 2)
 
     def test_the_same_event_from_the_current_run_is_applied(self):
         """Control: the fence only drops other runs; the new run keeps working."""

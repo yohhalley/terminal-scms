@@ -17,6 +17,8 @@ Rules (both services, see docs/SCENARIO_RESET.md):
 
 import logging
 import re
+import threading
+from collections import Counter
 
 from django.core.exceptions import ValidationError
 
@@ -75,13 +77,40 @@ def stale_reason(payload):
     return f'reset_epoch {incoming!r} is not the current epoch {epoch}'
 
 
+# Ignored messages per message type (schema) since the process started. The
+# consumers are long-running processes, so the running total in every log line
+# shows how many drops a run has had; tests read it through ignored_count().
+_ignored = Counter()
+_ignored_lock = threading.Lock()
+
+
+def ignored_count(schema=None):
+    """Messages ignored as stale by this process (for one schema, or all)."""
+    with _ignored_lock:
+        return _ignored[schema] if schema is not None else sum(_ignored.values())
+
+
+def reset_ignored_count():
+    with _ignored_lock:
+        _ignored.clear()
+
+
 def ignore_if_stale(topic, payload):
-    """Log and return True when ``payload`` must be ignored (M2)."""
-    reason = stale_reason(payload)
-    if reason:
-        logger.warning(
-            'Ignored %s %s on %s from a previous scenario run: %s.',
-            payload.get('schema'), payload.get('event_id'), topic, reason,
-        )
-        return True
-    return False
+    """Log (INFO), count and return True when ``payload`` must be ignored (M2).
+
+    Strict policy (Tech Lead, 2026-11-02): with an epoch stored, a different or
+    missing ``reset_epoch`` is ignored.
+    """
+    if not stale_reason(payload):
+        return False
+    schema = payload.get('schema') or 'unknown'
+    with _ignored_lock:
+        _ignored[schema] += 1
+        total = sum(_ignored.values())
+    logger.info(
+        'Ignored stale message type=%s event_id=%s topic=%s: reset_epoch seen=%s stored=%s '
+        '(previous scenario run; ignored_total=%d).',
+        schema, payload.get('event_id'), topic,
+        payload.get(ENVELOPE_KEY) or 'none', current_epoch(), total,
+    )
+    return True
