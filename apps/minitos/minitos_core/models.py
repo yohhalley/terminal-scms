@@ -2785,17 +2785,43 @@ class CarrierVisit(models.Model):
         # with the message shown on the status field.
         super().clean()
         self.validate_status_transition()
+        if self._enters_operation(self._stored_status()):
+            # TCL-010: refuse InOperation in the form (field error on status)
+            # if discharge planning could not run, instead of failing in save().
+            from minitos_core.services import discharge_planning
+            discharge_planning.check_discharge_plannable(self)
+
+    def _enters_operation(self, stored_status):
+        """TCL-010: True if this save moves a stored vessel visit into InOperation."""
+        return (
+            stored_status is not None
+            and stored_status != self.IN_OPERATION
+            and self.status == self.IN_OPERATION
+            and self.visit_type == self.VESSEL
+        )
 
     def save(self, *args, **kwargs):
         # Enforced on every save, not only in forms/serializers, so no code path
         # (API, admin, shell, services) can move a visit backward or skip.
         update_fields = kwargs.get('update_fields')
-        if update_fields is None or 'status' in update_fields:
+        status_saved = update_fields is None or 'status' in update_fields
+        if status_saved:
             self.validate_status_transition()
+        enters_operation = status_saved and self._enters_operation(self._stored_status())
         duration_minutes = self.calculated_duration_minutes
         if self.eta and duration_minutes is not None:
             self.etd = self.eta + timedelta(minutes=duration_minutes)
-        super().save(*args, **kwargs)
+        if not enters_operation:
+            super().save(*args, **kwargs)
+            return
+        # TCL-010: the status change and the discharge orders commit together.
+        # A planning error (DischargePlanningError) rolls the status back too.
+        from django.db import transaction
+
+        from minitos_core.services import discharge_planning
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            discharge_planning.plan_visit_discharge(self)
 
 
 class CarrierVisitEquipmentRequirement(models.Model):
