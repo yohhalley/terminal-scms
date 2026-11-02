@@ -23,6 +23,8 @@ by the block lane, drawn from a seeded ``random.Random`` (D-016: the same
 visit gives the same slots on a rerun). Tests can pass their own ``rng``.
 """
 
+import itertools
+import logging
 import random
 
 from django.core.exceptions import ValidationError
@@ -42,6 +44,8 @@ from minitos_core.models import (
     WorkQueue,
 )
 from minitos_core.services.routing import _endpoint_node, _shortest_path
+
+logger = logging.getLogger(__name__)
 
 # Container visits that are still on the vessel and so need a discharge move.
 DISCHARGE_CATEGORIES = (ContainerVisit.IMPORT, ContainerVisit.TRANSSHIPMENT)
@@ -72,6 +76,8 @@ class DischargePlanningError(ValidationError):
 
 def default_rng(visit):
     """Seeded RNG for the yard slot draw: same visit -> same slots (D-016)."""
+    # TODO(TCL-012): once TCL-012 lands, seed this from the scenario seed plus
+    # the visit id (TL decision on PR #34), instead of location + visit name.
     return random.Random(f'TCL-010:{visit.location_id}:{visit.name}')
 
 
@@ -141,6 +147,9 @@ def _equipment_types(visit):
 
 
 def _work_queue(visit):
+    # PLACEHOLDER until a stowage import exists (post-MVP): takes the first
+    # active work queue at the terminal. A real plan would pick the queue of
+    # the crane assigned to the container's bay.
     queue = WorkQueue.objects.filter(location=visit.location, is_active=True).order_by('name').first()
     if queue is None:
         _fail(visit, CODE_NO_WORK_QUEUE, f'no active work queue at {visit.location}')
@@ -157,7 +166,12 @@ def free_yard_slots(grid):
 
 def _vessel_slot(visit, layout, qc_interface, qc_position, container_visit):
     """The container's vessel slot: one already in the layout for it (seeded or
-    from a future stowage import), else a placeholder at the crane."""
+    from a future stowage import), else a placeholder at the crane.
+
+    PLACEHOLDER until a stowage import exists (post-MVP): there is no real
+    bay/row/tier stow data yet, so the fallback slot sits at the QC lane
+    position with ``stow: None``.
+    """
     slot = OperationalPosition.objects.filter(
         layout_version=layout, position_kind=OperationalPosition.VESSEL_SLOT,
         logical_address__container_visit_id=container_visit.pk,
@@ -204,6 +218,43 @@ class PlannedDischarge:
         return f'<PlannedDischarge {self.container_visit.container_number_id} order {self.order.pk} {verb}>'
 
 
+EXPECTED_LEG_SHAPE = (
+    (1, OrderLeg.HANDLE, EquipmentType.STS),
+    (2, OrderLeg.MOVE, EquipmentType.TT),
+    (3, OrderLeg.HANDLE, EquipmentType.RTG),
+)
+
+
+def leg_plan_differences(order):
+    """How ``order``'s legs differ from the 3-leg STS -> TT -> RTG plan, as a
+    list of short strings (empty if it matches). Checks sequence, kind and
+    equipment type, and the hand-off chain: each leg starts where the previous
+    one ended, leg 1 starts at the order's origin, leg 3 ends at its target."""
+    legs = list(order.order_legs.select_related('equipment_type').order_by('sequence'))
+    diffs = []
+    actual = [(leg.sequence, leg.leg_kind, getattr(leg.equipment_type, 'equipment_type', None)) for leg in legs]
+    if actual != list(EXPECTED_LEG_SHAPE):
+        diffs.append(f'legs {actual} != expected {list(EXPECTED_LEG_SHAPE)}')
+    for previous, leg in itertools.pairwise(legs):
+        if previous.end_position_id != leg.start_position_id:
+            diffs.append(f'leg {leg.sequence} starts at {leg.start_position_id}, '
+                         f'leg {previous.sequence} ends at {previous.end_position_id}')
+    if legs and legs[0].start_position_id != order.from_position_id:
+        diffs.append(f'leg 1 starts at {legs[0].start_position_id}, order from {order.from_position_id}')
+    if legs and legs[-1].end_position_id != order.to_position_id:
+        diffs.append(f'last leg ends at {legs[-1].end_position_id}, order to {order.to_position_id}')
+    return diffs
+
+
+def _warn_if_not_planned_shape(container_visit, order):
+    diffs = leg_plan_differences(order)
+    if diffs:
+        logger.warning(
+            'TCL-010 adopting order %s for container %s unchanged, but its legs do not match '
+            'the 3-leg discharge plan: %s', order.pk, container_visit.container_number_id, '; '.join(diffs),
+        )
+
+
 def check_discharge_plannable(visit):
     """Raise DischargePlanningError if planning would fail; plan nothing.
 
@@ -245,6 +296,8 @@ def plan_visit_discharge(visit, rng=None):
     for container_visit in containers:
         order = existing_discharge_order(container_visit)
         if order is not None:
+            # Adopt unchanged (no re-planning in S2, TL decision on PR #34).
+            _warn_if_not_planned_shape(container_visit, order)
             results.append(PlannedDischarge(container_visit, order, created=False))
         else:
             pending.append(container_visit)

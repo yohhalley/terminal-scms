@@ -236,6 +236,42 @@ class AdoptsExistingOrderTests(DischargePlanningTestBase):
         self.assertTrue(planned[0].created)
         self.assertNotEqual(planned[0].order.pk, cancelled.pk)
 
+    LOGGER = 'minitos_core.services.discharge_planning'
+
+    def test_adopted_order_matching_the_plan_logs_no_warning(self):
+        drop_seeded_orders()
+        plan_visit_discharge(self.visit)
+        with self.assertNoLogs(self.LOGGER, level='WARNING'):
+            planned = plan_visit_discharge(self.visit)
+        self.assertEqual([item.created for item in planned], [False] * self.containers)
+
+    def test_adopted_order_with_mismatched_legs_is_kept_and_logs_a_warning(self):
+        drop_seeded_orders()
+        plan_visit_discharge(self.visit)
+        order = self.discharge_orders().first()
+        rtg_leg = order.order_legs.get(sequence=3)
+        tt_type = order.order_legs.get(sequence=2).equipment_type
+        rtg_leg.equipment_type = tt_type
+        rtg_leg.save()
+        legs_before = list(OrderLeg.objects.order_by('pk').values_list('pk', 'equipment_type_id'))
+
+        with self.assertLogs(self.LOGGER, level='WARNING') as logs:
+            planned = plan_visit_discharge(self.visit)
+
+        self.assertEqual(planned[0].order.pk, order.pk)
+        self.assertFalse(planned[0].created)
+        self.assertEqual(len(logs.records), 1)
+        message = logs.records[0].getMessage()
+        self.assertIn(str(order.pk), message)
+        self.assertIn(str(order.container_number_id), message)
+        self.assertIn('RTG', message)
+        self.assertEqual(list(OrderLeg.objects.order_by('pk').values_list('pk', 'equipment_type_id')), legs_before)
+
+    def test_adopting_the_seeded_orders_logs_no_warning(self):
+        with self.assertNoLogs(self.LOGGER, level='WARNING'):
+            self.move_to_in_operation()
+        self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
+
     def test_adopted_seed_with_no_free_slot_still_moves(self):
         block_slots().update(is_reserved=True)
         self.move_to_in_operation()
