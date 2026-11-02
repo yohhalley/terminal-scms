@@ -674,7 +674,13 @@ class CarrierVisitViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(location=location_pk)
         if self.request is not None and self.request.method in ('PUT', 'PATCH'):
             # D-025: lock the visit row so the serializer checks the status
-            # transition against the stored status (see update()).
+            # transition against the stored status. select_for_update() only
+            # holds the lock inside a transaction: this relies on update()
+            # wrapping super().update() (and so get_object()) in
+            # transaction.atomic(). Outside one, Django raises
+            # TransactionManagementError on PostgreSQL (SQLite ignores the
+            # lock), so don't call get_object() for
+            # PUT/PATCH from anywhere else without an atomic block.
             queryset = queryset.select_for_update(of=('self',))
         return queryset
 
