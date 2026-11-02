@@ -1,3 +1,4 @@
+import os
 import unittest
 import uuid
 from unittest.mock import Mock, patch
@@ -42,7 +43,10 @@ class DockerLauncherTests(unittest.TestCase):
             "SIMULATOR_RTG_HOLD_WAIT_MIN_S": "15",
             "SIMULATOR_RTG_HOLD_WAIT_MAX_S": "25",
             "SIMULATOR_TT_NO_SHOW_TIMEOUT_S": "300",
-            "SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED": "false",
+            "SIMULATOR_TIMING_PROFILE": "realistic",
+            "SIMULATOR_QC_NO_SHOW_TIMEOUT_S": "300",
+            "SIMULATOR_RTG_NO_SHOW_TIMEOUT_S": "300",
+            "SIMULATOR_LEG_STALL_TIMEOUT_S": "600",
             "SIMULATOR_COMMAND_TTL_S": "600",
             "SIMULATOR_SCENARIO_ID": "import-discharge-ci",
             "SIMULATOR_DEFAULT_SPEED_MPS": "4.0",
@@ -82,6 +86,50 @@ class DockerLauncherTests(unittest.TestCase):
         environment["UNTRUSTED_DOCKER_ARGUMENT"] = "--privileged"
         with self.assertRaisesRegex(ValueError, "unknown"):
             DockerLauncher("allowed").command(environment)
+
+
+GODOT_SOURCE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients", "godot-open-terminal", "source",
+)
+# SIMULATOR_* keys the runner passes that Godot does not read itself.
+NOT_READ_BY_GODOT = {"SIMULATOR_VERSION"}
+
+
+def godot_simulator_keys():
+    """Every quoted SIMULATOR_* name in the Godot sources (what Godot reads)."""
+    import re
+    keys = set()
+    for root, _dirs, files in os.walk(GODOT_SOURCE):
+        for name in files:
+            if name.endswith(".gd"):
+                with open(os.path.join(root, name), encoding="utf-8") as handle:
+                    keys.update(re.findall(r'"(SIMULATOR_[A-Z0-9_]+)"', handle.read()))
+    return keys - NOT_ENVIRONMENT
+
+
+# Quoted SIMULATOR_* literals in Godot that are not environment keys.
+NOT_ENVIRONMENT = {"SIMULATOR_FAILURE"}  # exception reason code
+
+
+class GodotAllowlistTests(unittest.TestCase):
+    """TCL-034 (TCL-011 §6.2): the runner allowlist and Godot agree both ways."""
+
+    def setUp(self):
+        if not os.path.isdir(GODOT_SOURCE):
+            self.skipTest("Godot sources not available in this context")
+
+    def test_every_key_godot_reads_is_allowlisted(self):
+        keys = godot_simulator_keys()
+        self.assertIn("SIMULATOR_LEG_STALL_TIMEOUT_S", keys)
+        self.assertLessEqual(keys, ALLOWED_ENVIRONMENT)
+
+    def test_every_allowlisted_simulator_key_is_read_by_godot(self):
+        allowed = {key for key in ALLOWED_ENVIRONMENT if key.startswith("SIMULATOR_")}
+        self.assertLessEqual(allowed - NOT_READ_BY_GODOT, godot_simulator_keys())
+
+    def test_the_retired_rtg_switch_is_gone(self):
+        self.assertNotIn("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", ALLOWED_ENVIRONMENT)
+        self.assertNotIn("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", godot_simulator_keys())
 
 
 class RunnerTests(unittest.TestCase):

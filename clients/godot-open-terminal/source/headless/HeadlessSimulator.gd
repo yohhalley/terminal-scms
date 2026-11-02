@@ -7,6 +7,7 @@ const SimClock = preload("res://source/headless/SimClock.gd")
 const SimRandom = preload("res://source/headless/SimRandom.gd")
 const QcDischarge = preload("res://source/headless/QcDischarge.gd")
 const RtgStack = preload("res://source/headless/RtgStack.gd")
+const SimTiming = preload("res://source/headless/SimTiming.gd")
 const COMMAND_EXECUTE_ORDER_LEG := "execute_order_leg"
 const COMMAND_QC_DISCHARGE := "qc_discharge"
 const COMMAND_CANCEL := "cancel"
@@ -46,25 +47,32 @@ const REASON_HANDOFF_TARGET_MISMATCH := "handoff_target_mismatch"
 const REASON_COUNTERPART_CHE_MISSING := "counterpart_che_missing"
 const REASON_HANDOFF_NOT_READY := "handoff_not_ready"
 const REASON_HANDOFF_ID_REUSED := "handoff_id_reused"
+## TCL-034 (TCL-011 §8 d): leg stall clock fired. Same code as the D-017 OES
+## exception reason, so OES can treat it like a no-show (BE side, §6.3).
+const REASON_SIMULATOR_FAILURE := "SIMULATOR_FAILURE"
 const TT_DRIVING_TO_SOURCE := "driving_to_source"
 const TT_AT_SOURCE_WAITING := "at_source_waiting"
 const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
 const TT_AT_DESTINATION_WAITING := "at_destination_waiting"
-const DEFAULT_QC_WAIT_MIN_S := 10
-const DEFAULT_QC_WAIT_MAX_S := 30
-const DEFAULT_TT_NO_SHOW_TIMEOUT_S := 300
-## D17-1: the RTG-side no-show time-out (D-013 analogue) is a separate switch and
-## stays OFF until the PO decides O7. Off: an RTG in waiting_for_tt waits until
-## the TT arrives or OES cancels. On: it uses Sim/Timing/TtNoShowTimeoutS.
-const DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED := false
+## TCL-034 timing defaults (TCL-011 hand-off design §6.1). The hold ranges come
+## from Sim/Timing/Profile (SimTiming.gd); explicit env keys override them.
+## The RTG no-show (W4) is always on: D-027 "all CHE ... the same logic"
+## extends D-013/D-017 to the RTG <-> TT wait (O7/O8), so the old
+## SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED switch is retired.
+const DEFAULT_TT_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_TT_NO_SHOW_TIMEOUT_S
+const DEFAULT_QC_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_QC_NO_SHOW_TIMEOUT_S
+const DEFAULT_RTG_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_RTG_NO_SHOW_TIMEOUT_S
+const DEFAULT_LEG_STALL_TIMEOUT_S := SimTiming.DEFAULT_LEG_STALL_TIMEOUT_S
 ## Sim-time command TTL (seconds) applied when a DCMD carries no ExpiresAtMs.
 const DEFAULT_COMMAND_TTL_S := 600
 ## Sim time is checkpointed at least this often, so a restart loses at most this much.
 const SIM_TIME_CHECKPOINT_MS := 1000
 const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 ## NBIRTH Contract/Version (TCL-002 §3.1, S2): "tcl-002.<minor>". OES refuses an
-## unsupported major version.
-const CONTRACT_VERSION := "tcl-002.1"
+## unsupported major version. tcl-002.2 (TCL-034): Sim/Timing/Profile,
+## Qc/RtgNoShowTimeoutS, LegStallTimeoutS added, RtgNoShowTimeoutEnabled removed
+## (contract rev 9.4, assumed; names pending BE confirmation).
+const CONTRACT_VERSION := "tcl-002.2"
 
 var _bootstrap := OESBootstrapClient.new()
 var _mqtt := MQTTNodeClient.new()
@@ -101,16 +109,23 @@ var _start_epoch_ms := 0
 ## NBIRTH Sim/ScenarioId: OES bootstrap session.scenario_id, else SIMULATOR_SCENARIO_ID.
 var _scenario_id := ""
 var _last_checkpoint_sim_ms := 0
+## Sim/Timing/Profile (`fast` | `realistic`); sets the hold ranges below.
+var _timing_profile := SimTiming.DEFAULT_PROFILE
 ## Whole seconds, inclusive, per QC wait step. D-012: only the hold wait exists.
 var _qc_wait_s := {
-	"hold": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
+	"hold": SimTiming.hold_range(SimTiming.DEFAULT_PROFILE, "qc"),
 }
-## D-013: whole seconds of sim time a QC waits for its TT before handoff_timed_out.
 var _rtg_wait_s := {
-	"hold": [DEFAULT_QC_WAIT_MIN_S, DEFAULT_QC_WAIT_MAX_S],
+	"hold": SimTiming.hold_range(SimTiming.DEFAULT_PROFILE, "rtg"),
 }
+## Whole seconds of sim time before handoff_timed_out, per ABSENT CHE type:
+## TT absent: QC at H1 (W1) and RTG at H2 (W4); QC absent: TT at H1 (W2);
+## RTG absent: TT at H2 (W3).
 var _tt_no_show_timeout_s := DEFAULT_TT_NO_SHOW_TIMEOUT_S
-var _rtg_no_show_timeout_enabled := DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED
+var _qc_no_show_timeout_s := DEFAULT_QC_NO_SHOW_TIMEOUT_S
+var _rtg_no_show_timeout_s := DEFAULT_RTG_NO_SHOW_TIMEOUT_S
+## Per-leg stall clock (sim seconds without a progress result -> failed).
+var _leg_stall_timeout_s := DEFAULT_LEG_STALL_TIMEOUT_S
 var _command_ttl_s := DEFAULT_COMMAND_TTL_S
 
 
@@ -151,39 +166,105 @@ func _configure_simulation():
 	_scenario_id = _env_any(["SIMULATOR_SCENARIO_ID", "SIM_SCENARIO_ID"], "")
 	SimIds.use_che_name = _env_any(["SIMULATOR_DEVICE_ID_MODE", "SIM_DEVICE_ID_MODE"], "name") != "legacy"
 	_mqtt.session_id = _session_id
-	var default_min = _env_any(["SIMULATOR_QC_WAIT_MIN_S", "SIM_QC_WAIT_MIN_S"], str(DEFAULT_QC_WAIT_MIN_S))
-	var default_max = _env_any(["SIMULATOR_QC_WAIT_MAX_S", "SIM_QC_WAIT_MAX_S"], str(DEFAULT_QC_WAIT_MAX_S))
-	for step_name in _qc_wait_s.keys():
-		var upper = step_name.to_upper()
-		configure_qc_wait(
-			step_name,
-			_env_any(["SIMULATOR_QC_%s_WAIT_MIN_S" % upper, "SIM_QC_%s_WAIT_MIN_S" % upper], default_min),
-			_env_any(["SIMULATOR_QC_%s_WAIT_MAX_S" % upper, "SIM_QC_%s_WAIT_MAX_S" % upper], default_max)
-		)
-	var rtg_min = _env_any(["SIMULATOR_RTG_WAIT_MIN_S", "SIM_RTG_WAIT_MIN_S"], str(DEFAULT_QC_WAIT_MIN_S))
-	var rtg_max = _env_any(["SIMULATOR_RTG_WAIT_MAX_S", "SIM_RTG_WAIT_MAX_S"], str(DEFAULT_QC_WAIT_MAX_S))
-	for step_name in _rtg_wait_s.keys():
-		var upper = step_name.to_upper()
-		configure_rtg_wait(
-			step_name,
-			_env_any(["SIMULATOR_RTG_%s_WAIT_MIN_S" % upper, "SIM_RTG_%s_WAIT_MIN_S" % upper], rtg_min),
-			_env_any(["SIMULATOR_RTG_%s_WAIT_MAX_S" % upper, "SIM_RTG_%s_WAIT_MAX_S" % upper], rtg_max)
-		)
-	configure_tt_no_show_timeout(
-		_env_any(
-			["SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "SIM_TT_NO_SHOW_TIMEOUT_S"], str(DEFAULT_TT_NO_SHOW_TIMEOUT_S)
-		)
-	)
-	configure_rtg_no_show_timeout_enabled(
-		_env_any(
-			["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", "SIM_RTG_NO_SHOW_TIMEOUT_ENABLED"],
-			str(DEFAULT_RTG_NO_SHOW_TIMEOUT_ENABLED)
-		)
-	)
-
+	_configure_timing()
 	configure_command_ttl(
 		_env_any(["SIMULATOR_COMMAND_TTL_S", "SIM_COMMAND_TTL_S"], str(DEFAULT_COMMAND_TTL_S))
 	)
+
+
+## TCL-034 timing: profile first, then explicit env keys win (env > profile >
+## default). Names are spelled out so the allowlist test can find every key.
+## SIM_* aliases are for local runs only (not passed by the runner).
+func _configure_timing():
+	configure_timing_profile(_env_any(["SIMULATOR_TIMING_PROFILE", "SIM_TIMING_PROFILE"], SimTiming.DEFAULT_PROFILE))
+	# Generic *_WAIT_* keys (TCL-014a) override the profile; *_HOLD_WAIT_* win over them.
+	var qc_min = _env_any(["SIMULATOR_QC_WAIT_MIN_S", "SIM_QC_WAIT_MIN_S"], str(_qc_wait_s.hold[0]))
+	var qc_max = _env_any(["SIMULATOR_QC_WAIT_MAX_S", "SIM_QC_WAIT_MAX_S"], str(_qc_wait_s.hold[1]))
+	configure_qc_wait(
+		"hold",
+		_env_any(["SIMULATOR_QC_HOLD_WAIT_MIN_S", "SIM_QC_HOLD_WAIT_MIN_S"], qc_min),
+		_env_any(["SIMULATOR_QC_HOLD_WAIT_MAX_S", "SIM_QC_HOLD_WAIT_MAX_S"], qc_max)
+	)
+	var rtg_min = _env_any(["SIMULATOR_RTG_WAIT_MIN_S", "SIM_RTG_WAIT_MIN_S"], str(_rtg_wait_s.hold[0]))
+	var rtg_max = _env_any(["SIMULATOR_RTG_WAIT_MAX_S", "SIM_RTG_WAIT_MAX_S"], str(_rtg_wait_s.hold[1]))
+	configure_rtg_wait(
+		"hold",
+		_env_any(["SIMULATOR_RTG_HOLD_WAIT_MIN_S", "SIM_RTG_HOLD_WAIT_MIN_S"], rtg_min),
+		_env_any(["SIMULATOR_RTG_HOLD_WAIT_MAX_S", "SIM_RTG_HOLD_WAIT_MAX_S"], rtg_max)
+	)
+	configure_tt_no_show_timeout(
+		_env_any(["SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "SIM_TT_NO_SHOW_TIMEOUT_S"], str(DEFAULT_TT_NO_SHOW_TIMEOUT_S))
+	)
+	configure_qc_no_show_timeout(
+		_env_any(["SIMULATOR_QC_NO_SHOW_TIMEOUT_S", "SIM_QC_NO_SHOW_TIMEOUT_S"], str(DEFAULT_QC_NO_SHOW_TIMEOUT_S))
+	)
+	configure_rtg_no_show_timeout(
+		_env_any(["SIMULATOR_RTG_NO_SHOW_TIMEOUT_S", "SIM_RTG_NO_SHOW_TIMEOUT_S"], str(DEFAULT_RTG_NO_SHOW_TIMEOUT_S))
+	)
+	configure_leg_stall_timeout(
+		_env_any(["SIMULATOR_LEG_STALL_TIMEOUT_S", "SIM_LEG_STALL_TIMEOUT_S"], str(DEFAULT_LEG_STALL_TIMEOUT_S))
+	)
+	for violation in timing_margin_violations():
+		# Allowed (CI failure-path tests set short time-outs on purpose), but loud.
+		push_warning("Timing margin (TCL-011 §8 g): %s" % violation)
+
+
+## Sets Sim/Timing/Profile and the hold ranges it implies. Unknown names keep
+## the current profile. Explicit hold keys are applied after this (env wins).
+func configure_timing_profile(text: String) -> bool:
+	var name = text.strip_edges().to_lower()
+	if not SimTiming.is_profile(name):
+		push_warning("Unknown timing profile %s; keeping %s" % [text, _timing_profile])
+		return false
+	_timing_profile = name
+	_qc_wait_s["hold"] = SimTiming.hold_range(name, "qc")
+	_rtg_wait_s["hold"] = SimTiming.hold_range(name, "rtg")
+	return true
+
+
+## Margin rule of TCL-011 §8(g) for the current values ([] = ok).
+func timing_margin_violations() -> Array:
+	return SimTiming.margin_violations(_qc_wait_s.hold, _rtg_wait_s.hold, _default_speed_mps, {
+		"tt": _tt_no_show_timeout_s, "qc": _qc_no_show_timeout_s,
+		"rtg": _rtg_no_show_timeout_s, "leg_stall": _leg_stall_timeout_s,
+	})
+
+
+static func _positive_s(text: String) -> int:
+	var value_text = text.strip_edges()
+	if value_text.is_valid_int() and int(value_text) > 0:
+		return int(value_text)
+	return 0
+
+
+## Sets Sim/Timing/QcNoShowTimeoutS (W2: TT at the QC lane waits for its QC).
+func configure_qc_no_show_timeout(text: String) -> bool:
+	var value = _positive_s(text)
+	if value > 0:
+		_qc_no_show_timeout_s = value
+		return true
+	push_warning("Invalid QC no-show timeout %s; keeping %s s" % [text, _qc_no_show_timeout_s])
+	return false
+
+
+## Sets Sim/Timing/RtgNoShowTimeoutS (W3: TT at the block lane waits for its RTG).
+func configure_rtg_no_show_timeout(text: String) -> bool:
+	var value = _positive_s(text)
+	if value > 0:
+		_rtg_no_show_timeout_s = value
+		return true
+	push_warning("Invalid RTG no-show timeout %s; keeping %s s" % [text, _rtg_no_show_timeout_s])
+	return false
+
+
+## Sets Sim/Timing/LegStallTimeoutS (any CHE on a live leg, TCL-011 §8 d).
+func configure_leg_stall_timeout(text: String) -> bool:
+	var value = _positive_s(text)
+	if value > 0:
+		_leg_stall_timeout_s = value
+		return true
+	push_warning("Invalid leg stall timeout %s; keeping %s s" % [text, _leg_stall_timeout_s])
+	return false
 
 
 ## Sets Sim/Timing/CommandTtlS (whole seconds, > 0). Invalid values keep the
@@ -211,23 +292,10 @@ func is_command_expired(metrics: Dictionary) -> bool:
 	return command_deadline_sim_ms(metrics) <= _clock.now_ms
 
 
-## Sets Sim/Timing/RtgNoShowTimeoutEnabled from true/false, 1/0, yes/no or on/off
-## (case-insensitive). Anything else keeps the previous value. Returns true when applied.
-func configure_rtg_no_show_timeout_enabled(text: String) -> bool:
-	var value_text = text.strip_edges().to_lower()
-	if value_text in ["true", "1", "yes", "on"]:
-		_rtg_no_show_timeout_enabled = true
-		return true
-	if value_text in ["false", "0", "no", "off"]:
-		_rtg_no_show_timeout_enabled = false
-		return true
-	push_warning("Invalid RTG no-show switch %s; keeping %s" % [text, _rtg_no_show_timeout_enabled])
-	return false
-
-
-## RTG no-show time-out in ms for RtgStack.start (0 = never times out).
+## RTG no-show (W4) time-out in ms for RtgStack.start: always on (D-027),
+## measured with Sim/Timing/TtNoShowTimeoutS (the TT is the absent CHE).
 func rtg_no_show_timeout_ms() -> int:
-	return _tt_no_show_timeout_s * 1000 if _rtg_no_show_timeout_enabled else 0
+	return _tt_no_show_timeout_s * 1000
 
 
 ## Sets Sim/Timing/TtNoShowTimeoutS (whole seconds, > 0). Invalid values keep the
@@ -242,7 +310,7 @@ func configure_tt_no_show_timeout(text: String) -> bool:
 
 
 ## Sets the inclusive whole-second range of one QC wait step. Invalid values keep
-## the 10..30 s default. Returns true when the given range was applied.
+## the current (profile) range. Returns true when the given range was applied.
 func configure_qc_wait(step_name: String, min_text: String, max_text: String) -> bool:
 	if not _qc_wait_s.has(step_name):
 		push_warning("Unknown QC wait step %s" % step_name)
@@ -304,6 +372,7 @@ func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		if _active_commands.has(che_id) and _is_rtg_command(_active_commands[che_id]):
 			_step_rtg(int(che_id), _ches[che_id], _active_commands[che_id])
+	_check_leg_stalls()
 	if _clock.now_ms - _last_checkpoint_sim_ms >= SIM_TIME_CHECKPOINT_MS:
 		_save_runtime_state()
 
@@ -373,8 +442,11 @@ func node_birth_metrics() -> Array:
 		{"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": int(_qc_wait_s.hold[1])},
 		{"name": "Sim/Timing/RtgHoldMinS", "type": "Int64", "value": int(_rtg_wait_s.hold[0])},
 		{"name": "Sim/Timing/RtgHoldMaxS", "type": "Int64", "value": int(_rtg_wait_s.hold[1])},
+		{"name": "Sim/Timing/Profile", "type": "String", "value": _timing_profile},
 		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
-		{"name": "Sim/Timing/RtgNoShowTimeoutEnabled", "type": "Boolean", "value": _rtg_no_show_timeout_enabled},
+		{"name": "Sim/Timing/QcNoShowTimeoutS", "type": "Int64", "value": _qc_no_show_timeout_s},
+		{"name": "Sim/Timing/RtgNoShowTimeoutS", "type": "Int64", "value": _rtg_no_show_timeout_s},
+		{"name": "Sim/Timing/LegStallTimeoutS", "type": "Int64", "value": _leg_stall_timeout_s},
 		{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": _command_ttl_s},
 	]
 
@@ -770,6 +842,8 @@ func _handle_assign_handoff(che_id: int, assign_id: String, metrics: Dictionary)
 	command["counterpart_che_id"] = int(metrics["Command/CounterpartCheId"])
 	command["assign_command_id"] = assign_id
 	command["giver_transfer_position_id"] = int(metrics.get("Command/TransferPositionId", 0))
+	if str(command.get("tt_phase", "")) == TT_AT_DESTINATION_WAITING:
+		command["handoff_wait_since_ms"] = _clock.now_ms
 	_active_commands[che_id] = command
 	# Silent outcome: a redelivered assign is deduplicated without a reply.
 	_command_outcomes[assign_id] = {"che_id": che_id, "event": "", "silent": true}
@@ -874,6 +948,8 @@ func _ready_counterpart_for(qc_id: int, qc_command: Dictionary) -> int:
 			continue
 		if str(other.get("tt_phase", "")) != TT_AT_SOURCE_WAITING:
 			continue
+		if str(other.get("handoff_timed_out_id", "")) == handoff_id:
+			continue
 		var named_qc = int(other.get("counterpart_che_id", 0))
 		if named_qc > 0 and named_qc != qc_id:
 			continue
@@ -942,6 +1018,8 @@ func _ready_tt_for_rtg(rtg_id: int, rtg_command: Dictionary) -> int:
 		if str(other.get("handoff_id", "")) != handoff_id or _handoff_side(other) != "giver":
 			continue
 		if str(other.get("tt_phase", "")) != TT_AT_DESTINATION_WAITING:
+			continue
+		if str(other.get("handoff_timed_out_id", "")) == handoff_id:
 			continue
 		var named_rtg = int(other.get("counterpart_che_id", 0))
 		if named_rtg > 0 and named_rtg != rtg_id:
@@ -1017,6 +1095,7 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 	if phase == TT_DRIVING_TO_SOURCE:
 		if _drive_towards(che_id, che, float(command.source_latitude), float(command.source_longitude), delta):
 			command["tt_phase"] = TT_AT_SOURCE_WAITING
+			command["handoff_wait_since_ms"] = _clock.now_ms
 			_active_commands[che_id] = command
 			_save_runtime_state()
 			_publish_command_result(che_id, str(command.command_id), "arrived_at_source", 0, "", "", command)
@@ -1030,6 +1109,8 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 			che_id, che, float(command.destination_latitude), float(command.destination_longitude), delta
 		):
 			command["tt_phase"] = TT_AT_DESTINATION_WAITING
+			if _handoff_side(command) == "giver":
+				command["handoff_wait_since_ms"] = _clock.now_ms
 			_active_commands[che_id] = command
 			_save_runtime_state()
 			_publish_command_result(che_id, str(command.command_id), "arrived_at_destination", 0, "", "", command)
@@ -1041,6 +1122,7 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 		che["speed_mps"] = 0.0
 		_consume_idle_energy(che, delta)
 		_ches[che_id] = che
+		_check_tt_no_show(che_id, command)
 		_publish_when_due(che)
 		return
 	var latitude = float(che.get("latitude", 0.0))
@@ -1096,6 +1178,83 @@ func _drive_towards(che_id: int, che: Dictionary, target_latitude: float, target
 	_ches[che_id] = che
 	_publish_when_due(che)
 	return false
+
+
+## TCL-034, D-027 "same logic" on the TT side: W2 (TT at the QC lane waits for
+## its QC with H1, Sim/Timing/QcNoShowTimeoutS) and W3 (TT at the block lane
+## waits for its RTG with H2, Sim/Timing/RtgNoShowTimeoutS). As for the QC
+## (D-013): handoff_timed_out once, the TT keeps its state (and the box at H2),
+## the HandoffId no longer pairs, and the TT waits for OES to cancel. The waiter
+## reports; OES accepting a TT-side report is BE work (TCL-011 §6.3).
+## H1 reports on the leg command id (receiver); H2 on the assign_handoff id
+## (giver), like the H2 handoff_completed. Assumption, pending BE confirmation.
+func _check_tt_no_show(che_id: int, command: Dictionary):
+	var handoff_id = str(command.get("handoff_id", ""))
+	if handoff_id.is_empty() or str(command.get("handoff_timed_out_id", "")) == handoff_id:
+		return
+	if not command.has("handoff_wait_since_ms"):
+		return
+	var phase = str(command.get("tt_phase", ""))
+	var side = _handoff_side(command)
+	var timeout_s := 0
+	if phase == TT_AT_SOURCE_WAITING and side == "receiver":
+		timeout_s = _qc_no_show_timeout_s
+	elif phase == TT_AT_DESTINATION_WAITING and side == "giver":
+		timeout_s = _rtg_no_show_timeout_s
+	else:
+		return
+	if _clock.now_ms - int(command.handoff_wait_since_ms) < timeout_s * 1000:
+		return
+	command["handoff_timed_out_id"] = handoff_id
+	_active_commands[che_id] = command
+	_save_runtime_state()
+	var report = command.duplicate()
+	if side == "giver" and not str(command.get("assign_command_id", "")).is_empty():
+		report["command_id"] = str(command.assign_command_id)
+	var counterpart_id = int(command.get("counterpart_che_id", 0))
+	_publish_events(che_id, report, [
+		{"event": "handoff_timed_out", "counterpart_che_id": counterpart_id, "handoff_role": side},
+	])
+	print("HEADLESS TT %s timed out waiting %s s at %s for HandoffId %s" % [che_id, timeout_s, phase, handoff_id])
+
+
+## True when a result for this command id moves the CHE's active leg on (its
+## own id, or the assign_handoff id the TT reports H2 on).
+func _is_active_leg_result(che_id: int, command_id: String) -> bool:
+	if not _active_commands.has(che_id):
+		return false
+	var command: Dictionary = _active_commands[che_id]
+	return command_id == str(command.get("command_id", "")) or command_id == str(command.get("assign_command_id", ""))
+
+
+## TCL-011 §8(d): per-leg stall clock on sim time. A live leg with no progress
+## result for Sim/Timing/LegStallTimeoutS gets `failed` with Reason
+## SIMULATOR_FAILURE and Detail "no progress on <CHE> within N s". `failed` ends
+## the leg for OES (terminal like completed / cancelled), so the CHE goes idle
+## here too and the flow continues (D-017). OES treating it like a no-show is BE work.
+func _check_leg_stalls():
+	var stall_ms = _leg_stall_timeout_s * 1000
+	for che_key in _active_commands.keys():
+		var che_id = int(che_key)
+		var command: Dictionary = _active_commands[che_key]
+		if not command.has("last_progress_ms"):
+			command["last_progress_ms"] = _clock.now_ms
+			continue
+		if _clock.now_ms - int(command.last_progress_ms) < stall_ms:
+			continue
+		var che: Dictionary = _ches[che_id]
+		var che_name = str(che.get("name", che_id))
+		_mark_che_idle(che)
+		_ches[che_id] = che
+		_active_commands.erase(che_key)
+		_save_runtime_state()
+		var context = command.duplicate()
+		context["detail"] = "no progress on %s within %s s" % [che_name, _leg_stall_timeout_s]
+		context["work_state"] = "idle"
+		context["load_container_visit_id"] = 0
+		_publish_command_result(che_id, str(command.command_id), "failed", 0, REASON_SIMULATOR_FAILURE, "", context)
+		_publish_equipment_state(che, true)
+		print("HEADLESS leg %s on CHE %s stalled (%s s)" % [command.command_id, che_id, _leg_stall_timeout_s])
 
 
 func _mark_che_idle(che: Dictionary):
@@ -1154,6 +1313,9 @@ func _publish_command_result(
 ):
 	if command_id.is_empty():
 		return
+	if _is_active_leg_result(che_id, command_id):
+		# Stall clock (TCL-011 §8 d): every result on the live leg is progress.
+		_active_commands[che_id]["last_progress_ms"] = _clock.now_ms
 	_event_seq += 1
 	if result_id.is_empty():
 		result_id = SimRandom.result_id(_session_id, _event_seq)
