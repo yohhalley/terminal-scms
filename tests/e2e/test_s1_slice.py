@@ -119,6 +119,35 @@ class MatchTests(unittest.TestCase):
         self.assertTrue(r.passed, r.error)
         self.assertEqual(len(stream.ignored), 2)
 
+    def test_visit_status_changed_events_are_outside_the_strict_order(self):
+        # PR #37 (TCL-003b): a reset publishes one creation event per seeded
+        # visit (carrier visit -> Arrived, container visit -> Preadvised) and
+        # visit-in-operation one Arrived -> InOperation event, all before the
+        # release; execution can add container-visit changes between legs.
+        # They are not S1-slice business events: ignored, never "extra".
+        def status(kind, vid, frm, to, source="minitos.scenario"):
+            return s1.UnsMessage(
+                f"scms/v2/e/s/tos/{kind}/{vid}/status-changed",
+                {"schema": "scms.visit.status_changed.v1",
+                 "data": {"from_status": frm, "to_status": to, "source": source}},
+                time.monotonic(),
+            )
+        stream = make_stream(
+            status("carrier-visits", 1, None, "Arrived"),
+            status("container-visits", 1, None, "Preadvised"),
+            status("carrier-visits", 1, "Arrived", "InOperation"),
+            execution("leg_dispatched", 11, "QC01"),
+            status("container-visits", 1, "Preadvised", "OnEquipment", source="oes.execution"),
+            execution("leg_dispatched", 12, "TT02"),
+        )
+        r = s1.run_expectations(step(), stream, [
+            s1.Expect("leg_dispatched", leg=1, che="QC01"),
+            s1.Expect("leg_dispatched", leg=2, che="TT*"),
+        ], time.monotonic())
+        self.assertTrue(r.passed, r.error)
+        self.assertEqual(len(stream.ignored), 4)
+        self.assertIsNone(stream.next_message(time.monotonic() + 0.05))
+
     def test_handoff_names(self):
         msg = execution("container_transferred", 12, "TT01", from_che_name="QC01", to_che_name="TT01")
         self.assertIsNone(s1.match_error(s1.Expect("container_transferred", from_che="QC01", to_che="TT*"), msg, {12: 2}))
