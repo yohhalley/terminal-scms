@@ -2,7 +2,9 @@
 """TCL-007: CI end-to-end runner for the S1 slice of ``import_v1``.
 
 Runs against a live Docker Compose stack that has just been reset with
-``make scenario-reset SCENARIO=import_v1`` and a host-side simulator runner
+``make scenario-reset SCENARIO=import_v1``, whose visit was then moved to
+InOperation with ``make scenario-step SCENARIO=import_v1 STEP=visit-in-operation``
+(TCL-010: that creates the discharge orders; untimed setup), and a host-side simulator runner
 (``apps/simulator-runner/runner.py``) that launches the Godot image.
 
 What it does, in order:
@@ -507,7 +509,10 @@ class SliceRun:
         step.trigger_s = round(elapsed, 3)
         step.checks.append(f"`{' '.join(command[-4:])}` exit {code}: {output.splitlines()[-1] if output else ''}")
         if code != 0:
-            step.error = f"release command failed (exit {code}): {output[-500:]}"
+            step.error = (
+                f"release command failed (exit {code}): {output[-500:]} "
+                "(precondition: scenario-reset, then scenario-step visit-in-operation)"
+            )
             return False
         return True
 

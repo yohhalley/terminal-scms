@@ -87,6 +87,11 @@ jobs:
       - name: Reset to import_v1
         run: make scenario-reset SCENARIO=import_v1
 
+      # TCL-010 (#34): discharge orders are created when the visit goes InOperation.
+      # Until #34 is on main this step fails (unknown step); that is expected.
+      - name: Visit InOperation (creates the discharge orders)
+        run: make scenario-step SCENARIO=import_v1 STEP=visit-in-operation
+
       - name: Run the S1 slice
         run: python tests/e2e/s1_slice.py --report-dir "$E2E_REPORT_DIR"
 
@@ -94,6 +99,7 @@ jobs:
         if: env.E2E_RERUN == '1'
         run: |
           make scenario-reset SCENARIO=import_v1
+          make scenario-step SCENARIO=import_v1 STEP=visit-in-operation
           python tests/e2e/s1_slice.py --report-dir "$E2E_REPORT_DIR/rerun" \
             --compare-with "$E2E_REPORT_DIR/s1_slice.json"
 
