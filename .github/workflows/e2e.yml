@@ -3,9 +3,12 @@ name: SCMS e2e (S1 slice)
 # TCL-007 (T-001, D-021): full compose stack + headless Godot (fast timings),
 # reset to import_v1, run the S1 slice and assert the UNS business events with
 # a <= 5 s limit per step (D-037). Flaky runs get a ticket, never a looser limit.
+# Not a required check: allowed to fail until it has been green on main 3 runs in a row.
 
 on:
   pull_request:
+    # Draft PRs run too (the default types do not filter drafts; listed explicitly).
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -27,8 +30,8 @@ jobs:
       E2E_STEP_LIMIT_S: "5"        # D-037. Do not raise; open a flaky-run ticket instead.
       E2E_TIME_SCALE: "10"         # simulation session time_scale (fast profile stand-in)
       E2E_REPORT_DIR: e2e-report
-      # D-016 rerun pass (reset again, same sequence). Blocked on QA M2 (reset must
-      # not accept stale messages from the previous run). Set to "1" once M2 is merged.
+      # D-016 rerun pass (reset again, same sequence). Blocked on the M2 reset fix (FE): reset must
+      # not accept stale messages from the previous run. Set to "1" once M2 is merged.
       E2E_RERUN: "0"
     steps:
       - uses: actions/checkout@v4

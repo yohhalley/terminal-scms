@@ -164,6 +164,97 @@ class ReportTests(unittest.TestCase):
         self.assertIn("**Overall: FAIL**", md)
 
 
+class ClockTests(unittest.TestCase):
+    """D-037: the clock starts when the trigger is published and stops when
+    the step's last expected event is received."""
+
+    def make_run(self, sim_offsets, step_limit=5.0):
+        import argparse
+        args = argparse.Namespace(
+            oes_url="http://127.0.0.1:1", compose="true", include_step4=False,
+            step_limit=step_limit, scenario="import_v1",
+        )
+        run = s1.SliceRun(args)
+        run.validator = None
+        self.issued = {}
+
+        def push(offset_base, offset, message):
+            message.received_at = offset_base + offset
+            run.stream.push(message)
+            return message
+
+        def trigger_release(step):
+            self.issued["release"] = time.monotonic()
+            time.sleep(0.05)  # the CLI call itself takes time; it is inside the clock
+            self.released = push(self.issued["release"], 0.10, released())
+            return True
+
+        def trigger_dispatch(step):
+            t = self.issued["dispatch"] = time.monotonic()
+            push(t, 0.02, execution("leg_dispatched", 11, "QC01"))
+            self.dispatched_last = push(t, 0.03, execution("leg_dispatched", 12, "TT02"))
+            events = [
+                execution("leg_started", 11, "QC01"), execution("container_picked_up", 11, "QC01"),
+                execution("leg_started", 12, "TT02"),
+                execution("container_transferred", 12, from_che_name="QC01", to_che_name="TT02"),
+                execution("leg_completed", 11, "QC01"),
+            ]
+            for offset, message in zip(sim_offsets, events):
+                push(t, offset, message)
+            return True
+
+        run.trigger_release = trigger_release
+        run.trigger_dispatch = trigger_dispatch
+        run.find_oes_order = lambda: 1
+        run.check_redispatch_noop = lambda step: None
+        run.final_checks = lambda: None
+        return run
+
+    def by_id(self, run):
+        return {r.step: r for r in run.results}
+
+    def test_clock_starts_at_trigger_and_stops_at_last_expected_event(self):
+        run = self.make_run([0.53, 0.54, 1.04, 1.05, 1.06])
+        run.run_steps()
+        r = self.by_id(run)
+        self.assertTrue(all(x.passed for x in run.results), [x.error for x in run.results])
+        # 3a: the clock started no later than the release command was issued.
+        self.assertGreaterEqual(r["3a"].elapsed_s, 0.10 - 0.001)
+        self.assertLess(r["3a"].elapsed_s, 0.10 + 0.05)
+        self.assertEqual(r["3a"].clock_from, "release command issued")
+        # 3b: from the dispatch request to the second leg_dispatched.
+        self.assertAlmostEqual(r["3b"].elapsed_s, 0.03, delta=0.02)
+        self.assertEqual(r["3b"].clock_from, "dispatch-next request sent")
+        # 3c/3d: chained on the exact receipt time of the previous step's last
+        # event, not on when the runner happened to read it.
+        self.assertAlmostEqual(r["3c"].elapsed_s, 0.54 - 0.03, delta=0.0011)
+        self.assertAlmostEqual(r["3d"].elapsed_s, 1.06 - 0.54, delta=0.0011)
+        self.assertAlmostEqual(r["3c"].last_received_at, self.dispatched_last.received_at + 0.51, delta=1e-9)
+        self.assertIn("leg_dispatched(leg 2, TT02) received (end of step 3b)", r["3c"].clock_from)
+
+    def test_simulator_step_over_the_limit_fails(self):
+        # 3d's last event arrives 0.31 s after 3c ended with a 0.3 s limit.
+        run = self.make_run([0.05, 0.06, 0.20, 0.30, 0.37], step_limit=0.3)
+        run.run_steps()
+        r = self.by_id(run)
+        self.assertTrue(r["3c"].passed, r["3c"].error)
+        self.assertFalse(r["3d"].passed)
+        self.assertIn("timeout: leg_completed", r["3d"].error)
+        self.assertIn("arrived at 0.310 s", r["3d"].error)
+
+    def test_simulator_step_without_a_passed_trigger_is_not_timed(self):
+        run = self.make_run([0.53, 0.54, 1.04, 1.05, 1.06])
+        plan = [p for p in s1.s1_plan(False) if p[2] not in ("minitos-release", "oes-dispatch")]
+        s1_plan = s1.s1_plan
+        s1.s1_plan = lambda include_step4: plan
+        try:
+            run.run_steps()
+        finally:
+            s1.s1_plan = s1_plan
+        self.assertFalse(run.results[0].passed)
+        self.assertIn("no triggering event", run.results[0].error)
+
+
 class SchemaTests(unittest.TestCase):
     def test_golden_events_validate_if_jsonschema_is_installed(self):
         validator = s1.load_execution_validator()

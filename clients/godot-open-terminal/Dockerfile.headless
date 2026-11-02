@@ -19,6 +19,23 @@ WORKDIR /app
 COPY --chown=godot:godot . /app
 
 USER godot
+
+# Import the project at build time so every session starts from the same
+# .godot cache (TCL-007). Godot 4.2 has no --import flag and `--editor --quit`
+# exits before the first scan, so run the headless editor until every file
+# named in a *.import is present.
+RUN for pass in 1 2 3 4 5 6; do \
+      HOME=/tmp/godot-import timeout 300 godot --headless --editor --path . --quit-after 3000 \
+        > /tmp/godot-import.log 2>&1 || { tail -n 50 /tmp/godot-import.log; exit 1; }; \
+      missing=$(grep -ho 'res://\.godot/imported/[^"]*' $(find . -name '*.import' -not -path './.godot/*') \
+        | sort -u | sed 's#^res://#./#' | while read -r f; do [ -e "$f" ] || echo "$f"; done | wc -l); \
+      echo "godot import pass $pass: $missing imported file(s) missing"; \
+      [ "$missing" -eq 0 ] && break; \
+    done \
+    && [ "$missing" -eq 0 ] \
+    && test -s .godot/global_script_class_cache.cfg \
+    && rm -rf /tmp/godot-import /tmp/godot-import.log
+
 ENV HOME=/data
 VOLUME ["/data"]
 

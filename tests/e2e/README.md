@@ -23,9 +23,15 @@ The exit code is 0 only when every step passes.
 
 ## Timing rule (D-037)
 
-- A step's clock starts when its trigger is issued. The trigger is the MiniTOS release
-  command, `dispatch-next`, or, for simulator-driven steps, the last event of the previous
-  step. The clock stops at the last expected event.
+- A step's clock starts when its trigger is published and stops when the step's last
+  expected event is received from the broker.
+  - Release (3a): just before the MiniTOS release command is issued. The CLI's own run
+    time is inside the clock and is reported as "Trigger (s)".
+  - Dispatch steps (3b, 4): just before the OES `dispatch-next` request is sent.
+  - Simulator-driven steps (3c, 3d): the exact time the previous step's last event was
+    received. Simulator envelope times are sim time, not wall time.
+- Every event's arrival time is taken in the MQTT thread, so the time the runner spends
+  reading never counts. The report's "Clock from" column names the start point.
 - The limit is 5 s per step (`E2E_STEP_LIMIT_S`). An event that arrives after its deadline fails the step.
 - A flaky or slow run gets a ticket, with the uploaded report and logs attached.
   **Never raise the limit to make a run green.**
@@ -58,11 +64,17 @@ Options:
 
 Tokens come only from the environment. The runner never reads `.env`.
 
+## Status
+
+The job is not a required check. It stays allowed to fail until it has been green on
+main 3 runs in a row.
+
 ## Known blockers
 
 - **M2 reset fix (FE).** After a reset, a stale message from the previous run can still be
   accepted. The rerun pass (`E2E_RERUN=1`, reset, run, compare) stays off until M2 merges.
+- **TCL-034 (sim params).** A real timing profile, and OES forwarding `SIMULATOR_RTG_*`.
 - **CHEs never become available after a reset.** OES `site_sync` imports every CHE with
   `powered_on=False` and `is_available=False`, even though MiniTOS seeds them powered on.
   The simulator bootstrap then applies that OES state. Setup times out at "connected and
-  available" until this is fixed. See the TCL-007 report.
+  available" until this is fixed (bug, Archer).

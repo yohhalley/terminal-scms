@@ -155,6 +155,10 @@ class StepResult:
     limit_s: float = 5.0
     error: str = ""
     checks: list[str] = field(default_factory=list)
+    # D-037 clock: what started it, and the exact arrival time of the last
+    # expected event (time.monotonic(), unrounded; the next step chains on it).
+    clock_from: str = ""
+    last_received_at: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -162,7 +166,7 @@ class StepResult:
             "expected": self.expected, "observed": self.observed,
             "passed": self.passed, "elapsed_s": self.elapsed_s,
             "trigger_s": self.trigger_s, "limit_s": self.limit_s,
-            "error": self.error, "checks": self.checks,
+            "error": self.error, "checks": self.checks, "clock_from": self.clock_from,
         }
 
 
@@ -260,6 +264,7 @@ def run_expectations(
             step.elapsed_s = round(message.received_at - start, 3)
             return step
         step.elapsed_s = round(message.received_at - start, 3)
+        step.last_received_at = message.received_at
     step.passed = True
     return step
 
@@ -555,7 +560,16 @@ class SliceRun:
         return schema_check(self.validator, message)
 
     def run_steps(self) -> None:
-        last_event_at = time.monotonic()
+        """Run the plan with the D-037 clock.
+
+        A step's clock starts when its trigger is published: just before the
+        MiniTOS release command or the OES ``dispatch-next`` request is issued,
+        or, for simulator-driven steps, when the previous step's last expected
+        event was received from the broker (the UNS publication; envelope
+        times of simulator events are sim time, not wall time). It stops when
+        the step's last expected event is received.
+        """
+        previous: StepResult | None = None
         for step_id, title, trigger, expectations in s1_plan(self.args.include_step4):
             step = StepResult(
                 step=step_id, title=title, trigger=trigger,
@@ -566,12 +580,14 @@ class SliceRun:
                 step.error = "skipped: an earlier step failed"
                 continue
             if trigger == "minitos-release":
+                step.clock_from = "release command issued"
                 start = time.monotonic()
                 if not self.trigger_release(step):
                     continue
             elif trigger == "oes-dispatch":
                 if self.oes_order_id is None:
                     self.oes_order_id = self.find_oes_order()
+                step.clock_from = "dispatch-next request sent"
                 start = time.monotonic()
                 if not self.trigger_dispatch(step):
                     continue
@@ -581,10 +597,13 @@ class SliceRun:
                     if step.error:
                         continue
             else:
-                start = last_event_at
+                if previous is None or previous.last_received_at is None:
+                    step.error = "no triggering event: a simulator-driven step must follow a passed step"
+                    continue
+                step.clock_from = f"{previous.observed[-1]} received (end of step {previous.step})"
+                start = previous.last_received_at
             run_expectations(step, self.stream, expectations, start, self.on_message)
-            if step.passed:
-                last_event_at = start + (step.elapsed_s or 0)
+            previous = step
         self.final_checks()
 
     def final_checks(self) -> None:
@@ -670,15 +689,18 @@ def render_markdown(results: list[StepResult], notes: list[str], fatal: str = ""
         lines.append(f"- {note}")
     lines += [
         "",
-        "| Step | Result | Time (s) | Limit (s) | Trigger (s) | Expected | Observed | Detail |",
-        "|---|---|---|---|---|---|---|---|",
+        "Time = from the trigger's publication (Clock from) to receipt of the step's last expected event (D-037). "
+        "Trigger = how long the trigger call itself took (included in Time).",
+        "",
+        "| Step | Result | Time (s) | Limit (s) | Clock from | Trigger (s) | Expected | Observed | Detail |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         verdict = "PASS" if r.passed else ("SKIP" if r.error.startswith("skipped") else "FAIL")
         detail = "; ".join([*r.checks, r.error] if r.error else r.checks).replace("|", "\\|")
         lines.append(
             f"| {r.step} {r.title} | {verdict} | {'' if r.elapsed_s is None else r.elapsed_s} | "
-            f"{r.limit_s:g} | {'' if r.trigger_s is None else r.trigger_s} | "
+            f"{r.limit_s:g} | {r.clock_from} | {'' if r.trigger_s is None else r.trigger_s} | "
             f"{'<br>'.join(r.expected)} | {'<br>'.join(r.observed)} | {detail} |"
         )
     passed = bool(results) and not fatal and all(r.passed for r in results)
