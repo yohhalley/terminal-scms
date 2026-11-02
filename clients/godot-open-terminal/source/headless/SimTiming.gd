@@ -6,16 +6,19 @@ extends RefCounted
 ## default. A profile only sets the crane hold ranges; the no-show and stall
 ## time-outs have one default for both profiles (TCL-011 hand-off design §6.1).
 ##
-## ASSUMPTIONS (not product decisions, pending Yael's E3 / Q22):
+## Default profile: `realistic` (D-039: the testing server is the demo). CI,
+## the unit tests and the broker job set SIMULATOR_TIMING_PROFILE=fast explicitly.
+##
+## PENDING E3 / Q22 (profile values are assumptions, not product decisions):
 ## - `fast`: QC and RTG hold 2..5 s per step. Team assumption; D-037 caps a
-##   step at <= 5 s. CI uses the same values.
+##   step at <= 5 s. CI uses these values.
 ## - `realistic`: QC hold 90..120 s, RTG hold 60..120 s (D-039). Read as the
 ##   HOLD time only (the move/drive is simulated separately); whether the
 ##   ranges cover only the hold or hold + move is open (E3 / Q22).
 
 const PROFILE_FAST := "fast"
 const PROFILE_REALISTIC := "realistic"
-const DEFAULT_PROFILE := PROFILE_FAST
+const DEFAULT_PROFILE := PROFILE_REALISTIC
 const PROFILES := {
 	PROFILE_FAST: {"qc_hold": [2, 5], "rtg_hold": [2, 5]},
 	PROFILE_REALISTIC: {"qc_hold": [90, 120], "rtg_hold": [60, 120]},
@@ -29,7 +32,8 @@ const DEFAULT_RTG_NO_SHOW_TIMEOUT_S := 300
 const DEFAULT_LEG_STALL_TIMEOUT_S := 600
 
 ## Longest normal TT drive used for the W4 margin: the demo layout's longest
-## QC lane -> block lane road (TCL-011 §8(g): "TT drive 25-50 s"). Assumption.
+## QC lane -> block lane road (TCL-011 §8(g): "TT drive 25-50 s").
+## PENDING E22 (whether the RTG wait clock includes the TT drive); assumption.
 const DEMO_MAX_TT_DRIVE_M := 200.0
 ## TCL-011 §8(g): every time-out >= 2 x the worst normal wait it can cut short.
 const MARGIN_FACTOR := 2
@@ -64,8 +68,15 @@ static func worst_normal_waits_s(qc_hold: Array, rtg_hold: Array, speed_mps: flo
 
 
 ## Margin violations as text ([] = ok). `timeouts` holds tt / qc / rtg no-show
-## and leg_stall seconds. The stall clock must also clear the longest normal gap
-## between two progress results: any hold, the drive, or a full no-show wait.
+## and leg_stall seconds. TCL-011 rev 2 (B1, N2): the stall clock only runs in
+## motion/work states and is paused in every wait, so it must clear the longest
+## single motion/work phase (a crane hold or the TT drive), not a no-show wait.
+## Longest single motion/work phase without a progress result (whole seconds).
+static func longest_motion_or_work_s(qc_hold: Array, rtg_hold: Array, speed_mps: float) -> int:
+	var drive_s = int(ceil(DEMO_MAX_TT_DRIVE_M / max(speed_mps, 0.1)))
+	return maxi(maxi(int(qc_hold[1]), int(rtg_hold[1])), drive_s)
+
+
 static func margin_violations(qc_hold: Array, rtg_hold: Array, speed_mps: float, timeouts: Dictionary) -> Array:
 	var waits = worst_normal_waits_s(qc_hold, rtg_hold, speed_mps)
 	var checks = [
@@ -74,10 +85,10 @@ static func margin_violations(qc_hold: Array, rtg_hold: Array, speed_mps: float,
 		["RtgNoShowTimeoutS", int(timeouts.rtg), "W3", waits.W3],
 		["TtNoShowTimeoutS", int(timeouts.tt), "W4", waits.W4],
 	]
-	var longest_gap = maxi(maxi(int(timeouts.tt), int(timeouts.qc)), int(timeouts.rtg))
-	for value in waits.values():
-		longest_gap = maxi(longest_gap, int(value))
-	checks.append(["LegStallTimeoutS", int(timeouts.leg_stall), "longest progress gap", longest_gap])
+	checks.append([
+		"LegStallTimeoutS", int(timeouts.leg_stall), "longest motion/work phase",
+		longest_motion_or_work_s(qc_hold, rtg_hold, speed_mps),
+	])
 	var out: Array = []
 	for check in checks:
 		if int(check[1]) < MARGIN_FACTOR * int(check[3]):

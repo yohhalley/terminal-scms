@@ -63,6 +63,18 @@ const DEFAULT_TT_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_TT_NO_SHOW_TIMEOUT_S
 const DEFAULT_QC_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_QC_NO_SHOW_TIMEOUT_S
 const DEFAULT_RTG_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_RTG_NO_SHOW_TIMEOUT_S
 const DEFAULT_LEG_STALL_TIMEOUT_S := SimTiming.DEFAULT_LEG_STALL_TIMEOUT_S
+## TCL-011 rev 2 (S4): retired keys. Godot only warns when one is present;
+## the runner no longer allowlists them.
+const RETIRED_ENV_KEYS := ["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", "SIM_RTG_NO_SHOW_TIMEOUT_ENABLED"]
+## TCL-011 rev 2 (B1): states in which the leg stall clock is PAUSED (contract
+## rev 9.4). (i) hand-off waits that have their own no-show clock: TT at the QC
+## lane (W2), TT at the block lane with H2 (W3), QC / RTG waiting_for_tt (W1,
+## W4), also after the no-show fired while OES has not cancelled yet; (ii)
+## waiting on OES: the TT in at_destination_waiting with no hand-off (the S2
+## manual-dispatch gap before dispatch-next #2), and finished legs waiting for
+## the next DCMD. The clock runs only in motion/work states (driving,
+## gantrying, holding, picking, dropping).
+const STALL_PAUSED_STATES := [TT_AT_SOURCE_WAITING, TT_AT_DESTINATION_WAITING, "waiting_for_tt", "done", "idle"]
 ## Sim-time command TTL (seconds) applied when a DCMD carries no ExpiresAtMs.
 const DEFAULT_COMMAND_TTL_S := 600
 ## Sim time is checkpointed at least this often, so a restart loses at most this much.
@@ -204,6 +216,13 @@ func _configure_timing():
 	configure_leg_stall_timeout(
 		_env_any(["SIMULATOR_LEG_STALL_TIMEOUT_S", "SIM_LEG_STALL_TIMEOUT_S"], str(DEFAULT_LEG_STALL_TIMEOUT_S))
 	)
+	for key in RETIRED_ENV_KEYS:
+		if OS.has_environment(key):
+			var value = OS.get_environment(key).strip_edges().to_lower()
+			var off = value in ["0", "false", "no", "off"]
+			push_warning("%s%s is ignored: the RTG no-show time-out is always on (D-027); set SIMULATOR_TT_NO_SHOW_TIMEOUT_S to change it" % [
+				"DEPRECATED, VALUE OFF IGNORED: " if off else "DEPRECATED: ", key,
+			])
 	for violation in timing_margin_violations():
 		# Allowed (CI failure-path tests set short time-outs on purpose), but loud.
 		push_warning("Timing margin (TCL-011 §8 g): %s" % violation)
@@ -372,7 +391,7 @@ func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		if _active_commands.has(che_id) and _is_rtg_command(_active_commands[che_id]):
 			_step_rtg(int(che_id), _ches[che_id], _active_commands[che_id])
-	_check_leg_stalls()
+	_check_leg_stalls(int(round(step_s * 1000.0)))
 	if _clock.now_ms - _last_checkpoint_sim_ms >= SIM_TIME_CHECKPOINT_MS:
 		_save_runtime_state()
 
@@ -1227,20 +1246,39 @@ func _is_active_leg_result(che_id: int, command_id: String) -> bool:
 	return command_id == str(command.get("command_id", "")) or command_id == str(command.get("assign_command_id", ""))
 
 
-## TCL-011 §8(d): per-leg stall clock on sim time. A live leg with no progress
-## result for Sim/Timing/LegStallTimeoutS gets `failed` with Reason
-## SIMULATOR_FAILURE and Detail "no progress on <CHE> within N s". `failed` ends
-## the leg for OES (terminal like completed / cancelled), so the CHE goes idle
-## here too and the flow continues (D-017). OES treating it like a no-show is BE work.
-func _check_leg_stalls():
+## The state the stall clock looks at: the TT phase, else the crane work state.
+## A TT leg without a phase (legacy straight move) is driving.
+func _stall_state(command: Dictionary) -> String:
+	if _is_crane_command(command):
+		return str(command.get("work_state", ""))
+	return str(command.get("tt_phase", ""))
+
+
+func _stall_clock_paused(command: Dictionary) -> bool:
+	return STALL_PAUSED_STATES.has(_stall_state(command))
+
+
+## TCL-011 §8(d), rev 2 (B1): per-leg stall clock on sim time. It measures
+## unexplained silence only: it advances only while the leg is in a motion or
+## work state, is paused in STALL_PAUSED_STATES, and restarts on every progress
+## result. After Sim/Timing/LegStallTimeoutS of running time the leg gets
+## `failed` with Reason SIMULATOR_FAILURE and Detail "no progress on <CHE>
+## within N s". `failed` ends the leg for OES (terminal like completed /
+## cancelled), so the CHE goes idle here too and the flow continues (D-017).
+## OES's SIMULATOR_FAILURE branch is BE work (TCL-011 rev 2, rev 9.4).
+func _check_leg_stalls(step_ms: int):
 	var stall_ms = _leg_stall_timeout_s * 1000
 	for che_key in _active_commands.keys():
 		var che_id = int(che_key)
 		var command: Dictionary = _active_commands[che_key]
-		if not command.has("last_progress_ms"):
-			command["last_progress_ms"] = _clock.now_ms
+		if not command.has("stall_running_ms"):
+			command["stall_running_ms"] = 0
+			command["stall_progress_at_ms"] = _clock.now_ms
 			continue
-		if _clock.now_ms - int(command.last_progress_ms) < stall_ms:
+		if _stall_clock_paused(command) or int(command.get("stall_progress_at_ms", -1)) == _clock.now_ms:
+			continue
+		command["stall_running_ms"] = int(command.stall_running_ms) + step_ms
+		if int(command.stall_running_ms) < stall_ms:
 			continue
 		var che: Dictionary = _ches[che_id]
 		var che_name = str(che.get("name", che_id))
@@ -1315,7 +1353,8 @@ func _publish_command_result(
 		return
 	if _is_active_leg_result(che_id, command_id):
 		# Stall clock (TCL-011 §8 d): every result on the live leg is progress.
-		_active_commands[che_id]["last_progress_ms"] = _clock.now_ms
+		_active_commands[che_id]["stall_running_ms"] = 0
+		_active_commands[che_id]["stall_progress_at_ms"] = _clock.now_ms
 	_event_seq += 1
 	if result_id.is_empty():
 		result_id = SimRandom.result_id(_session_id, _event_seq)

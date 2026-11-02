@@ -107,8 +107,8 @@ environment are allowlisted explicitly (see `ALLOWED_ENVIRONMENT`):
 `SIMULATOR_QC_WAIT_MIN_S`, `SIMULATOR_QC_WAIT_MAX_S`, `SIMULATOR_QC_HOLD_WAIT_MIN_S`,
 `SIMULATOR_QC_HOLD_WAIT_MAX_S`, `SIMULATOR_RTG_WAIT_MIN_S`, `SIMULATOR_RTG_WAIT_MAX_S`,
 `SIMULATOR_RTG_HOLD_WAIT_MIN_S`, `SIMULATOR_RTG_HOLD_WAIT_MAX_S`,
-`SIMULATOR_TIMING_PROFILE` (`fast`, the default, or `realistic`; explicit wait
-keys override the profile), the no-show time-outs per absent CHE
+`SIMULATOR_TIMING_PROFILE` (`realistic`, the simulator default per D-039, or
+`fast` for tests and CI; explicit wait keys override the profile), the no-show time-outs per absent CHE
 `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, `SIMULATOR_QC_NO_SHOW_TIMEOUT_S`,
 `SIMULATOR_RTG_NO_SHOW_TIMEOUT_S` (300 s each), `SIMULATOR_LEG_STALL_TIMEOUT_S`
 (600 s), `SIMULATOR_COMMAND_TTL_S` and `SIMULATOR_SCENARIO_ID` (NBIRTH `Sim/ScenarioId`;

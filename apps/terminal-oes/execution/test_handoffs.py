@@ -725,6 +725,8 @@ class ClaimEnvironmentTests(HandoffTestBase):
         for path in source.rglob("*.gd"):
             godot_keys.update(re.findall(r'"(SIMULATOR_[A-Z0-9_]+)"', path.read_text(encoding="utf-8")))
         godot_keys.discard("SIMULATOR_FAILURE")  # exception reason code, not an env key
+        # Retired key Godot names only to warn about it (TCL-011 rev 2, S4).
+        godot_keys.discard("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED")
         # Keys OES sets per session itself (identity, time scale), and the
         # scenario id (the bootstrap session.scenario_id wins; local runs only).
         per_session = {key for key in launch_environment(self.session, "t") if key.startswith("SIMULATOR_")}

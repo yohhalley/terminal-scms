@@ -71,8 +71,9 @@ Environment: `SIMULATOR_SEED`, `SIMULATOR_RUN_ID`, `SIMULATOR_FIXED_STEP_MS`,
 `SIMULATOR_TIME_SCALE`, `SIMULATOR_START_EPOCH_MS`,
 `SIMULATOR_DEVICE_ID_MODE` (`name`, the default, uses MiniTOS `Che.name` such as
 `QC01`; `legacy` uses `CHE_{id}`), and
-`SIMULATOR_TIMING_PROFILE` (`fast`, the default: QC/RTG hold 2..5 s;
-`realistic`: QC 90..120 s, RTG 60..120 s; see `NOTES-TCL-034.md`), then
+`SIMULATOR_TIMING_PROFILE` (`realistic`, the default: QC 90..120 s, RTG
+60..120 s; `fast`: QC/RTG hold 2..5 s, set by `run-godot-test.sh` and CI; see
+`NOTES-TCL-034.md`), then
 `SIMULATOR_QC_WAIT_MIN_S` / `SIMULATOR_QC_WAIT_MAX_S`, overridden by
 `SIMULATOR_QC_HOLD_WAIT_MIN_S` / `_MAX_S` (same for `SIMULATOR_RTG_*`); explicit
 keys win over the profile. No-show time-outs per absent CHE (default 300 s,

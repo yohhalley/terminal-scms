@@ -86,6 +86,9 @@ jobs:
   godot:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # TCL-034: the built-in profile is realistic (D-039); CI runs fast.
+      SIMULATOR_TIMING_PROFILE: fast
     defaults:
       run:
         working-directory: clients/godot-open-terminal
@@ -94,6 +97,8 @@ jobs:
       - uses: ./.github/actions/setup-godot
       - name: Import project
         run: timeout 300 "$GODOT_BIN" --headless --editor --path . --quit
+      - name: Check timing profile is fast
+        run: test "${SIMULATOR_TIMING_PROFILE}" = fast
       - name: test_headless_sim.gd
         run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_headless_sim.gd
       - name: test_terminal_integration.gd
@@ -117,6 +122,7 @@ jobs:
     env:
       MQTT_TEST_HOST: 127.0.0.1
       MQTT_TEST_PORT: "1883"
+      SIMULATOR_TIMING_PROFILE: fast
     defaults:
       run:
         working-directory: clients/godot-open-terminal
@@ -133,5 +139,7 @@ jobs:
           exit 1
       - name: Import project
         run: timeout 300 "$GODOT_BIN" --headless --editor --path . --quit
+      - name: Check timing profile is fast
+        run: test "${SIMULATOR_TIMING_PROFILE}" = fast
       - name: test_local_mqtt_broker.gd
         run: ../../.github/scripts/run-godot-test.sh 120 tests/integration/test_local_mqtt_broker.gd
