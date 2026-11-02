@@ -267,11 +267,18 @@ class SessionStore:
     """Claims the runner owns, persisted so a restarted runner never orphans one.
 
     A claim is written (mode 600, it holds the bootstrap token) before Godot
-    starts and removed once the session has ended and been reported. On
-    start-up the runner resumes each saved claim that OES still serves, and
+    starts and removed once the session has ended and been reported. Each
+    record carries a ``state``: ``running`` while Godot should run, or the
+    final ``stopped``/``failed`` outcome, written as soon as it is known and
+    before OES is told. On start-up the runner re-reports a saved final
+    outcome as is (a cleanly stopped session stays stopped, however long the
+    runner was down), resumes a ``running`` claim that OES still serves, and
     reports the rest as failed, so OES releases the session (hand-offs closed,
     reset and start no longer blocked).
     """
+
+    RUNNING = "running"
+    FINAL_STATES = ("stopped", "failed")
 
     def __init__(self, directory):
         self.directory = directory
@@ -279,15 +286,29 @@ class SessionStore:
     def _path(self, session_id):
         return os.path.join(self.directory, f"{uuid.UUID(session_id)}.json")
 
-    def save(self, claim):
+    def save(self, claim, state=RUNNING, failure_reason=""):
         os.makedirs(self.directory, mode=0o700, exist_ok=True)
         session_id = str(claim["session"]["id"])
         path = self._path(session_id)
         temporary = f"{path}.tmp"
+        record = {
+            "session": {"id": session_id},
+            "environment": claim["environment"],
+            "state": state,
+            "failure_reason": failure_reason,
+        }
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"session": {"id": session_id}, "environment": claim["environment"]}, handle)
+            json.dump(record, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+
+    def mark(self, claim, state, failure_reason=""):
+        """Persist a session's final outcome before it is reported to OES."""
+        if state not in self.FINAL_STATES:
+            raise ValueError(f"Not a final session state: {state}")
+        self.save(claim, state, failure_reason)
 
     def remove(self, session_id):
         try:
@@ -308,6 +329,10 @@ class SessionStore:
                     claim = json.load(handle)
                 str(uuid.UUID(str(claim["session"]["id"])))
                 claim["environment"]["SIMULATOR_TOKEN"]
+                claim.setdefault("state", self.RUNNING)
+                claim.setdefault("failure_reason", "")
+                if claim["state"] not in (self.RUNNING,) + self.FINAL_STATES:
+                    raise ValueError(claim["state"])
             except (OSError, ValueError, KeyError, TypeError):
                 LOG.warning("Discarding unreadable runner state file %s", entry)
                 os.remove(path)
@@ -332,6 +357,10 @@ class SessionWorker(threading.Thread):
         self.final_reported = False
 
     def request_stop(self):
+        if not self._stopping.is_set():
+            # A requested stop (OES or SIGTERM) is final: record it before
+            # touching Godot, so a runner killed now still reports "stopped".
+            self._mark("stopped")
         self._stopping.set()
         if self.container_name:
             self.launcher.stop(self.container_name)
@@ -341,8 +370,22 @@ class SessionWorker(threading.Thread):
     # runner start releases the session instead of orphaning it.
     FINAL_RETRY_DELAYS = (1, 2, 4, 8)
 
+    def _mark(self, status, failure_reason=""):
+        if self.store is None:
+            return
+        try:
+            self.store.mark(self.claim, status, failure_reason[:FAILURE_REASON_LIMIT])
+        except OSError:
+            LOG.exception("Could not persist %s for %s", status, self.session_id)
+
     def run(self):
         status, failure_reason = self._run()
+        if self._stopping.is_set() and status == "failed":
+            # The stop was requested; an error while stopping does not make
+            # the session a failure.
+            LOG.warning("Error while stopping %s ignored: %s", self.session_id, failure_reason)
+            status, failure_reason = "stopped", ""
+        self._mark(status, failure_reason)
         self._report_final(status, failure_reason)
         if self.final_reported:
             self._forget()
@@ -402,7 +445,10 @@ class SessionWorker(threading.Thread):
         except Exception as exc:
             LOG.exception("Simulation session %s failed", self.session_id)
             if self.process is not None and self.process.poll() is None:
-                self.launcher.stop(self.container_name)
+                try:
+                    self.launcher.stop(self.container_name)
+                except Exception:
+                    LOG.exception("Could not stop Godot for %s", self.session_id)
             return "failed", str(exc)
 
 
@@ -436,6 +482,14 @@ class Runner:
             session_id = str(claim["session"]["id"])
             if session_id in self.workers:
                 continue
+            if claim.get("state") in SessionStore.FINAL_STATES:
+                # The outcome was decided before the restart (e.g. a clean
+                # stop): report it as recorded, whatever the token says.
+                outcome, reason = claim["state"], claim.get("failure_reason", "")
+                LOG.info("Reporting recorded %s for simulation session %s after a runner restart",
+                         outcome, session_id)
+                self._release(session_id, outcome, reason)
+                continue
             status = self.client.bootstrap_status(
                 session_id, claim["environment"]["SIMULATOR_TOKEN"],
             )
@@ -450,16 +504,23 @@ class Runner:
             )
             LOG.warning("Releasing simulation session %s as %s after a runner restart",
                         session_id, outcome)
-            try:
-                self.client.report(session_id, outcome, reason)
-            except RuntimeError as exc:
-                # OES HTTP error, e.g. the session was wiped by a scenario reset.
-                LOG.warning("OES did not accept the release of %s: %s", session_id, exc)
-            self.store.remove(session_id)
-            forget = getattr(self.launcher, "forget", None)
-            if callable(forget):
-                forget(session_id)
+            self._release(session_id, outcome, reason)
         self.recovered = True
+
+    def _release(self, session_id, outcome, reason=""):
+        try:
+            if reason:
+                self.client.report(session_id, outcome, reason)
+            else:
+                self.client.report(session_id, outcome)
+        except RuntimeError as exc:
+            # OES HTTP error, e.g. the session was wiped by a scenario reset.
+            # Network errors propagate, so recovery is retried on the next poll.
+            LOG.warning("OES did not accept the release of %s: %s", session_id, exc)
+        self.store.remove(session_id)
+        forget = getattr(self.launcher, "forget", None)
+        if callable(forget):
+            forget(session_id)
 
     def run_once(self):
         self.workers = {

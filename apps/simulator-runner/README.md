@@ -50,21 +50,28 @@ Inside the image the mode is fixed by `RUNNER_LAUNCH_MODE=process`,
 - Each claim is saved (mode 600, it holds the bootstrap token) under
   `/data/runner` before Godot starts; each session gets its own Godot user
   directory under `/data/sessions/<id>` (checkpoint, Sparkplug `bdSeq`).
+- The saved claim carries the session's state: `running`, or the final
+  `stopped`/`failed`. A stop (OES Stop, `make sim-stop`, SIGTERM) is written as
+  `stopped` before Godot is stopped and before OES is told; the record is
+  removed once OES has accepted the final status.
 - After a restart (`restart: unless-stopped`, a crash or a redeploy) the runner
   first settles every saved claim with OES and only then claims new sessions:
-  - OES still serves the bootstrap (token valid, desired state running): Godot
-    is started again for the same session and resumes from its checkpoint with
-    a new `bdSeq`.
-  - OES wants the session stopped: reported `stopped`.
-  - The token has expired (OES `SIMULATION_BOOTSTRAP_TOKEN_TTL_SECONDS`, 300 s by
-    default): reported `failed` ("Simulator runner restarted; the session could
-    not be resumed ..."). Start a new session (`make sim-start`, or
-    `make scenario-reset SIM=1` for a clean world). A session the user had
-    already stopped is also reported `failed` in this case.
+  - Recorded `stopped` or `failed`: reported as recorded, however long the
+    runner was down. A cleanly stopped session is never reported as failed.
+  - `running` (the runner or Godot was killed) and OES still serves the
+    bootstrap (token valid, desired state running): Godot is started again for
+    the same session and resumes from its checkpoint with a new `bdSeq`.
+  - `running` and OES wants the session stopped: reported `stopped`.
+  - `running` and the token has expired (OES
+    `SIMULATION_BOOTSTRAP_TOKEN_TTL_SECONDS`, 300 s by default): reported
+    `failed` ("Simulator runner restarted; the session could not be resumed
+    ..."). Start a new session (`make sim-start`, or `make scenario-reset SIM=1`
+    for a clean world).
   - The session no longer exists (wiped by a reset): the saved claim is dropped.
 - `docker compose stop` / redeploy sends SIGTERM: the runner stops Godot and
-  reports `stopped` (grace period 30 s). The final status is retried a few times;
-  if OES still cannot be reached the claim is kept and settled at the next start.
+  reports `stopped` (grace period 30 s), so a redeploy ends the running session.
+  The final status is retried a few times; if OES still cannot be reached the
+  recorded state is reported at the next start.
 
 ## Host runner (`docker` mode)
 

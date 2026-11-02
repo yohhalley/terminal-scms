@@ -202,7 +202,14 @@ class SessionStoreTests(unittest.TestCase):
         self.store.save(claim)
         path = self.store._path(claim["session"]["id"])
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
-        self.assertEqual(self.store.load_all(), [claim])
+        self.assertEqual(
+            self.store.load_all(), [dict(claim, state="running", failure_reason="")],
+        )
+        self.store.mark(claim, "stopped")
+        self.assertEqual(self.store.load_all()[0]["state"], "stopped")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        with self.assertRaises(ValueError):
+            self.store.mark(claim, "running")
         self.store.remove(claim["session"]["id"])
         self.assertEqual(self.store.load_all(), [])
         self.store.remove(claim["session"]["id"])  # idempotent
@@ -284,7 +291,144 @@ class RestartRecoveryTests(unittest.TestCase):
         saved_at_start = []
         start.side_effect = lambda: saved_at_start.append(self.store.load_all())
         Runner(self.client, self.launcher, store=self.store).run_once()
-        self.assertEqual(saved_at_start, [[claim]])
+        self.assertEqual(saved_at_start, [[dict(claim, state="running", failure_reason="")]])
+
+
+class FakeOES:
+    """OES as seen by the runner, with a clock and the 300 s bootstrap token TTL."""
+
+    TOKEN_TTL_S = 300
+
+    def __init__(self):
+        self.now = 0.0
+        self.issued_at = 0.0
+        self.desired_state = "running"
+        self.actual_state = "running"
+        self.reports = []
+        self.bootstrap_checks = 0
+        self.reachable = True
+
+    def claim(self):
+        return None
+
+    def bootstrap_status(self, session_id, token):
+        self.bootstrap_checks += 1
+        if self.now - self.issued_at >= self.TOKEN_TTL_S:
+            return "gone"
+        return "ok" if self.desired_state == "running" else "stopping"
+
+    def report(self, session_id, status, failure_reason=""):
+        if not self.reachable:
+            raise urllib.error.URLError("connection refused")
+        self.reports.append(status)
+        if status == "stopped":
+            self.actual_state = self.desired_state = "stopped"
+        elif status == "failed":
+            self.actual_state = "failed"
+        return {"desired_state": self.desired_state}
+
+
+class StoppedStateAcrossRestartTests(unittest.TestCase):
+    """A cleanly stopped session stays stopped after a runner restart (TCL-033)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = SessionStore(os.path.join(self.tmp.name, "runner"))
+        self.claim = claim_for()
+        self.store.save(self.claim)
+        self.oes = FakeOES()
+        self.launcher = Mock()
+        self.process = Mock()
+        self.process.poll.return_value = None
+        self.launcher.start.return_value = ("sim", self.process)
+
+    def stop_cleanly_but_die_before_oes_hears_it(self):
+        """The runner stops Godot, then OES is unreachable and the runner is killed."""
+        worker = SessionWorker(self.oes, self.launcher, self.claim, 0.01, store=self.store)
+        worker.FINAL_RETRY_DELAYS = ()
+        worker.container_name, worker.process = "sim", self.process
+        worker.request_stop()                 # SIGTERM / operator stop
+        self.oes.reachable = False            # ... OES unreachable for the final report
+        status, reason = "stopped", ""
+        worker._mark(status, reason)
+        worker._report_final(status, reason)
+        self.assertFalse(worker.final_reported)
+        self.assertEqual(self.store.load_all()[0]["state"], "stopped")
+        self.oes.reachable = True             # runner process dies here; OES comes back
+
+    def restart(self, after_s):
+        self.oes.now = after_s
+        runner = Runner(self.oes, self.launcher, store=self.store)
+        with patch.object(SessionWorker, "start") as start:
+            runner.run_once()
+        return runner, start
+
+    def test_stopped_then_restart_before_the_timeout_stays_stopped(self):
+        self.stop_cleanly_but_die_before_oes_hears_it()
+        runner, start = self.restart(after_s=10)
+        self.assertEqual(self.oes.reports, ["stopped"])
+        self.assertEqual(self.oes.actual_state, "stopped")
+        self.assertEqual(self.oes.bootstrap_checks, 0)
+        start.assert_not_called()
+        self.assertEqual(self.store.load_all(), [])
+
+    def test_stopped_then_restart_after_the_timeout_stays_stopped(self):
+        self.stop_cleanly_but_die_before_oes_hears_it()
+        runner, start = self.restart(after_s=FakeOES.TOKEN_TTL_S + 100)
+        self.assertEqual(self.oes.reports, ["stopped"])
+        self.assertNotIn("failed", self.oes.reports)
+        self.assertEqual(self.oes.actual_state, "stopped")
+        start.assert_not_called()
+        self.assertEqual(self.store.load_all(), [])
+
+    def test_stop_is_recorded_before_godot_is_touched(self):
+        worker = SessionWorker(self.oes, self.launcher, self.claim, 0.01, store=self.store)
+        worker.container_name = "sim"
+        seen = []
+        self.launcher.stop.side_effect = lambda name: seen.append(self.store.load_all()[0]["state"])
+        worker.request_stop()
+        self.assertEqual(seen, ["stopped"])
+
+    def test_a_reported_stop_leaves_nothing_to_redo_after_a_restart(self):
+        self.oes.desired_state = "stopped"     # operator pressed Stop in OES
+        worker = SessionWorker(self.oes, self.launcher, self.claim, 0.01, store=self.store)
+        worker.run()
+        self.assertEqual(self.oes.reports[-1], "stopped")
+        self.assertEqual(self.store.load_all(), [])
+        self.oes.reports.clear()
+        self.restart(after_s=FakeOES.TOKEN_TTL_S + 100)
+        self.assertEqual(self.oes.reports, [])
+        self.assertEqual(self.oes.actual_state, "stopped")
+
+    def test_an_error_while_stopping_is_still_stopped(self):
+        self.launcher.stop.side_effect = OSError("kill failed")
+        self.oes.desired_state = "stopped"
+        SessionWorker(self.oes, self.launcher, self.claim, 0.01, store=self.store).run()
+        self.assertEqual(self.oes.reports[-1], "stopped")
+        self.assertNotIn("failed", self.oes.reports)
+
+    def test_crash_then_restart_before_the_timeout_resumes(self):
+        # Runner and Godot killed (kill -9): the saved state is still "running".
+        runner, start = self.restart(after_s=10)
+        start.assert_called_once()
+        self.assertEqual(set(runner.workers), {self.claim["session"]["id"]})
+        self.assertEqual(self.oes.reports, [])
+        self.assertEqual(self.store.load_all()[0]["state"], "running")
+
+    def test_crash_then_restart_after_the_timeout_fails(self):
+        runner, start = self.restart(after_s=FakeOES.TOKEN_TTL_S + 100)
+        start.assert_not_called()
+        self.assertEqual(self.oes.reports, ["failed"])
+        self.assertEqual(self.oes.actual_state, "failed")
+        self.assertEqual(self.store.load_all(), [])
+
+    def test_a_recorded_failure_is_reported_as_failed_with_its_reason(self):
+        self.store.mark(self.claim, "failed", "Godot container exited with code 3.")
+        reasons = []
+        self.oes.report = lambda sid, status, reason="": reasons.append((status, reason))
+        self.restart(after_s=10)
+        self.assertEqual(reasons, [("failed", "Godot container exited with code 3.")])
 
 
 class OESClientErrorTests(unittest.TestCase):
