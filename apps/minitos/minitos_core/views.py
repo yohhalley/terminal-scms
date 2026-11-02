@@ -2,8 +2,10 @@ import django_filters
 
 from django.db import models, transaction
 from django.template import loader
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib import messages as django_messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.http import JsonResponse
@@ -177,6 +179,124 @@ def berth_plan_view(request, location_id):
         'iso_types_data': list(ISOType.objects.order_by('iso_type').values('id', 'iso_type', 'length', 'height')),
         'equipment_types_data': equipment_type_data,
     })
+
+
+# TCL-009 (#4): vessel-visit admin panel.
+# The panel lists a terminal's vessel visits and offers one button per status
+# that D-025 allows next (CarrierVisit.allowed_next_statuses). The POST checks
+# D-025 again on the locked row (CarrierVisit.status_transition_error) and then
+# saves through CarrierVisit.save(), the same path as the transition API and
+# the Django admin, so model-level hooks on a status change (TCL-010 discharge
+# planning on InOperation) run here too. Any ValidationError from save() rolls
+# the status change back and is shown as the refusal message.
+VESSEL_VISIT_PANEL_TYPES = (CarrierVisit.VESSEL,)
+
+
+def _visit_error_message(error):
+    for attribute in ('transition_message', 'planning_message'):
+        message = getattr(error, attribute, None)
+        if message:
+            return message
+    return '; '.join(error.messages)
+
+
+def _vessel_visit_rows(location):
+    visits = CarrierVisit.objects.filter(
+        location=location, visit_type__in=VESSEL_VISIT_PANEL_TYPES,
+    ).select_related('carrier_service', 'planned_berth').annotate(
+        inbound_container_count=models.Count('ib_carrier', distinct=True),
+        discharge_order_count=models.Count(
+            'ib_carrier__container_visit',
+            filter=models.Q(ib_carrier__container_visit__order_type=Order.MOVE_IN),
+            distinct=True,
+        ),
+    ).order_by('eta', 'name')
+    labels = dict(CarrierVisit.STATUS_CHOICES)
+    rows = []
+    for visit in visits:
+        rows.append({
+            'visit': visit,
+            'next_statuses': [
+                {'value': value, 'label': labels.get(value, value)}
+                for value in CarrierVisit.allowed_next_statuses(visit.status)
+            ],
+        })
+    return rows
+
+
+def _render_vessel_visit_panel(request, location, *, error=None, status_code=200):
+    return render(request, 'vessel_visit_panel.html', {
+        'location': location,
+        'timezone_name': location.timezone or 'UTC',
+        'rows': _vessel_visit_rows(location),
+        'status_order': [
+            dict(CarrierVisit.STATUS_CHOICES).get(value, value) for value in CarrierVisit.STATUS_ORDER
+        ],
+        'panel_error': error,
+    }, status=status_code)
+
+
+def _panel_location(request, location_id):
+    location = get_object_or_404(Location, pk=location_id, location_type__in=['TL', 'ID'])
+    if not terminal_capabilities(request.user, location)['can_manage_berth_plan']:
+        raise PermissionDenied
+    return location
+
+
+@login_required(login_url='admin:login')
+def vessel_visit_panel_view(request, location_id):
+    """TCL-009: list vessel visits with status, ata/atd and the allowed next statuses."""
+    location = _panel_location(request, location_id)
+    return _render_vessel_visit_panel(request, location)
+
+
+@login_required(login_url='admin:login')
+@require_POST
+def vessel_visit_transition_view(request, location_id, visit_id):
+    """TCL-009: move one vessel visit to the posted status (CSRF-protected form POST).
+
+    - 302 back to the panel: changed (or already at that status, no-op).
+    - 400 panel with a message: missing or unknown status.
+    - 409 panel with a message: refused by D-025 (backward or skipped) or by a
+      save hook (e.g. TCL-010 discharge planning); nothing is saved.
+    - 404: unknown visit, or not a vessel visit of this terminal.
+    """
+    location = _panel_location(request, location_id)
+    new_status = request.POST.get('status', '')
+    valid_statuses = dict(CarrierVisit.STATUS_CHOICES)
+    if new_status not in valid_statuses:
+        get_object_or_404(
+            CarrierVisit, pk=visit_id, location=location, visit_type__in=VESSEL_VISIT_PANEL_TYPES,
+        )
+        return _render_vessel_visit_panel(
+            request, location,
+            error=f'{new_status!r} is not a vessel-visit status.' if new_status else 'No status was chosen.',
+            status_code=400,
+        )
+    try:
+        with transaction.atomic():
+            visit = get_object_or_404(
+                CarrierVisit.objects.select_for_update(),
+                pk=visit_id, location=location, visit_type__in=VESSEL_VISIT_PANEL_TYPES,
+            )
+            old_status = visit.status
+            if new_status == old_status:
+                django_messages.info(request, f'Visit {visit.name} is already {valid_statuses[old_status]}; no change.')
+                return redirect('vessel_visit_panel', location_id=location.pk)
+            refusal = CarrierVisit.status_transition_error(visit.name, old_status, new_status)
+            if refusal is not None:
+                raise refusal
+            visit.status = new_status
+            visit.save()
+    except DjangoValidationError as error:
+        return _render_vessel_visit_panel(
+            request, location, error=_visit_error_message(error), status_code=409,
+        )
+    django_messages.success(
+        request,
+        f'Visit {visit.name} status changed from {valid_statuses[old_status]} to {valid_statuses[new_status]}.',
+    )
+    return redirect('vessel_visit_panel', location_id=location.pk)
 
 
 def _location_time_data(location):
