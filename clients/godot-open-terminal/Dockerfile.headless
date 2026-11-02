@@ -13,7 +13,7 @@ RUN apt-get update \
 
 RUN useradd --create-home --uid 10001 godot \
     && mkdir -p /app /data \
-    && chown godot:godot /data
+    && chown godot:godot /app /data
 
 WORKDIR /app
 COPY --chown=godot:godot . /app
@@ -32,7 +32,7 @@ RUN for pass in 1 2 3 4 5 6; do \
       echo "godot import pass $pass: $missing imported file(s) missing"; \
       [ "$missing" -eq 0 ] && break; \
     done \
-    && [ "$missing" -eq 0 ] \
+    && { [ "$missing" -eq 0 ] || { tail -n 50 /tmp/godot-import.log; exit 1; }; } \
     && test -s .godot/global_script_class_cache.cfg \
     && rm -rf /tmp/godot-import /tmp/godot-import.log
 
