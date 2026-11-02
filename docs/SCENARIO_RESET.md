@@ -76,6 +76,20 @@ ETA/ATA, order ETC) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
 1792886400000, 2026-10-25 00:00 UTC, so the vessel's ATA is sim time 0. A plain
 `make up` recreates `terminal-oes` with `.env`'s `SIMULATOR_SEED` (default 1);
 run `make scenario-reset SEED=n` again afterwards to keep both seeds equal.
+
+Yard planning seed (TCL-012, #10): the reset also stores `SEED` in MiniTOS
+(`ScenarioSeed`, one row, wiped by the next reset). When the visit later goes
+InOperation (TCL-010: admin panel, API, Django admin or
+`make scenario-step STEP=visit-in-operation`), each new discharge order gets a
+random free BLOCK01 ground slot drawn from
+`random.Random("TCL-012:<SEED>:<visit id>")`, so the same `SEED` gives the same
+slots after a reset. "Free" means no container (`container_visit` empty,
+`is_occupied` false), not `is_reserved`, and not the destination of an open
+order (not complete, failed or cancelled) or of one of its legs. A full BLOCK01
+refuses InOperation with `discharge_no_free_slot`; nothing spills into another
+block. The QA M2 reset epoch is not part of the seed (it is new on every reset).
+Until TCL-010b the seed pre-creates the order, with a slot from the scenario RNG
+above, and InOperation adopts it.
 Event ids, wall-clock timestamps and the snapshot checksum (it embeds
 `generated_at`) still differ per run; the canonical dump masks exactly those.
 Outbox delivery bookkeeping (`attempts`, `last_error`, `published_at`) is also

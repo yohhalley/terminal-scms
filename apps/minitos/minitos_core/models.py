@@ -3312,3 +3312,25 @@ class BusinessProcessExecution(models.Model):
 
     def __str__(self):
         return f"{self.business_process.code} execution #{self.pk}"
+
+
+###################################
+class ScenarioSeed(models.Model):
+    """TCL-012: the RNG seed of the current scenario run (``make scenario-reset SEED=n``).
+
+    ``reset_scenario`` wipes the MiniTOS tables and writes one row, so
+    planning that runs later in another process (the admin panel, the REST or
+    transition API, the ``visit-in-operation`` step) draws its random choices,
+    e.g. the yard slot of a discharge order, from the same seed (D-016). No row
+    (normal operation, no scenario reset) means the default planning seed.
+    No timestamps on purpose: the two-resets test compares this table too.
+    """
+
+    scenario = models.CharField(max_length=40)
+    seed = models.BigIntegerField()
+
+    class Meta:
+        ordering = ['pk']
+
+    def __str__(self):
+        return f'{self.scenario} seed {self.seed}'

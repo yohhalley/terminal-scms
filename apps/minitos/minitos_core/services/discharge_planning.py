@@ -18,14 +18,15 @@ Idempotent: a container that already has a live discharge (MOVE_IN) order is
 adopted, not planned again. The import_v1 seed still pre-creates its orders
 until TCL-010b, so on the demo path every order is adopted.
 
-The yard slot is a random free ground slot (tier 1) of the yard block served
-by the block lane, drawn from a seeded ``random.Random`` (D-016: the same
-visit gives the same slots on a rerun). Tests can pass their own ``rng``.
+The yard slot is a random free ground slot (tier 1) of BLOCK01 (the block
+served by the block lane), drawn from a seeded ``random.Random`` (D-016: the
+same scenario seed and visit give the same slots on a rerun). TCL-012 owns the
+block choice, what "free" means and the seed: see ``services.yard_planning``.
+Tests can pass their own ``rng``.
 """
 
 import itertools
 import logging
-import random
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -39,10 +40,10 @@ from minitos_core.models import (
     OrderLeg,
     OrderLegRouteEdge,
     OrderRoutePlan,
-    Position,
     TransferInterface,
     WorkQueue,
 )
+from minitos_core.services import yard_planning
 from minitos_core.services.routing import _endpoint_node, _shortest_path
 
 logger = logging.getLogger(__name__)
@@ -75,10 +76,9 @@ class DischargePlanningError(ValidationError):
 
 
 def default_rng(visit):
-    """Seeded RNG for the yard slot draw: same visit -> same slots (D-016)."""
-    # TODO(TCL-012): once TCL-012 lands, seed this from the scenario seed plus
-    # the visit id (TL decision on PR #34), instead of location + visit name.
-    return random.Random(f'TCL-010:{visit.location_id}:{visit.name}')
+    """Seeded RNG for the yard slot draw (D-016): TCL-012 seeds it from the
+    scenario seed plus the visit id (TL decision on PR #34)."""
+    return yard_planning.slot_rng(visit)
 
 
 def discharge_container_visits(visit):
@@ -126,10 +126,12 @@ def _qc_lane(visit, layout):
 
 
 def _block_lane(visit, layout):
-    for interface in TransferInterface.objects.filter(
+    lanes = TransferInterface.objects.filter(
         asset__layout_version=layout, interface_kind=TransferInterface.VEHICLE_LANE,
         storage_grid__isnull=False,
-    ).select_related('storage_grid').order_by('code'):
+    ).select_related('storage_grid').order_by('code')
+    # TCL-012: BLOCK01 is the import block when the layout has it.
+    for interface in yard_planning.prefer_import_block(lanes):
         position = _first_lane_position(interface)
         if position is not None:
             return interface, position
@@ -157,11 +159,9 @@ def _work_queue(visit):
 
 
 def free_yard_slots(grid):
-    """Free ground slots (tier 1) of ``grid`` that a plan can still reserve."""
-    return Position.objects.filter(
-        pile__storage_grid=grid, tier=1, container_visit__isnull=True,
-        is_reserved=False, is_occupied=False, operational_position__isnull=False,
-    ).select_related('operational_position').order_by('pk')
+    """Free ground slots of ``grid`` that a plan can still reserve (TCL-012
+    definition in ``services.yard_planning``)."""
+    return yard_planning.free_yard_slots(grid)
 
 
 def _vessel_slot(visit, layout, qc_interface, qc_position, container_visit):
@@ -314,7 +314,7 @@ def plan_visit_discharge(visit, rng=None):
     if len(free) < len(pending):
         _no_free_slot(visit, grid, len(pending), len(free))
     rng = rng or default_rng(visit)
-    slots = rng.sample(free, len(pending))
+    slots = yard_planning.choose_slots(free, len(pending), rng)
     road = _road_edges(visit, layout, qc_position, tl_position)
 
     next_priority = FIRST_PRIORITY + Order.objects.filter(

@@ -180,6 +180,14 @@ Substantive automated coverage exists for:
   terminal-only validation, immutable Site codes, transactional Site-created
   outbox events, checksummed configuration snapshots, revision history, and
   authenticated OES snapshot retrieval.
+- TCL-012 yard planning (`test_yard_planning.py`): the discharge order's BLOCK01
+  slot is drawn from `random.Random("TCL-012:<scenario seed>:<visit id>")`; the
+  same `SEED` gives the same slots after a reset, a different seed different
+  slots, and the global `random` state is not used. `ScenarioSeed` stores the
+  reset's seed. "Free" excludes occupied, reserved and open-order (order or leg)
+  destinations and upper tiers; a full BLOCK01 refuses InOperation with
+  `discharge_no_free_slot`; two resets (also followed by planning) give an
+  identical canonical dump.
 - Multi-Site release contracts: v2 Enterprise/Site topic identity is the
   default; opt-in legacy dual publication reuses the same event ID. The removed
   MiniTOS simulator account tests reflect that headless Godot now bootstraps only
