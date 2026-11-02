@@ -10,7 +10,8 @@ on:
     # Draft PRs run too (the default types do not filter drafts; listed explicitly).
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main]
+    # TRIAL ONLY (TCL-007-trial-stack, never merged): run on pushes to the trial branch.
+    branches: [main, TCL-007-trial-stack]
   workflow_dispatch:
 
 permissions:
@@ -32,7 +33,7 @@ jobs:
       E2E_REPORT_DIR: e2e-report
       # D-016 rerun pass (reset again, same sequence). Blocked on the M2 reset fix (FE): reset must
       # not accept stale messages from the previous run. Set to "1" once M2 is merged.
-      E2E_RERUN: "0"
+      E2E_RERUN: "1"  # TRIAL ONLY: M2 (#28) is merged into this branch
     steps:
       - uses: actions/checkout@v4
 
