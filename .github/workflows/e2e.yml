@@ -90,7 +90,7 @@ jobs:
       - name: Run the S1 slice
         run: python tests/e2e/s1_slice.py --report-dir "$E2E_REPORT_DIR"
 
-      - name: Reset and rerun (D-016) — blocked on QA M2
+      - name: Reset and rerun (D-016) — blocked on the M2 reset fix (FE)
         if: env.E2E_RERUN == '1'
         run: |
           make scenario-reset SCENARIO=import_v1
