@@ -13,7 +13,8 @@ from unittest.mock import Mock, patch
 
 from runner import (
     ALLOWED_ENVIRONMENT, FAILURE_REASON_LIMIT, TRUNCATION_MARKER, DockerLauncher, OESClient,
-    ProcessLauncher, Runner, SessionStore, SessionWorker, bound_failure_reason,
+    ProcessLauncher, Runner, SHUTDOWN_STOP_REASON, SessionStore, SessionWorker,
+    bound_failure_reason,
 )
 
 
@@ -373,6 +374,7 @@ class FakeOES:
         self.desired_state = "running"
         self.actual_state = "running"
         self.reports = []
+        self.reasons = []
         self.bootstrap_checks = 0
         self.reachable = True
 
@@ -389,6 +391,7 @@ class FakeOES:
         if not self.reachable:
             raise urllib.error.URLError("connection refused")
         self.reports.append(status)
+        self.reasons.append(failure_reason)
         if status == "stopped":
             self.actual_state = self.desired_state = "stopped"
         elif status == "failed":
@@ -475,6 +478,38 @@ class StoppedStateAcrossRestartTests(unittest.TestCase):
         SessionWorker(self.oes, self.launcher, self.claim, 0.01, store=self.store).run()
         self.assertEqual(self.oes.reports[-1], "stopped")
         self.assertNotIn("failed", self.oes.reports)
+
+    def test_a_runner_shutdown_reports_stopped_with_its_reason(self):
+        # SIGTERM/SIGINT set Runner.stopping; serve_forever then stops every
+        # worker as a runner shutdown (TL server trial, PR #29).
+        worker = SessionWorker(self.oes, self.launcher, self.claim, 0.01, store=self.store)
+        runner = Runner(self.oes, self.launcher, store=self.store)
+        runner.recovered = True
+        runner.workers[worker.session_id] = worker
+        worker.start()
+        runner.stopping = True
+        runner.serve_forever()
+        self.assertFalse(worker.is_alive())
+        self.launcher.stop.assert_called_with("sim")
+        self.assertEqual(self.oes.reports[-1], "stopped")
+        self.assertEqual(self.oes.reasons[-1], SHUTDOWN_STOP_REASON)
+        self.assertEqual(SHUTDOWN_STOP_REASON, "stopped: runner shutdown")
+        self.assertEqual(self.store.load_all(), [])
+
+    def test_a_shutdown_reason_survives_a_restart_before_oes_hears_it(self):
+        worker = SessionWorker(self.oes, self.launcher, self.claim, 0.01, store=self.store)
+        worker.container_name, worker.process = "sim", self.process
+        worker.request_stop(SHUTDOWN_STOP_REASON)
+        self.assertEqual(self.store.load_all()[0]["failure_reason"], SHUTDOWN_STOP_REASON)
+        self.restart(after_s=10)               # runner died before reporting
+        self.assertEqual(self.oes.reports, ["stopped"])
+        self.assertEqual(self.oes.reasons, [SHUTDOWN_STOP_REASON])
+
+    def test_an_oes_requested_stop_has_no_shutdown_reason(self):
+        self.oes.desired_state = "stopped"
+        SessionWorker(self.oes, self.launcher, self.claim, 0.01, store=self.store).run()
+        self.assertEqual(self.oes.reports[-1], "stopped")
+        self.assertEqual(self.oes.reasons[-1], "")
 
     def test_crash_then_restart_before_the_timeout_resumes(self):
         # Runner and Godot killed (kill -9): the saved state is still "running".
