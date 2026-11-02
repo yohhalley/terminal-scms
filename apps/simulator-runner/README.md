@@ -14,6 +14,16 @@ it. The image (`Dockerfile` in this folder) holds Godot headless, the
 `clients/godot-open-terminal` project and `runner.py`; it runs as an unprivileged
 user and gets no Docker socket.
 
+Requirements:
+
+- **Docker Compose 2.17 or later.** The build uses `additional_contexts` to add
+  the Godot project as a second build context, which older Compose versions
+  don't support.
+- **amd64 / x86_64 image.** The Godot binary is `linux.x86_64`, so the service
+  is built and run as `linux/amd64` (`GODOT_PLATFORM`). The image checks the
+  Godot download against a pinned SHA-512, the same value as
+  `.github/actions/setup-godot`. On an arm64 host it runs only under emulation.
+
 ```bash
 make up            # core stack: broker, MiniTOS, OES, ...
 make up-runner     # build + start simulator-runner (profile "simulation")

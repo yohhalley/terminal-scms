@@ -7,12 +7,17 @@
 FROM debian:bookworm-slim
 
 ARG GODOT_VERSION=4.2.1
+# SHA-512 of Godot_v4.2.1-stable_linux.x86_64.zip, the same pinned value as
+# .github/actions/setup-godot (from the release's SHA512-SUMS.txt). Change both
+# together with GODOT_VERSION.
+ARG GODOT_SHA512=e835e7a3bcae2033019293beea3bef6d6b2dcaf4b7a266d55c9327bcc84e808b9a0e0a6966379350a6cf3c7c28ec6e4e6a86344eae8ad869f80bae76da3fc855
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip libfontconfig1 python3 \
     && curl -fsSL \
         "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" \
         -o /tmp/godot.zip \
+    && echo "${GODOT_SHA512}  /tmp/godot.zip" | sha512sum --check --strict - \
     && unzip /tmp/godot.zip -d /tmp/godot \
     && install -m 0755 "/tmp/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot \
     && apt-get purge -y curl unzip && apt-get autoremove -y \
