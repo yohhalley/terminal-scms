@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yohhalley/terminal-scms/contracts/schemas/scms.visit.status_changed.v1.schema.json",
+  "title": "scms.visit.status_changed.v1 (MiniTOS -> UNS visit milestone event)",
+  "description": "TCL-003b, S2 slice of D-026 (milestones on the UNS) with the D-024 timestamps. One event per saved status change of a carrier visit (vessel/barge/truck/train) or a container visit, including the first status at creation (from_status null). Topics: scms/v2/{enterprise}/{site}/tos/carrier-visits/{entity_id}/status-changed and scms/v2/{enterprise}/{site}/tos/container-visits/{entity_id}/status-changed; QoS 1, not retained. Written to the MiniTOS outbox in transaction.on_commit, so a rolled-back change is never published; a same-status save publishes nothing. occurred_at is the MiniTOS wall clock (UTC, ISO 8601) when the change was saved; data.sim_time_ms is the simulation time in ms of the triggering event when known (an OES execution event carrying source_sim_time_ms), else null. data.source says which path made the change; data.causation_id is the triggering message id (the OES execution event_id) or null. data.carrier_visit or data.container_visit (matching entity_type) carries the entity details; for container visits these are the D-010 fields (ISO 6346 container_number, category, ib_carrier, ob_carrier). to_status/from_status are the MiniTOS status values; industry milestone names (spec Q14) are not mapped yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "event_id",
+    "occurred_at",
+    "enterprise",
+    "site",
+    "terminal",
+    "data"
+  ],
+  "properties": {
+    "schema": {
+      "const": "scms.visit.status_changed.v1"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "enterprise": {
+      "type": "object",
+      "required": [
+        "id",
+        "code"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "site": {
+      "type": "object",
+      "required": [
+        "id",
+        "code",
+        "source_location_id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "source_location_id": {
+          "type": "integer"
+        }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "required": [
+        "id",
+        "code"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "code": {
+          "type": "string"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_type",
+        "entity_id",
+        "entity_code",
+        "from_status",
+        "to_status",
+        "sim_time_ms",
+        "source",
+        "causation_id"
+      ],
+      "properties": {
+        "entity_type": {
+          "enum": [
+            "carrier_visit",
+            "container_visit"
+          ]
+        },
+        "entity_id": {
+          "type": "integer"
+        },
+        "entity_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "from_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to_status": {
+          "type": "string"
+        },
+        "sim_time_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "enum": [
+            "minitos.api",
+            "minitos.admin",
+            "minitos.scenario",
+            "minitos.system",
+            "oes.execution"
+          ]
+        },
+        "causation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "carrier_visit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "visit_type",
+            "vessel_name"
+          ],
+          "properties": {
+            "visit_type": {
+              "enum": [
+                "Vessel",
+                "Barge",
+                "Truck",
+                "Train"
+              ]
+            },
+            "vessel_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "container_visit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "container_number",
+            "category",
+            "ib_carrier",
+            "ob_carrier"
+          ],
+          "properties": {
+            "container_number": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "category": {
+              "enum": [
+                "I",
+                "E",
+                "T",
+                "S",
+                "O",
+                "M"
+              ]
+            },
+            "ib_carrier": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "name",
+                "visit_type"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "visit_type": {
+                  "enum": [
+                    "Vessel",
+                    "Barge",
+                    "Truck",
+                    "Train"
+                  ]
+                }
+              }
+            },
+            "ob_carrier": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "name",
+                "visit_type"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "visit_type": {
+                  "enum": [
+                    "Vessel",
+                    "Barge",
+                    "Truck",
+                    "Train"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "entity_type": {
+                "const": "carrier_visit"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "carrier_visit"
+            ],
+            "properties": {
+              "entity_code": {
+                "type": "string"
+              },
+              "to_status": {
+                "enum": [
+                  "Created",
+                  "Announced",
+                  "Arrived",
+                  "InOperation",
+                  "Complete",
+                  "Departed"
+                ]
+              },
+              "from_status": {
+                "enum": [
+                  "Created",
+                  "Announced",
+                  "Arrived",
+                  "InOperation",
+                  "Complete",
+                  "Departed",
+                  null
+                ]
+              }
+            },
+            "not": {
+              "required": [
+                "container_visit"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "entity_type": {
+                "const": "container_visit"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "container_visit"
+            ],
+            "properties": {
+              "to_status": {
+                "enum": [
+                  "Preadvised",
+                  "Arrived",
+                  "AtYard",
+                  "AtQC",
+                  "OnEquipment",
+                  "OnVessel",
+                  "Departed",
+                  "Completed"
+                ]
+              },
+              "from_status": {
+                "enum": [
+                  "Preadvised",
+                  "Arrived",
+                  "AtYard",
+                  "AtQC",
+                  "OnEquipment",
+                  "OnVessel",
+                  "Departed",
+                  "Completed",
+                  null
+                ]
+              }
+            },
+            "not": {
+              "required": [
+                "carrier_visit"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -36,7 +36,9 @@ def reset_scenario(name, *, seed=None, containers=1):
 
     scenario = get_scenario(name)
     seed = scenario.DEFAULT_SEED if seed is None else int(seed)
-    with transaction.atomic():
+    from ..services.status_events import SOURCE_SCENARIO, status_event_source
+
+    with status_event_source(SOURCE_SCENARIO), transaction.atomic():
         tables = wipe_minitos_tables()
         ensure_signal_catalog(ensure_component_catalog())
         result = scenario.seed(random.Random(seed), containers=containers)
@@ -52,4 +54,7 @@ def run_step(name, step, **options):
     except KeyError as exc:
         known = ', '.join(sorted(scenario.STEPS))
         raise LookupError(f'Unknown step {step!r} for {name}. Known steps: {known}.') from exc
-    return handler(**options)
+    from ..services.status_events import SOURCE_SCENARIO, status_event_source
+
+    with status_event_source(SOURCE_SCENARIO):
+        return handler(**options)
