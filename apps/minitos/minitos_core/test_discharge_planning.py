@@ -267,6 +267,11 @@ class AdoptsExistingOrderTests(DischargePlanningTestBase):
         self.assertIn('RTG', message)
         self.assertEqual(list(OrderLeg.objects.order_by('pk').values_list('pk', 'equipment_type_id')), legs_before)
 
+    def test_adopting_the_seeded_orders_logs_no_warning(self):
+        with self.assertNoLogs(self.LOGGER, level='WARNING'):
+            self.move_to_in_operation()
+        self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
+
     def test_adopted_seed_with_no_free_slot_still_moves(self):
         block_slots().update(is_reserved=True)
         self.move_to_in_operation()
