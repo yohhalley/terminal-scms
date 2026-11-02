@@ -217,6 +217,10 @@ class ContainerVisit(models.Model):
         choices=STATUS_CHOICES,
         default=PREADVISED,
     )
+    # TCL-003b: aggregate revision of the visit's status history; +1 per published
+    # scms.visit.status_changed.v1 event (1 = the first status at creation).
+    # Maintained by services/status_events.py; not edited by hand.
+    status_revision = models.PositiveIntegerField(default=0, editable=False)
     current_che = models.ForeignKey(
         'Che', related_name='carried_container_visits',
         on_delete=models.RESTRICT, blank=True, null=True,
@@ -2594,6 +2598,10 @@ class CarrierVisit(models.Model):
         choices=STATUS_CHOICES,
         default=PLANNED,
     )
+    # TCL-003b: aggregate revision of the visit's status history; +1 per published
+    # scms.visit.status_changed.v1 event (1 = the first status at creation).
+    # Maintained by services/status_events.py; not edited by hand.
+    status_revision = models.PositiveIntegerField(default=0, editable=False)
     location = models.ForeignKey(
         'Location',
         on_delete=models.RESTRICT,

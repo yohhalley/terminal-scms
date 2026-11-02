@@ -18,16 +18,35 @@ creation (`from_status` null). Topics, QoS 1, not retained:
     scms/v2/{enterprise}/{site}/tos/carrier-visits/{id}/status-changed
     scms/v2/{enterprise}/{site}/tos/container-visits/{id}/status-changed
 
-`occurred_at` is the MiniTOS wall clock at the save; `data.sim_time_ms` is the
-simulation time of the triggering OES event when it carries
-`source_sim_time_ms`, else null; `data.source` is one of `minitos.api`,
-`minitos.admin`, `minitos.scenario`, `minitos.system`, `oes.execution`. The outbox
-row is written in `transaction.on_commit`, so a rolled-back change is never
-published, and a same-status save publishes nothing. Producer
-`minitos_core/services/status_events.py`; contract test
+The hyphenated lowercase-kebab topic segments (`carrier-visits`,
+`container-visits`, `status-changed`) are intentional and match the
+lowercase-kebab enterprise/site codes.
+
+Envelope (docs/ARCHITECTURE.md synchronization rule 7):
+- `schema`: name and version (`scms.visit.status_changed.v1`), as every SCMS event;
+- `event_id`, `occurred_at` (MiniTOS wall clock at the save), `enterprise`, `site`, `terminal`;
+- `aggregate` `{type, id, revision}`: `type`/`id` equal `data.entity_type`/`entity_id`;
+  `revision` is the visit's `status_revision` column, +1 per event of that visit
+  (1 = creation), so it strictly increases per aggregate;
+- `causation_id`: the triggering message id (the OES execution `event_id`), else null;
+- `correlation_id`: inherited conversation id: the OES message's `correlation_id`
+  (else its `event_id`) or the HTTP `X-Correlation-ID` header; without one it
+  equals this event's `event_id`.
+  `correlation_id`/`causation_id` sit at the top level as in
+  `scms.execution.event.v1` (`scms.order.released.v1` doesn't carry them yet).
+
+`data.sim_time_ms` is the simulation time of the triggering OES event when it
+carries `source_sim_time_ms`, else null; `data.source` is one of `minitos.api`,
+`minitos.admin`, `minitos.scenario`, `minitos.system`, `oes.execution`.
+
+Same-transaction outbox, as `order.released`: the outbox row is written in the
+transaction that saves the status, so a rolled-back change is never published
+and a committed one keeps its event; a same-status save publishes nothing.
+Producer `minitos_core/services/status_events.py`; contract test
 `minitos_core/test_contract_status_events.py` validates every produced payload
-and topic (skips without this folder, fails under `SCMS_CONTRACT_STRICT=1`) and
-checks the status/source enums against the models.
+and topic and the per-aggregate revisions (skips without this folder, fails
+under `SCMS_CONTRACT_STRICT=1`) and checks the status/source enums against the
+models.
 
 ## `golden/scms.execution.event.v1/*.json`
 One full leg (`leg_dispatched` ... `leg_completed`) exactly as the real OES outbox

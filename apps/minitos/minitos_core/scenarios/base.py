@@ -23,6 +23,9 @@ APP_LABEL = 'minitos_core'
 VOLATILE_JSON_KEYS = frozenset({
     'event_id', 'occurred_at', 'generated_at', 'published_at',
     'snapshot_checksum',
+    # TCL-003b: the seed's status-changed events start their own correlation
+    # chain, so correlation_id equals their (uuid4) event_id.
+    'correlation_id',
 })
 VOLATILE_FIELDS = {
     # Outbox event ids are uuid4 in the existing site-sync path (BE-owned);

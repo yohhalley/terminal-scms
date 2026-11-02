@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yohhalley/terminal-scms/contracts/schemas/scms.visit.status_changed.v1.schema.json",
   "title": "scms.visit.status_changed.v1 (MiniTOS -> UNS visit milestone event)",
-  "description": "TCL-003b, S2 slice of D-026 (milestones on the UNS) with the D-024 timestamps. One event per saved status change of a carrier visit (vessel/barge/truck/train) or a container visit, including the first status at creation (from_status null). Topics: scms/v2/{enterprise}/{site}/tos/carrier-visits/{entity_id}/status-changed and scms/v2/{enterprise}/{site}/tos/container-visits/{entity_id}/status-changed; QoS 1, not retained. Written to the MiniTOS outbox in transaction.on_commit, so a rolled-back change is never published; a same-status save publishes nothing. occurred_at is the MiniTOS wall clock (UTC, ISO 8601) when the change was saved; data.sim_time_ms is the simulation time in ms of the triggering event when known (an OES execution event carrying source_sim_time_ms), else null. data.source says which path made the change; data.causation_id is the triggering message id (the OES execution event_id) or null. data.carrier_visit or data.container_visit (matching entity_type) carries the entity details; for container visits these are the D-010 fields (ISO 6346 container_number, category, ib_carrier, ob_carrier). to_status/from_status are the MiniTOS status values; industry milestone names (spec Q14) are not mapped yet.",
+  "description": "TCL-003b, S2 slice of D-026 (milestones on the UNS) with the D-024 timestamps. One event per saved status change of a carrier visit (vessel/barge/truck/train) or a container visit, including the first status at creation (from_status null). Topics: scms/v2/{enterprise}/{site}/tos/carrier-visits/{entity_id}/status-changed and scms/v2/{enterprise}/{site}/tos/container-visits/{entity_id}/status-changed; QoS 1, not retained; the lowercase-kebab segments are intentional and match the enterprise/site codes. Same-transaction outbox (docs/ARCHITECTURE.md, as scms.order.released.v1): the outbox row is written in the transaction that saves the status, so a rolled-back change is never published and a committed change keeps its event; a same-status save publishes nothing. Envelope per architecture synchronization rule 7: schema (name and version, as every SCMS event), event_id, occurred_at (MiniTOS wall clock, ISO 8601 with offset, when the change was saved), Enterprise/Site/terminal scope, aggregate {type, id, revision}, correlation_id, causation_id. aggregate.type/id equal data.entity_type/entity_id; aggregate.revision is the visit's status_revision counter, +1 per event of that visit (1 = creation), strictly increasing per aggregate. causation_id is the triggering message id (the OES execution event_id) or null; correlation_id is the inherited conversation id (the OES message's correlation_id, else its event_id; the HTTP X-Correlation-ID header), else equal to this event's event_id. Both sit at the top level, as in scms.execution.event.v1. data.sim_time_ms is the simulation time in ms of the triggering event when known (an OES execution event carrying source_sim_time_ms), else null. data.source says which path made the change. data.carrier_visit or data.container_visit (matching entity_type) carries the entity details; for container visits these are the D-010 fields (ISO 6346 container_number, category, ib_carrier, ob_carrier). to_status/from_status are the MiniTOS status values; industry milestone names (spec Q14) are not mapped yet.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,6 +12,9 @@
     "enterprise",
     "site",
     "terminal",
+    "aggregate",
+    "correlation_id",
+    "causation_id",
     "data"
   ],
   "properties": {
@@ -81,6 +84,39 @@
         }
       }
     },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "revision"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "carrier_visit",
+            "container_visit"
+          ]
+        },
+        "id": {
+          "type": "integer"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "correlation_id": {
+      "type": "string"
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "data": {
       "type": "object",
       "additionalProperties": false,
@@ -91,8 +127,7 @@
         "from_status",
         "to_status",
         "sim_time_ms",
-        "source",
-        "causation_id"
+        "source"
       ],
       "properties": {
         "entity_type": {
@@ -132,12 +167,6 @@
             "minitos.scenario",
             "minitos.system",
             "oes.execution"
-          ]
-        },
-        "causation_id": {
-          "type": [
-            "string",
-            "null"
           ]
         },
         "carrier_visit": {

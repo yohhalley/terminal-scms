@@ -58,9 +58,11 @@ def apply_execution_message(topic, raw_payload):
                 return order
             occurred_at = parse_datetime(data.get('occurred_at', '')) or timezone.now()
             # TCL-003b: container-visit status events caused by this message
-            # carry its id and, when OES sends it, the simulation time.
+            # carry its id as causation, its correlation_id (else its id) as
+            # correlation and, when OES sends it, the simulation time.
             with status_event_source(
                 SOURCE_OES_EXECUTION, causation_id=event_id,
+                correlation_id=payload.get('correlation_id') or event_id,
                 sim_time_ms=payload.get('source_sim_time_ms'),
             ):
                 order = apply_execution_event(

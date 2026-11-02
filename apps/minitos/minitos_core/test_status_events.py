@@ -1,9 +1,9 @@
 """TCL-003b: visit status-changed milestone events (D-024, D-026).
 
-Each status change of a CarrierVisit or ContainerVisit queues one
-scms.visit.status_changed.v1 outbox row after commit. TestCase wraps every test
-in a transaction, so the tests run the on_commit callbacks explicitly with
-captureOnCommitCallbacks(execute=True), which is what a real commit does.
+Each status change of a CarrierVisit or ContainerVisit writes one
+scms.visit.status_changed.v1 outbox row in the same transaction as the change
+(same-transaction outbox, as order.released). captureOnCommitCallbacks is kept
+around the saves to prove that nothing is deferred to on_commit any more.
 """
 
 import json
@@ -81,7 +81,12 @@ class VesselVisitEventTests(StatusEventTestBase):
         self.assertNotIn('container_visit', data)
         self.assertEqual(data['source'], 'minitos.system')
         self.assertIsNone(data['sim_time_ms'])
-        self.assertIsNone(data['causation_id'])
+        self.assertNotIn('causation_id', data)
+        self.assertEqual(payload['aggregate'], {
+            'type': 'carrier_visit', 'id': self.visit.pk, 'revision': 2,
+        })
+        self.assertIsNone(payload['causation_id'])
+        self.assertEqual(payload['correlation_id'], payload['event_id'])
         occurred_at = parse_datetime(payload['occurred_at'])
         self.assertIsNotNone(occurred_at.tzinfo)
         self.assertTrue(before <= occurred_at <= timezone.now())
@@ -99,6 +104,19 @@ class VesselVisitEventTests(StatusEventTestBase):
         times = [parse_datetime(row.payload['occurred_at']) for row in status_rows()]
         self.assertEqual(times, sorted(times))
         self.assertEqual(len({row.event_id for row in status_rows()}), 3)
+        self.assertEqual([row.payload['aggregate']['revision'] for row in status_rows()], [2, 3, 4])
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status_revision, 4)
+
+    def test_stale_instance_does_not_reuse_a_revision(self):
+        stale = CarrierVisit.objects.get(pk=self.visit.pk)
+        self.save_status(self.visit, CarrierVisit.IN_OPERATION)
+        self.save_status(stale, CarrierVisit.COMPLETE)
+        self.assertEqual([row.payload['aggregate']['revision'] for row in status_rows()], [2, 3])
+        stale.vessel_name = 'RENAMED'
+        stale.save()
+        stale.refresh_from_db()
+        self.assertEqual(stale.status_revision, 3)
 
     def test_transition_api_publishes_with_api_source(self):
         user = User.objects.create_superuser('tcl003b-api', 'api@terminal-scms.invalid', 'test-password')
@@ -106,11 +124,40 @@ class VesselVisitEventTests(StatusEventTestBase):
         client.force_authenticate(user=user)
         url = reverse('minitos_core:transition_visit_status', args=[self.visit.pk])
         with self.captureOnCommitCallbacks(execute=True):
-            response = client.post(url, {'status': 'InOperation'}, format='json')
+            response = client.post(
+                url, {'status': 'InOperation'}, format='json', HTTP_X_CORRELATION_ID='ui-click-42',
+            )
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
         [row] = status_rows()
         self.assertEqual(row.payload['data']['source'], 'minitos.api')
         self.assertEqual(row.payload['data']['to_status'], 'InOperation')
+        self.assertEqual(row.payload['correlation_id'], 'ui-click-42')
+        self.assertIsNone(row.payload['causation_id'])
+
+    def test_transition_api_is_one_transaction_with_its_outbox_row(self):
+        user = User.objects.create_superuser('tcl003b-atomic', 'atomic@terminal-scms.invalid', 'test-password')
+        client = APIClient()
+        client.force_authenticate(user=user)
+        url = reverse('minitos_core:transition_visit_status', args=[self.visit.pk])
+        with (
+            mock.patch.object(IntegrationOutbox.objects, 'create', side_effect=RuntimeError('outbox down')),
+            self.assertLogs('django.request', level='ERROR'),
+            self.assertRaises(RuntimeError),
+        ):
+            client.post(url, {'status': 'InOperation'}, format='json')
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
+        self.assertEqual(self.visit.status_revision, 1)
+        self.assertEqual(status_rows(), [])
+
+    def test_oversized_correlation_header_is_ignored(self):
+        user = User.objects.create_superuser('tcl003b-corr', 'corr@terminal-scms.invalid', 'test-password')
+        client = APIClient()
+        client.force_authenticate(user=user)
+        url = reverse('minitos_core:transition_visit_status', args=[self.visit.pk])
+        client.post(url, {'status': 'InOperation'}, format='json', HTTP_X_CORRELATION_ID='x' * 129)
+        [row] = status_rows()
+        self.assertEqual(row.payload['correlation_id'], row.payload['event_id'])
 
     def test_transition_api_same_status_publishes_nothing(self):
         user = User.objects.create_superuser('tcl003b-noop', 'noop@terminal-scms.invalid', 'test-password')
@@ -156,6 +203,9 @@ class ContainerVisitEventTests(StatusEventTestBase):
         self.assertEqual(data['entity_id'], self.container_visit.pk)
         self.assertEqual(data['entity_code'], self.container_visit.container_number_id)
         self.assertEqual((data['from_status'], data['to_status']), ('Preadvised', 'Arrived'))
+        self.assertEqual(row.payload['aggregate'], {
+            'type': 'container_visit', 'id': self.container_visit.pk, 'revision': 2,
+        })
         self.assertEqual(data['container_visit'], {
             'container_number': self.container_visit.container_number_id,
             'category': 'I',
@@ -188,6 +238,7 @@ class ContainerVisitEventTests(StatusEventTestBase):
             'event_id': str(event_id),
             'terminal': {'id': self.visit.location_id},
             'source_sim_time_ms': 125000,
+            'correlation_id': 'discharge-V001-run-7',
             'data': {'order_id': order.pk, 'event': 'order_started', 'occurred_at': timezone.now().isoformat()},
         }
 
@@ -206,9 +257,32 @@ class ContainerVisitEventTests(StatusEventTestBase):
         [row] = status_rows()
         data = row.payload['data']
         self.assertEqual(data['source'], 'oes.execution')
-        self.assertEqual(data['causation_id'], str(event_id))
+        self.assertEqual(row.payload['causation_id'], str(event_id))
+        self.assertEqual(row.payload['correlation_id'], 'discharge-V001-run-7')
         self.assertEqual(data['sim_time_ms'], 125000)
         self.assertEqual(data['to_status'], 'OnEquipment')
+
+    def test_oes_message_without_correlation_correlates_on_its_event_id(self):
+        order = Order.objects.get()
+        event_id = uuid.uuid4()
+        message = {
+            'schema': 'scms.execution.event.v1', 'event_id': str(event_id),
+            'terminal': {'id': self.visit.location_id},
+            'data': {'order_id': order.pk, 'event': 'order_started'},
+        }
+
+        def fake_apply(order_id, event, **kwargs):
+            visit = ContainerVisit.objects.get(pk=self.container_visit.pk)
+            visit.status = ContainerVisit.ON_EQUIPMENT
+            visit.save(update_fields=['status'])
+            return Order.objects.get(pk=order_id)
+
+        with mock.patch.object(integration_events, 'apply_execution_event', side_effect=fake_apply):
+            integration_events.apply_execution_message('oes/topic', json.dumps(message))
+        [row] = status_rows()
+        self.assertEqual(row.payload['causation_id'], str(event_id))
+        self.assertEqual(row.payload['correlation_id'], str(event_id))
+        self.assertIsNone(row.payload['data']['sim_time_ms'])
 
     def test_failed_execution_message_publishes_nothing(self):
         order = Order.objects.get()
@@ -241,6 +315,8 @@ class NoEventTests(StatusEventTestBase):
         self.save_status(self.visit, CarrierVisit.ARRIVED)
         self.save_status(self.container_visit, ContainerVisit.PREADVISED)
         self.assertEqual(status_rows(), [])
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status_revision, 1)
 
     def test_save_without_status_in_update_fields_publishes_nothing(self):
         with self.captureOnCommitCallbacks(execute=True):
@@ -269,6 +345,7 @@ class NoEventTests(StatusEventTestBase):
         self.assertEqual(status_rows(), [])
         self.visit.refresh_from_db()
         self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
+        self.assertEqual(self.visit.status_revision, 1)
 
     def test_rolled_back_savepoint_drops_only_its_event(self):
         with self.captureOnCommitCallbacks(execute=True), transaction.atomic():
@@ -283,16 +360,22 @@ class NoEventTests(StatusEventTestBase):
                 pass
         [row] = status_rows()
         self.assertEqual(row.payload['data']['entity_type'], 'container_visit')
+        self.visit.refresh_from_db()
+        self.assertEqual((self.visit.status, self.visit.status_revision), (CarrierVisit.ARRIVED, 1))
 
-    def test_nothing_is_queued_before_commit(self):
-        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+    def test_outbox_row_is_written_in_the_same_transaction(self):
+        with self.captureOnCommitCallbacks(execute=False) as callbacks, transaction.atomic():
             self.visit.status = CarrierVisit.IN_OPERATION
             self.visit.save()
-            self.assertEqual(status_rows(), [])
-        self.assertEqual(len(callbacks), 1)
-        self.assertEqual(status_rows(), [])
-        callbacks[0]()
-        self.assertEqual(len(status_rows()), 1)
+            # Inside the still-open transaction, before any commit:
+            self.assertTrue(transaction.get_connection().in_atomic_block)
+            [row] = status_rows()
+            self.assertEqual(row.payload['data']['to_status'], 'InOperation')
+            self.assertEqual(
+                CarrierVisit.objects.filter(pk=self.visit.pk).values_list('status', 'status_revision').get(),
+                ('InOperation', row.payload['aggregate']['revision']),
+            )
+        self.assertEqual(callbacks, [])  # nothing deferred to on_commit
 
     def test_visit_at_a_location_without_site_publishes_nothing(self):
         location = Location.objects.create(name='No site', location_type=Location.TL)
@@ -302,15 +385,17 @@ class NoEventTests(StatusEventTestBase):
             visit.save()
         self.assertEqual(status_rows(), [])
 
-    def test_outbox_write_failure_after_commit_is_logged_not_raised(self):
+    def test_outbox_write_failure_rolls_the_status_change_back(self):
         with (
             mock.patch.object(IntegrationOutbox.objects, 'create', side_effect=RuntimeError('db down')),
-            self.assertLogs('minitos_core.services.status_events', level='ERROR') as logs,
+            self.assertRaises(RuntimeError),
+            transaction.atomic(),
         ):
-            self.save_status(self.visit, CarrierVisit.IN_OPERATION)
-        self.assertIn('Could not queue', logs.output[0])
+            self.visit.status = CarrierVisit.IN_OPERATION
+            self.visit.save()
         self.visit.refresh_from_db()
-        self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
+        self.assertEqual((self.visit.status, self.visit.status_revision), (CarrierVisit.ARRIVED, 1))
+        self.assertEqual(status_rows(), [])
 
 
 class CreationEventTests(TestCase):
@@ -327,6 +412,7 @@ class CreationEventTests(TestCase):
             ('container_visit', None, 'Preadvised', 'minitos.scenario'),
             ('container_visit', None, 'Preadvised', 'minitos.scenario'),
         ])
+        self.assertEqual({row.payload['aggregate']['revision'] for row in status_rows()}, {1})
 
 
 class SourceContextTests(TestCase):

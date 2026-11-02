@@ -42,7 +42,7 @@ TYPES = {
 
 def check_schema(instance, schema, path='$'):
     """Stdlib JSON-Schema subset used by this schema: type, const, enum, required,
-    properties, additionalProperties: false, allOf/if/then, not/required and
+    properties, additionalProperties: false, allOf/if/then, not/required, minimum and
     format uuid/date-time. Unknown keywords would be ignored, so the schema
     only uses these (asserted below)."""
     errors = []
@@ -58,6 +58,8 @@ def check_schema(instance, schema, path='$'):
         errors.append(f'{path}: expected const {schema["const"]!r}, got {instance!r}')
     if 'enum' in schema and instance not in schema['enum']:
         errors.append(f'{path}: {instance!r} not in enum')
+    if 'minimum' in schema and isinstance(instance, int) and instance < schema['minimum']:
+        errors.append(f'{path}: {instance!r} is below the minimum {schema["minimum"]}')
     fmt = schema.get('format')
     if fmt and isinstance(instance, str):
         try:
@@ -90,7 +92,7 @@ def check_schema(instance, schema, path='$'):
 
 SUPPORTED_KEYWORDS = {
     '$schema', '$id', 'title', 'description', 'type', 'const', 'enum', 'required', 'properties',
-    'additionalProperties', 'allOf', 'if', 'then', 'not', 'format',
+    'additionalProperties', 'allOf', 'if', 'then', 'not', 'format', 'minimum',
 }
 
 
@@ -158,6 +160,7 @@ class VisitStatusChangedContractTests(TestCase):
         message = {
             'schema': 'scms.execution.event.v1', 'event_id': str(uuid.uuid4()),
             'terminal': {'id': visit.location_id}, 'source_sim_time_ms': 5000,
+            'correlation_id': 'contract-run-1',
             'data': {'order_id': Order.objects.order_by('pk').first().pk, 'event': 'order_started'},
         }
         with (
@@ -193,7 +196,29 @@ class VisitStatusChangedContractTests(TestCase):
                 errors.append(f'{label}: topic root does not match the envelope')
             if (row.qos, row.retain) != (1, False):
                 errors.append(f'{label}: QoS/retain {(row.qos, row.retain)}')
+            aggregate = row.payload['aggregate']
+            if (aggregate['type'], aggregate['id']) != (data['entity_type'], data['entity_id']):
+                errors.append(f'{label}: aggregate {aggregate} is not the entity')
+            if row.payload['event_id'] != str(row.event_id):
+                errors.append(f'{label}: payload event_id differs from the outbox row')
         self.assertEqual(errors, [])
+
+    def test_aggregate_revisions_and_correlation(self):
+        rows = self.produce_events()
+        revisions = {}
+        for row in rows:
+            aggregate = row.payload['aggregate']
+            revisions.setdefault((aggregate['type'], aggregate['id']), []).append(aggregate['revision'])
+        for key, values in revisions.items():
+            self.assertEqual(values, list(range(1, len(values) + 1)), key)
+        for row in rows:
+            payload = row.payload
+            if payload['data']['source'] == 'oes.execution':
+                self.assertEqual(payload['correlation_id'], 'contract-run-1')
+                self.assertIsNotNone(payload['causation_id'])
+            else:
+                self.assertEqual(payload['correlation_id'], payload['event_id'])
+                self.assertIsNone(payload['causation_id'])
 
     def test_schema_rejects_broken_payloads(self):
         good = self.produce_events()[0].payload
@@ -208,6 +233,12 @@ class VisitStatusChangedContractTests(TestCase):
                 'container_visit', {'container_number': None, 'category': 'I', 'ib_carrier': None, 'ob_carrier': None},
             ),
             'container status on a vessel visit': lambda p: p['data'].__setitem__('to_status', 'AtYard'),
+            'missing aggregate': lambda p: p.pop('aggregate'),
+            'revision 0': lambda p: p['aggregate'].__setitem__('revision', 0),
+            'unknown aggregate type': lambda p: p['aggregate'].__setitem__('type', 'order'),
+            'missing correlation_id': lambda p: p.pop('correlation_id'),
+            'missing causation_id': lambda p: p.pop('causation_id'),
+            'causation_id inside data': lambda p: p['data'].__setitem__('causation_id', None),
         }
         for name, mutate in broken.items():
             payload = json.loads(json.dumps(good))
@@ -236,6 +267,10 @@ class VisitStatusChangedContractTests(TestCase):
             [value for value, _ in ContainerVisit.CATEGORIES],
         )
         self.assertEqual(self.schema['properties']['schema']['const'], status_events.SCHEMA)
+        self.assertEqual(
+            self.schema['properties']['aggregate']['properties']['type']['enum'],
+            list(status_events.TOPIC_SEGMENTS),
+        )
 
     def test_schema_uses_only_keywords_the_validator_checks(self):
         self.assertEqual(keywords(self.schema) - SUPPORTED_KEYWORDS, set())
