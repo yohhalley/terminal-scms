@@ -3,6 +3,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from minitos_core.scenarios import SCENARIOS, reset_scenario
 from minitos_core.scenarios.base import canonical_checksum, canonical_dump
+from minitos_core.services.reset_epoch import validate_epoch
 
 
 class Command(BaseCommand):
@@ -16,6 +17,14 @@ class Command(BaseCommand):
         parser.add_argument(
             '--seed', type=int, default=None,
             help='Scenario RNG seed; make scenario-reset passes SEED (default 1, the K7 SIMULATOR_SEED).',
+        )
+        parser.add_argument(
+            '--reset-epoch', default=None,
+            help=(
+                'QA M2: run marker shared with terminal-oes (make scenario-reset generates '
+                'one). Envelopes are stamped with it and OES events from another epoch are '
+                'ignored. Omit for no fence (pre-M2 behaviour).'
+            ),
         )
         parser.add_argument('--containers', type=int, default=1, help='Import containers to pre-advise (1-5).')
         parser.add_argument(
@@ -31,8 +40,16 @@ class Command(BaseCommand):
             )
             if answer.strip().lower() != 'yes':
                 raise CommandError('Reset cancelled.')
+        if options['reset_epoch'] is not None:
+            try:
+                validate_epoch(options['reset_epoch'])
+            except ValidationError as exc:
+                raise CommandError('; '.join(exc.messages)) from exc
         try:
-            result = reset_scenario(name, seed=options['seed'], containers=options['containers'])
+            result = reset_scenario(
+                name, seed=options['seed'], containers=options['containers'],
+                reset_epoch=options['reset_epoch'],
+            )
         except (LookupError, ValueError) as exc:
             raise CommandError(str(exc)) from exc
         except ValidationError as exc:
@@ -45,4 +62,5 @@ class Command(BaseCommand):
             f'visit {result["visit"].name} with {len(result["orders"])} planned discharge order(s): '
             + ', '.join(str(order.pk) for order in result['orders'])
         ))
+        self.stdout.write(f'reset epoch {result["reset_epoch"] or "none (no stale-message fence)"}')
         self.stdout.write(f'canonical-sha256 {canonical_checksum(canonical_dump())}')

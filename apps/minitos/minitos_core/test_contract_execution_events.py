@@ -39,6 +39,7 @@ from minitos_core.models import (
     WorkQueue,
 )
 from minitos_core.services import apply_execution_message, sync_yard_grid
+from minitos_core.services.reset_epoch import set_epoch
 from minitos_core.test_yard_grid import LayoutTestCase
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -195,3 +196,28 @@ class GoldenExecutionEventConsumerTests(LayoutTestCase):
             ).count(),
             len(golden),
         )
+
+    def test_golden_leg_with_current_reset_epoch_applies_under_a_fence(self):
+        """QA M2: the optional reset_epoch key is accepted when it is the current run's."""
+        set_epoch('20261102T090000Z-0000bbbb')
+        golden = load_golden()
+        for name, document in golden:
+            document = json.loads(json.dumps(document))
+            document['payload']['reset_epoch'] = '20261102T090000Z-0000bbbb'
+            topic, raw = self.rebind(document)
+            self.assertIsNotNone(apply_execution_message(topic, raw), name)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.COMPLETE)
+
+    def test_golden_leg_without_reset_epoch_is_ignored_under_a_fence(self):
+        """QA M2: after a fenced reset an unstamped (previous-run) event changes nothing."""
+        set_epoch('20261102T090000Z-0000bbbb')
+        name, document = load_golden()[0]
+        topic, raw = self.rebind(document)
+        self.order.refresh_from_db()
+        before = self.order.status
+        with self.assertLogs('minitos_core.services.reset_epoch', 'INFO'):
+            self.assertIsNone(apply_execution_message(topic, raw), name)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, before)
+        self.assertFalse(IntegrationInbox.objects.filter(source='terminal-oes').exists())

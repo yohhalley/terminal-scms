@@ -128,3 +128,21 @@ SIMULATOR_SIM_SETTINGS = {
     for name in SIMULATOR_SIM_SETTING_NAMES
     if os.environ.get(name, "").strip()
 }
+
+# QA M2: every MiniTOS message ignored as stale after scenario-reset is logged
+# at INFO, so drops show up in consumer and CI logs. Other loggers keep
+# Django's defaults.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+    },
+    "loggers": {
+        "execution.services.reset_epoch": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}

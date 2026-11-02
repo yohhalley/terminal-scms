@@ -23,6 +23,8 @@ APP_LABEL = 'minitos_core'
 VOLATILE_JSON_KEYS = frozenset({
     'event_id', 'occurred_at', 'generated_at', 'published_at',
     'snapshot_checksum',
+    # QA M2: the reset epoch is a fresh value per make scenario-reset.
+    'reset_epoch',
 })
 VOLATILE_FIELDS = {
     # Outbox event ids are uuid4 in the existing site-sync path (BE-owned);
@@ -30,6 +32,8 @@ VOLATILE_FIELDS = {
     'integrationoutbox': {'event_id', 'attempts', 'last_error', 'published_at'},
     # The snapshot payload carries generated_at, so its checksum varies.
     'siteconfigurationsnapshot': {'checksum'},
+    # QA M2: one fresh run marker per reset (only its presence is compared).
+    'scenarioresetepoch': {'epoch'},
 }
 
 
