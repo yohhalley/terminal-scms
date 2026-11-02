@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import uuid
@@ -14,8 +15,21 @@ import uuid
 
 LOG = logging.getLogger("terminal-simulator-runner")
 ERROR_DETAIL_LIMIT = 300
-# OES rejects a failure_reason longer than 2000 characters.
-FAILURE_REASON_LIMIT = 1000
+# OES rejects a failure_reason longer than 2000 characters (HTTP 400). The cap
+# includes the truncation marker and leaves headroom below the OES limit.
+FAILURE_REASON_LIMIT = 1900
+TRUNCATION_MARKER = "…[truncated, see runner log]"
+def bound_failure_reason(reason):
+    """Cap a failure_reason for OES; a cut is visible (marker), never silent.
+
+    The full text (e.g. a crash traceback) is only in the runner log.
+    """
+    reason = reason or ""
+    if len(reason) <= FAILURE_REASON_LIMIT:
+        return reason
+    return reason[:FAILURE_REASON_LIMIT - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+
+
 ALLOWED_ENVIRONMENT = {
     "OES_URL",
     "SIMULATOR_SITE_ID",
@@ -129,13 +143,14 @@ class OESClient:
         })
 
     def report(self, session_id, status, failure_reason=""):
+        # Every path that sends a failure_reason goes through here.
         return self._request(
             "POST",
             f"/api/simulation-sessions/{session_id}/runner-status/",
             {
                 "runner_identity": self.runner_identity,
                 "status": status,
-                "failure_reason": failure_reason,
+                "failure_reason": bound_failure_reason(failure_reason),
             },
         )
 
@@ -374,7 +389,7 @@ class SessionWorker(threading.Thread):
         if self.store is None:
             return
         try:
-            self.store.mark(self.claim, status, failure_reason[:FAILURE_REASON_LIMIT])
+            self.store.mark(self.claim, status, bound_failure_reason(failure_reason))
         except OSError:
             LOG.exception("Could not persist %s for %s", status, self.session_id)
 
@@ -400,7 +415,7 @@ class SessionWorker(threading.Thread):
             forget(self.session_id)
 
     def _report_final(self, status, failure_reason=""):
-        failure_reason = failure_reason[:FAILURE_REASON_LIMIT]
+        failure_reason = bound_failure_reason(failure_reason)
         delays = list(self.FINAL_RETRY_DELAYS)
         while True:
             try:
@@ -442,14 +457,17 @@ class SessionWorker(threading.Thread):
                 self.launcher.stop(self.container_name)
                 self.process.wait(timeout=15)
             return "stopped", ""
-        except Exception as exc:
-            LOG.exception("Simulation session %s failed", self.session_id)
+        except Exception:
+            # The full traceback goes to the runner log; OES gets it bounded,
+            # with a visible marker when cut (bound_failure_reason).
+            trace = traceback.format_exc()
+            LOG.error("Simulation session %s failed:\n%s", self.session_id, trace)
             if self.process is not None and self.process.poll() is None:
                 try:
                     self.launcher.stop(self.container_name)
                 except Exception:
                     LOG.exception("Could not stop Godot for %s", self.session_id)
-            return "failed", str(exc)
+            return "failed", trace.strip()
 
 
 class Runner:

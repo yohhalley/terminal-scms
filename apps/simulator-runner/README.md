@@ -72,6 +72,10 @@ Inside the image the mode is fixed by `RUNNER_LAUNCH_MODE=process`,
   reports `stopped` (grace period 30 s), so a redeploy ends the running session.
   The final status is retried a few times; if OES still cannot be reached the
   recorded state is reported at the next start.
+- A crash reports `failed` with the traceback as `failure_reason`, capped at
+  1900 characters (OES rejects more than 2000). A cut reason ends with
+  `…[truncated, see runner log]`; the full traceback is always in the runner
+  log (`make logs-runner`).
 
 ## Host runner (`docker` mode)
 

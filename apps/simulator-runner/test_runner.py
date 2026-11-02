@@ -12,7 +12,8 @@ import uuid
 from unittest.mock import Mock, patch
 
 from runner import (
-    ALLOWED_ENVIRONMENT, DockerLauncher, OESClient, ProcessLauncher, Runner, SessionStore, SessionWorker,
+    ALLOWED_ENVIRONMENT, FAILURE_REASON_LIMIT, TRUNCATION_MARKER, DockerLauncher, OESClient,
+    ProcessLauncher, Runner, SessionStore, SessionWorker, bound_failure_reason,
 )
 
 
@@ -495,7 +496,69 @@ class SessionWorkerTests(unittest.TestCase):
         self.launcher.start.side_effect = RuntimeError("x" * 5000)
         self.worker().run()
         self.assertEqual(self.client.report.call_args.args[1], "failed")
-        self.assertLessEqual(len(self.client.report.call_args.args[2]), 1000)
+        self.assertLessEqual(len(self.client.report.call_args.args[2]), FAILURE_REASON_LIMIT)
+
+    def test_a_long_crash_traceback_is_capped_with_a_marker_and_logged_in_full(self):
+        # OES answers HTTP 400 to a failure_reason over 2000 characters.
+        self.assertLessEqual(FAILURE_REASON_LIMIT, 1900)
+
+        def crash(depth):
+            if depth == 0:
+                raise RuntimeError("Godot launch failed: " + "detail " * 800 + "END-OF-MESSAGE")
+            crash(depth - 1)
+
+        self.launcher.start.side_effect = lambda environment: crash(60)
+        sent = []
+
+        def urlopen(request, timeout=None):
+            sent.append(json.loads(request.data.decode("utf-8")))
+            response = Mock(status=204)
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            return response
+
+        self.client = OESClient("http://oes", "runner-token", "test-runner")
+        with patch("urllib.request.urlopen", side_effect=urlopen):
+            with self.assertLogs("terminal-simulator-runner", level="ERROR") as logs:
+                self.worker().run()
+        final = sent[-1]
+        self.assertEqual(final["status"], "failed")
+        self.assertLessEqual(len(final["failure_reason"]), FAILURE_REASON_LIMIT)
+        self.assertTrue(final["failure_reason"].endswith(TRUNCATION_MARKER))
+        self.assertTrue(final["failure_reason"].startswith("Traceback (most recent call last):"))
+        logged = "\n".join(logs.output)
+        trace = [line for line in logs.output if "Traceback (most recent call last):" in line]
+        self.assertEqual(len(trace), 1)
+        self.assertGreater(len(trace[0]), 5000)
+        self.assertIn("END-OF-MESSAGE", logged)
+        self.assertIn("in crash", trace[0])
+        # Reported: nothing is left for a restart to report again.
+        self.assertEqual(self.store.load_all(), [])
+
+    def test_bound_failure_reason(self):
+        self.assertEqual(bound_failure_reason("short"), "short")
+        self.assertEqual(bound_failure_reason(None), "")
+        exact = "y" * FAILURE_REASON_LIMIT
+        self.assertEqual(bound_failure_reason(exact), exact)
+        cut = bound_failure_reason("y" * (FAILURE_REASON_LIMIT + 1))
+        self.assertEqual(len(cut), FAILURE_REASON_LIMIT)
+        self.assertTrue(cut.endswith(TRUNCATION_MARKER))
+
+    def test_every_report_path_bounds_the_reason(self):
+        sent = []
+
+        def urlopen(request, timeout=None):
+            sent.append(json.loads(request.data.decode("utf-8")))
+            response = Mock(status=204)
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            return response
+
+        client = OESClient("http://oes", "runner-token", "test-runner")
+        with patch("urllib.request.urlopen", side_effect=urlopen):
+            client.report(str(uuid.uuid4()), "failed", "z" * 6000)
+        self.assertLessEqual(len(sent[0]["failure_reason"]), FAILURE_REASON_LIMIT)
+        self.assertIn(TRUNCATION_MARKER, sent[0]["failure_reason"])
 
     def test_a_short_oes_outage_does_not_stop_the_simulation(self):
         self.process.poll.side_effect = [None, None, 0]
