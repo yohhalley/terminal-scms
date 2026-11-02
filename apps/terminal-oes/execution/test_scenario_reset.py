@@ -34,6 +34,11 @@ from .scenarios import (
     wait_for_ready_site,
 )
 from .services.ingestion import ingest_released_order
+from .services.simulations import (
+    bootstrap_document,
+    claim_next_session,
+    start_simulation,
+)
 from .services.site_sync import ingest_site_configuration_published, ingest_site_created
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "scenario_import_v1_events.json"
@@ -77,6 +82,31 @@ class ScenarioResetTests(TestCase):
         self.assertEqual(
             sorted(site.equipment.values_list("name", "equipment_type_code")),
             [("QC01", "STS"), ("RTG01", "RTG"), ("TT01", "TT"), ("TT02", "TT")],
+        )
+
+    def test_after_reset_all_four_seed_ches_are_powered_on_and_available(self):
+        """AC2.3 regression: OES used to import every CHE powered off/unavailable,
+        and the simulator bootstrap carried those values over MiniTOS's seed."""
+        project_import_v1()
+        call_command("scenario_reset", "import_v1", "--noinput", stdout=io.StringIO())
+        site, _ = project_import_v1()
+
+        flags = {
+            che.name: (che.powered_on, che.is_available, che.is_dispatched)
+            for che in EquipmentState.objects.filter(site=site)
+        }
+        self.assertEqual(flags, {
+            name: (True, True, False) for name in ("QC01", "TT01", "TT02", "RTG01")
+        })
+
+        # The simulator is bootstrapped from these OES rows.
+        start_simulation(site.pk)
+        session, token = claim_next_session("runner-test")
+        bootstrap = bootstrap_document(session, token)
+        self.assertEqual(
+            {row["name"]: (row["powered_on"], row["is_available"])
+             for row in bootstrap["equipment_state"]},
+            {name: (True, True) for name in ("QC01", "TT01", "TT02", "RTG01")},
         )
 
     def test_two_resets_produce_identical_canonical_state(self):
