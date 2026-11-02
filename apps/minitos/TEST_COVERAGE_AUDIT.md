@@ -199,7 +199,11 @@ nested piles/positions, layout assets, access policies, linear axes, berth
 segments, transfer interfaces, route nodes/edges, CHE and component telemetry,
 carrier services/visits, business processes, terminal browser/layout/CHE editor
 pages, Enterprise/Site identity and snapshot retrieval, and nested orders/order
-legs.
+legs. The vessel-visit admin panel (TCL-009, `test_vessel_visit_panel.py`)
+covers list rendering (status, eta/etd, ata/atd in the terminal timezone),
+buttons per status from the D-025 rules, CSRF-protected transition POSTs,
+server-side refusal of backward/skipped/unknown statuses, and the
+InOperation save path that TCL-010 discharge planning hooks into.
 
 Not yet directly covered:
 
