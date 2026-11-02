@@ -12,7 +12,10 @@ events in strict order and enforces the per-step time limit (D-037). The workflo
    environment (session id, token, seed, time scale), so the host-side runner
    (`apps/simulator-runner/runner.py`) claims the session and launches the image with
    `docker run` on the `terminal-scms` network, just as `make run-simulator-runner` does.
-2. Reset to the seeded state: `make scenario-reset SCENARIO=import_v1`.
+2. Reset to the seeded state with `make scenario-reset SCENARIO=import_v1`. Then move the
+   visit to InOperation with `make scenario-step SCENARIO=import_v1 STEP=visit-in-operation`,
+   which creates the discharge orders (TCL-010, #34). This step is untimed setup. Until #34
+   is on main it fails as an unknown step.
 3. Run `python tests/e2e/s1_slice.py`. It does an untimed setup (health, Site ready,
    start-simulation, session `running`, QC01/TT01/TT02/RTG01 connected and available),
    then runs steps 3a, 3b, 3c, 3d and 4, then the end-state checks, then stops the session.
@@ -53,6 +56,7 @@ pip install -r tests/e2e/requirements.txt
 python -m unittest discover -s tests/e2e -p 'test_*.py'      # self-test, no stack needed
 export COMPOSE_FILE=compose.yaml:tests/e2e/compose.e2e.yaml
 make scenario-reset SCENARIO=import_v1                       # stack up + runner running
+make scenario-step SCENARIO=import_v1 STEP=visit-in-operation # TCL-010: creates the orders
 OES_API_TOKEN=... python tests/e2e/s1_slice.py --report-dir e2e-report
 ```
 
@@ -73,6 +77,7 @@ main 3 runs in a row.
 
 - **M2 reset fix (FE).** After a reset, a stale message from the previous run can still be
   accepted. The rerun pass (`E2E_RERUN=1`, reset, run, compare) stays off until M2 merges.
+- **TCL-010 (#34, stacked on #27).** `visit-in-operation` exists only once #34 lands.
 - **TCL-034 (sim params).** A real timing profile, and OES forwarding `SIMULATOR_RTG_*`.
 - **CHEs never become available after a reset.** OES `site_sync` imports every CHE with
   `powered_on=False` and `is_available=False`, even though MiniTOS seeds them powered on.
