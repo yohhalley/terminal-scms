@@ -1,0 +1,17 @@
+# TCL-007: compose override for the CI e2e job (and local e2e runs).
+# Use with: COMPOSE_FILE=compose.yaml:tests/e2e/compose.e2e.yaml
+#
+# Interim "fast" timing profile (D-039: tests and CI use fast timings). The real
+# sim-init timing profile parameter is the S2 "Sim params" task (GD); when it
+# lands, replace these knobs with that single parameter. Values are sim seconds;
+# the session time_scale (E2E_TIME_SCALE, default 10) compresses them further.
+# Nothing here is a secret or an address.
+services:
+  terminal-oes:
+    environment:
+      # Forwarded to Godot in the runner claim (settings.SIMULATOR_SIM_SETTING_NAMES).
+      SIMULATOR_QC_WAIT_MIN_S: "1"
+      SIMULATOR_QC_WAIT_MAX_S: "2"
+      # SIMULATOR_RTG_* waits are allowlisted by the runner but NOT forwarded by
+      # OES today, so the RTG hold stays at the 10-30 sim-s default; the session
+      # time_scale brings it to about 1-3 s wall time. See tests/e2e/README.md.
