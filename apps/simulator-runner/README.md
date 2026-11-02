@@ -23,6 +23,10 @@ Requirements:
   is built and run as `linux/amd64` (`GODOT_PLATFORM`). The image checks the
   Godot download against a pinned SHA-512, the same value as
   `.github/actions/setup-godot`. On an arm64 host it runs only under emulation.
+- **Project import at build time.** The image imports the Godot project as the
+  `godot` user, which owns `/app`, using `.github/scripts/godot-import.sh`, the
+  same script CI uses (build context `ci-scripts`). The build fails and lists
+  any `.godot/imported` file that is still missing.
 
 ```bash
 make up            # core stack: broker, MiniTOS, OES, ...

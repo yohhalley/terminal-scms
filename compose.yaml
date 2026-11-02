@@ -225,6 +225,7 @@ services:
       context: ./apps/simulator-runner
       additional_contexts:
         godot: ${GODOT_CONTEXT:-./clients/godot-open-terminal}
+        ci-scripts: ./.github/scripts
       args:
         GODOT_VERSION: ${GODOT_VERSION:-4.2.1}
     restart: unless-stopped

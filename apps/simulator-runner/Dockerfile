@@ -3,7 +3,7 @@
 # simulation sessions and runs headless Godot as a child process in this same
 # container (RUNNER_LAUNCH_MODE=process), so no Docker socket is mounted
 # anywhere. Built by compose with the Godot project as the extra build context
-# "godot" (compose.yaml: additional_contexts).
+# "godot" and .github/scripts as "ci-scripts" (compose.yaml: additional_contexts).
 FROM debian:bookworm-slim
 
 ARG GODOT_VERSION=4.2.1
@@ -23,15 +23,25 @@ RUN apt-get update \
     && apt-get purge -y curl unzip && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /tmp/godot /tmp/godot.zip
 
+# /app is owned by godot: the import below runs as godot, and Godot writes
+# nothing (and still exits 0) into a project dir it can't write.
 RUN useradd --create-home --uid 10001 godot \
     && mkdir -p /app /data /opt/runner \
-    && chown godot:godot /data
+    && chown godot:godot /app /data
 
 WORKDIR /app
 COPY --from=godot --chown=godot:godot . /app
+COPY --from=ci-scripts godot-import.sh /usr/local/bin/godot-import
 COPY runner.py /opt/runner/runner.py
 
 USER godot
+
+# Import the project at build time, so every session starts from the same
+# .godot cache. The same script as CI (.github/scripts/godot-import.sh): it
+# loops headless editor passes until every *.import target exists and fails
+# the build with the missing list otherwise (method from TCL-007, #32).
+RUN GODOT_BIN=/usr/local/bin/godot godot-import /app \
+    && test "$(stat -c %U /app/.godot)" = godot
 ENV HOME=/data \
     PYTHONUNBUFFERED=1 \
     RUNNER_LAUNCH_MODE=process \

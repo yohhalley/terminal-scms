@@ -80,6 +80,29 @@ jobs:
           python-version: "3.12"
       - run: python -m unittest discover -v -s apps/simulator-runner -p 'test_*.py'
 
+  # Builds the simulator-runner image (amd64). The build imports the Godot
+  # project as the godot user and fails if any imported file is missing; the
+  # check step confirms /app and the import cache are owned by godot.
+  simulator-runner-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker compose --env-file .env.example --profile simulation build simulator-runner
+      - name: Check the import in the image
+        run: |
+          docker run --rm --entrypoint sh terminal-scms/simulator-runner:local -c '
+            set -e
+            id -un
+            stat -c "%U %n" /app /app/.godot /app/.godot/imported
+            test "$(stat -c %U /app)" = godot
+            test "$(stat -c %U /app/.godot)" = godot
+            test -s /app/.godot/global_script_class_cache.cfg
+            n=$(find /app/.godot/imported -type f | wc -l)
+            echo "imported files: $n"
+            test "$n" -gt 0'
+
   # Headless Godot unit suites (TCL-029). They use fakes for MQTT and OES, so no
   # broker or credentials are needed. A non-zero exit, a hang (timeout) or any
   # "SCRIPT ERROR" in the output fails the step (.github/scripts/run-godot-test.sh).
