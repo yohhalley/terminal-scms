@@ -8,6 +8,7 @@ from django.utils.dateparse import parse_datetime
 
 from minitos_core.models import IntegrationInbox, Order
 from minitos_core.services.order_execution import apply_execution_event
+from minitos_core.services.reset_epoch import ignore_if_stale
 from minitos_core.services.status_events import (
     SOURCE_OES_EXECUTION,
     status_event_source,
@@ -38,6 +39,12 @@ def apply_execution_message(topic, raw_payload):
         raise ValidationError(
             'Execution event requires event_id, terminal.id, order_id, and event.'
         ) from exc
+
+    # QA M2: after make scenario-reset, ids restart at 1, so an event from the
+    # previous run would match the new run's order. Ignore it before it touches
+    # the inbox or the order (logged; returns None).
+    if ignore_if_stale(topic, payload):
+        return None
 
     try:
         with transaction.atomic():

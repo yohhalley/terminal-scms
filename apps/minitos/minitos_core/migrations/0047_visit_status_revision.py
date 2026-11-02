@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('minitos_core', '0045_container_visit_exception_reason'),
+        ('minitos_core', '0046_qa_m2_scenario_reset_epoch'),
     ]
 
     operations = [

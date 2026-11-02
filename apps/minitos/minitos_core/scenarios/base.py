@@ -2,14 +2,13 @@
 
 import hashlib
 import json
-import re
 import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
 
 from django.apps import apps
 from django.core.management.color import no_style
-from django.db import connection, models, transaction
+from django.db import connection, transaction
 
 # Fixed namespace for scenario identities. Changing it changes every seeded
 # UUID (Enterprise, Site), so it is part of the TCL-006 determinism contract.
@@ -19,25 +18,54 @@ APP_LABEL = 'minitos_core'
 
 # Values that legitimately differ between two resets (D-016: "same states in the
 # same order; identical messages are not required"). The canonical dump blanks
-# them; everything else must match byte for byte.
+# exactly these (QA M1: an explicit allow-list); every other value, seeded
+# business times such as CarrierVisit.eta/ata/etd and Order.etc included, is
+# compared literally.
+#
+# JSON keys are matched by name at any depth of a JSON field (outbox payloads,
+# configuration snapshots); like the model fields below, only whether a value
+# is set (not null) is compared.
 VOLATILE_JSON_KEYS = frozenset({
     'event_id', 'occurred_at', 'generated_at', 'published_at',
     'snapshot_checksum',
+    # QA M2: the reset epoch is a fresh value per make scenario-reset.
+    'reset_epoch',
+    # QA M1: wall-clock copies of masked model fields inside payloads:
+    # snapshot equipment.ches[].state_updated_at and layout.version
+    # created_at/updated_at, order.released payload data.order.released_at.
+    'state_updated_at', 'created_at', 'updated_at', 'released_at',
     # TCL-003b: the seed's status-changed events start their own correlation
     # chain, so correlation_id equals their (uuid4) event_id.
     'correlation_id',
 })
 VOLATILE_FIELDS = {
-    # Outbox event ids are uuid4 in the existing site-sync path (BE-owned);
-    # delivery bookkeeping depends on when the outbox publisher ran.
-    'integrationoutbox': {'event_id', 'attempts', 'last_error', 'published_at'},
+    # Wall-clock stamps (auto_now/auto_now_add or set from timezone.now() while
+    # seeding); only whether they are set is compared. Measured per field by
+    # QA (PR #24 review M1) and pinned by ScenarioDumpVolatileAllowListTests.
+    'carriervisit': {'created_at', 'last_updated'},
+    'che': {'state_updated_at'},
+    'containervisit': {'last_updated'},
+    'currentsignalvalue': {'recorded_at', 'source_timestamp'},
+    'enterprise': {'created_at', 'updated_at'},
+    'site': {'created_at', 'updated_at', 'published_at'},
+    'layoutversion': {'created_at', 'updated_at', 'published_at'},
+    'operationalstateinterval': {'started_at'},
+    'orderrouteplan': {'calculated_at'},
+    # Wall-clock moments of a step (release-discharge) or the layout publish.
+    'order': {'released_at'},
+    # Outbox event ids are uuid4 in the existing site-sync path (BE-owned).
+    'integrationoutbox': {'event_id', 'created_at'},
     # The snapshot payload carries generated_at, so its checksum varies.
-    'siteconfigurationsnapshot': {'checksum'},
+    'siteconfigurationsnapshot': {'checksum', 'created_at'},
+    # QA M2: one fresh run marker per reset (only its presence is compared).
+    'scenarioresetepoch': {'epoch', 'created_at'},
 }
-
-
-# ISO 8601 timestamps serialized inside JSON payloads (snapshot rows, events).
-_ISO_TIMESTAMP = re.compile(r'^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}')
+# Masked even when unset: outbox delivery bookkeeping depends on whether the
+# outbox publisher already ran, so a drained and an undrained queue compare equal.
+ALWAYS_MASKED_FIELDS = {
+    'integrationoutbox': {'attempts', 'last_error', 'published_at'},
+}
+VOLATILE = '<volatile>'
 
 
 def scenario_uuid(*parts):
@@ -108,24 +136,27 @@ def _execute_flush(statements):
         cursor.execute('SET CONSTRAINTS ALL DEFERRED')
 
 
+def _masked(value):
+    """A volatile value: only whether it is set is compared."""
+    return None if value in (None, '') else VOLATILE
+
+
 def _canonical_value(value):
-    if isinstance(value, datetime):
-        return '<time>'
-    if isinstance(value, (date, time)):
+    if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, (Decimal, uuid.UUID)):
         return str(value)
     if isinstance(value, dict):
         return {
-            str(key): ('<volatile>' if key in VOLATILE_JSON_KEYS else _canonical_value(item))
+            str(key): (
+                _masked(item) if key in VOLATILE_JSON_KEYS else _canonical_value(item)
+            )
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
         return [_canonical_value(item) for item in value]
     if isinstance(value, float):
         return round(value, 9)
-    if isinstance(value, str) and _ISO_TIMESTAMP.match(value):
-        return '<time>'
     return value
 
 
@@ -134,21 +165,19 @@ def canonical_dump(model_list=None):
     result = {}
     for model in sorted(model_list or app_models(), key=lambda item: item._meta.db_table):
         volatile = VOLATILE_FIELDS.get(model._meta.model_name, set())
+        always_masked = ALWAYS_MASKED_FIELDS.get(model._meta.model_name, set())
         rows = []
         for instance in model._default_manager.order_by('pk'):
             row = {}
             for field in model._meta.concrete_fields:
-                if field.attname in volatile:
-                    row[field.attname] = '<volatile>'
+                if field.attname in always_masked:
+                    row[field.attname] = VOLATILE
                     continue
                 value = getattr(instance, field.attname)
-                if isinstance(field, models.DateTimeField) and value is not None:
-                    # Wall-clock stamps (created_at, published_at, started_at...)
-                    # differ per run; only their presence is compared. Seeded
-                    # business times are asserted separately in the tests.
-                    value = '<time>'
-                elif isinstance(value, (date, time)):
-                    value = value.isoformat()
+                if field.attname in volatile:
+                    # Only whether a volatile value is set is compared.
+                    row[field.attname] = _masked(value)
+                    continue
                 row[field.attname] = _canonical_value(value)
             rows.append(row)
         rows.sort(key=lambda row: json.dumps(row, sort_keys=True, default=str))
