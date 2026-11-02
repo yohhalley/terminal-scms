@@ -27,7 +27,8 @@ from minitos_core.models import (
 )
 from minitos_core.scenarios import import_v1, reset_scenario, run_step
 from minitos_core.scenarios.base import (
-    SCENARIO_NAMESPACE, _canonical_value, canonical_checksum, canonical_dump, container_number,
+    ALWAYS_MASKED_FIELDS, SCENARIO_NAMESPACE, VOLATILE, VOLATILE_FIELDS, _canonical_value,
+    canonical_checksum, canonical_dump, container_number,
     iso6346_check_digit, scenario_uuid,
 )
 from minitos_core.scenarios.export import scenario_events
@@ -140,6 +141,100 @@ class ImportV1ResetDeterminismTests(TestCase):
         with self.assertRaises(ValueError):
             reset_scenario('import_v1', containers=import_v1.MAX_CONTAINERS + 1)
         self.assertEqual(before, canonical_checksum(canonical_dump()))
+
+
+def wall_clock_shifted(days):
+    """Every timezone.now() (auto_now/auto_now_add included) runs ``days`` later."""
+    from datetime import timedelta
+    from django.utils import timezone
+
+    real_now = timezone.now
+    return mock.patch('django.utils.timezone.now', side_effect=lambda: real_now() + timedelta(days=days))
+
+
+def first_differences(first, second, limit=10):
+    found = []
+    for table in sorted(set(first) | set(second)):
+        rows_a, rows_b = first.get(table, []), second.get(table, [])
+        if len(rows_a) != len(rows_b):
+            found.append(f'{table}: {len(rows_a)} != {len(rows_b)} rows')
+            continue
+        for row_a, row_b in zip(rows_a, rows_b):
+            for key in sorted(set(row_a) | set(row_b)):
+                if row_a.get(key) != row_b.get(key):
+                    found.append(f'{table}.{key}: {row_a.get(key)!r} != {row_b.get(key)!r}')
+    return found[:limit]
+
+
+class ScenarioDumpBusinessTimesTests(TestCase):
+    """QA M1 (PR #24 review): only the explicit volatile allow-list is masked."""
+
+    def assertSameDump(self, first, second):
+        self.assertEqual(first_differences(first, second), [])
+        self.assertEqual(canonical_checksum(first), canonical_checksum(second))
+
+    def test_three_day_shift_of_business_times_changes_the_checksum(self):
+        # QA probe PB: eta, ata and Order.etc moved by +3 days used to go unnoticed.
+        from datetime import timedelta
+        from minitos_core.models import CarrierVisit, Order
+
+        reset_scenario('import_v1')
+        seeded = canonical_checksum(canonical_dump())
+        shift = timedelta(days=3)
+        for field in ('eta', 'ata'):
+            reset_scenario('import_v1')
+            visit = CarrierVisit.objects.get(name='V001')
+            CarrierVisit.objects.filter(pk=visit.pk).update(**{field: getattr(visit, field) + shift})
+            self.assertNotEqual(seeded, canonical_checksum(canonical_dump()), field)
+        reset_scenario('import_v1')
+        order = Order.objects.order_by('pk').first()
+        Order.objects.filter(pk=order.pk).update(etc=order.etc + shift)
+        self.assertNotEqual(seeded, canonical_checksum(canonical_dump()), 'etc')
+        reset_scenario('import_v1')
+        visit = CarrierVisit.objects.get(name='V001')
+        CarrierVisit.objects.filter(pk=visit.pk).update(etd=visit.etd + shift)
+        self.assertNotEqual(seeded, canonical_checksum(canonical_dump()), 'etd')
+
+    def test_business_times_are_dumped_literally(self):
+        reset_scenario('import_v1')
+        dump = canonical_dump()
+        visit = next(row for row in dump['minitos_core_carriervisit'] if row['name'] == 'V001')
+        self.assertEqual(visit['eta'], import_v1.SCENARIO_EPOCH.isoformat())
+        self.assertEqual(visit['ata'], import_v1.SCENARIO_EPOCH.isoformat())
+        self.assertNotIn(VOLATILE, (visit['eta'], visit['ata'], visit['etd']))
+        self.assertTrue(all(row['etc'] not in (None, VOLATILE) for row in dump['minitos_core_order']))
+
+    def test_volatile_allow_list_covers_every_wall_clock_field(self):
+        """A reset three days later in wall-clock time gives the same dump.
+
+        If this fails, a new field depends on the wall clock: add it to
+        VOLATILE_FIELDS (or seed it from SCENARIO_EPOCH) and say why.
+        """
+        reset_scenario('import_v1')
+        run_step('import_v1', 'release-discharge')
+        first = canonical_dump()
+        with wall_clock_shifted(3):
+            reset_scenario('import_v1')
+            run_step('import_v1', 'release-discharge')
+        self.assertSameDump(first, canonical_dump())
+
+    def test_allow_list_names_real_fields_only(self):
+        from django.apps import apps
+
+        models = {model._meta.model_name: model for model in apps.get_app_config('minitos_core').get_models()}
+        for table, fields in list(VOLATILE_FIELDS.items()) + list(ALWAYS_MASKED_FIELDS.items()):
+            self.assertIn(table, models)
+            names = {field.attname for field in models[table]._meta.concrete_fields}
+            self.assertLessEqual(fields, names, table)
+
+    def test_released_at_set_or_unset_still_changes_the_checksum(self):
+        from django.utils import timezone
+        from minitos_core.models import Order
+
+        reset_scenario('import_v1')
+        before = canonical_checksum(canonical_dump())
+        Order.objects.update(released_at=timezone.now())
+        self.assertNotEqual(before, canonical_checksum(canonical_dump()))
 
 
 class ImportV1SeedContentTests(TestCase):

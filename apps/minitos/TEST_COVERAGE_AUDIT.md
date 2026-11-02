@@ -146,6 +146,13 @@ with different epochs give the same checksum, and an invalid epoch is refused
 before wiping. `test_contract_execution_events` gains two consumer checks (goldens
 with the current epoch apply; without it they are ignored under a fence). Not
 covered without Docker: a real broker redelivering a queued QoS 1 message.
+QA M1 (2026-11-02) adds `test_scenario_import_v1.ScenarioDumpBusinessTimesTests`
+(5 tests): the canonical dump masks only the explicit volatile allow-list, so
+shifting `eta`, `ata`, `etd` or `Order.etc` by +3 days changes the checksum (QA
+probe PB), business times appear literally in the dump, a reset + release run
+with the wall clock three days ahead gives the same dump (pins the allow-list),
+the allow-list names real fields only, and setting `released_at` still changes the
+checksum.
 
 `test_pow_models.py` and `test_visit_cargo_routes.py` are demonstration scripts,
 not Django `TestCase` classes, so `manage.py test` does not discover them.
