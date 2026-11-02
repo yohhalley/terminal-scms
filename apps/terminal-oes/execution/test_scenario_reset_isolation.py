@@ -25,7 +25,7 @@ from .models import ExecutionOrder, InboxEvent, OutboxEvent, ScenarioResetEpoch,
 from .scenarios import canonical_checksum, canonical_dump, reset_execution_tables
 from .services.events import queue_execution_event
 from .services.messages import process_message
-from .services.reset_epoch import current_epoch
+from .services.reset_epoch import current_epoch, ignored_count
 from .test_contract_execution_events import SCHEMA_PATH, check_schema
 from .test_scenario_reset import fresh_events, load_fixture
 
@@ -78,9 +78,9 @@ class StaleMiniTOSMessageAfterResetTests(TestCase):
 
     def test_previous_runs_order_released_is_ignored(self):
         """O2: run 1's order.released after the reset creates no order."""
-        with self.assertLogs(LOGGER, "WARNING") as logs:
+        with self.assertLogs(LOGGER, "INFO") as logs:
             self.assertIsNone(deliver(**self.stale_released))
-        self.assertIn(f"reset_epoch '{RUN_1}' is not the current epoch {RUN_2}", logs.output[0])
+        self.assertIn(f"reset_epoch seen={RUN_1} stored={RUN_2}", logs.output[0])
         self.assertFalse(ExecutionOrder.objects.exists())
         self.assertFalse(
             InboxEvent.objects.filter(event_id=self.stale_released["payload"]["event_id"]).exists()
@@ -91,7 +91,7 @@ class StaleMiniTOSMessageAfterResetTests(TestCase):
         """Makefile order: OES is wiped while MiniTOS still has run 1's outbox rows."""
         reset_execution_tables(reset_epoch=RUN_2, scenario="import_v1")
         empty = canonical_checksum(canonical_dump())
-        with self.assertLogs(LOGGER, "WARNING"):
+        with self.assertLogs(LOGGER, "INFO"):
             self.assertIsNone(deliver(**self.stale_released))
         self.assertEqual(canonical_checksum(canonical_dump()), empty)
 
@@ -102,7 +102,7 @@ class StaleMiniTOSMessageAfterResetTests(TestCase):
         stale["payload"]["configuration_revision"] = 2
         stale["payload"]["site"]["configuration_revision"] = 2
         with mock.patch("execution.services.site_sync.fetch_execution_snapshot") as fetch:
-            with self.assertLogs(LOGGER, "WARNING"):
+            with self.assertLogs(LOGGER, "INFO"):
                 self.assertIsNone(deliver(**stale))
             fetch.assert_not_called()
         self.assertFalse(SiteProjection.objects.exists())
@@ -111,10 +111,36 @@ class StaleMiniTOSMessageAfterResetTests(TestCase):
 
     def test_unstamped_message_is_ignored_while_a_fence_is_set(self):
         _, unstamped = minitos_run(None)
-        with self.assertLogs(LOGGER, "WARNING") as logs:
+        with self.assertLogs(LOGGER, "INFO") as logs:
             self.assertIsNone(deliver(**unstamped["scms.order.released.v1"]))
-        self.assertIn(f"no reset_epoch, current epoch is {RUN_2}", logs.output[0])
+        self.assertIn(f"reset_epoch seen=none stored={RUN_2}", logs.output[0])
         self.assertFalse(ExecutionOrder.objects.exists())
+
+    def test_ignored_messages_are_logged_at_info_and_counted(self):
+        """TL 2026-11-02: drops are visible (INFO log with type and epochs) and counted."""
+        before = ignored_count()
+        before_released = ignored_count("scms.order.released.v1")
+        before_published = ignored_count("scms.site.configuration.published.v1")
+        _, unstamped = minitos_run(None)
+        with self.assertLogs(LOGGER, "INFO") as logs:
+            deliver(**self.stale_released)
+            deliver(**self.stale_published)
+            deliver(**unstamped["scms.order.released.v1"])
+        self.assertEqual([record.levelname for record in logs.records], ["INFO"] * 3)
+        self.assertIn("type=scms.order.released.v1", logs.output[0])
+        self.assertIn(f"reset_epoch seen={RUN_1} stored={RUN_2}", logs.output[0])
+        self.assertIn("type=scms.site.configuration.published.v1", logs.output[1])
+        self.assertIn(f"reset_epoch seen=none stored={RUN_2}", logs.output[2])
+        self.assertIn(f"ignored_total={before + 3}", logs.output[2])
+        self.assertEqual(ignored_count(), before + 3)
+        self.assertEqual(ignored_count("scms.order.released.v1"), before_released + 2)
+        self.assertEqual(
+            ignored_count("scms.site.configuration.published.v1"), before_published + 1,
+        )
+
+        # Accepted messages are not counted.
+        deliver(**self.run2["scms.order.released.v1"])
+        self.assertEqual(ignored_count(), before + 3)
 
     def test_current_runs_order_released_is_accepted(self):
         order = deliver(**self.run2["scms.order.released.v1"])

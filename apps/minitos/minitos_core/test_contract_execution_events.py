@@ -216,7 +216,7 @@ class GoldenExecutionEventConsumerTests(LayoutTestCase):
         topic, raw = self.rebind(document)
         self.order.refresh_from_db()
         before = self.order.status
-        with self.assertLogs('minitos_core.services.reset_epoch', 'WARNING'):
+        with self.assertLogs('minitos_core.services.reset_epoch', 'INFO'):
             self.assertIsNone(apply_execution_message(topic, raw), name)
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, before)
