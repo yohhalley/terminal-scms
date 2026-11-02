@@ -44,8 +44,15 @@ Envelope (docs/ARCHITECTURE.md synchronization rule 7):
   `correlation_id`/`causation_id` sit at the top level as in
   `scms.execution.event.v1` (`scms.order.released.v1` doesn't carry them yet).
 
-`data.sim_time_ms` is the simulation time of the triggering OES event when it
-carries `source_sim_time_ms`, else null; `data.source` is one of `minitos.api`,
+`occurred_at` stays wall-clock time, as in every MiniTOS envelope: it is when
+MiniTOS committed the fact (the historian and the outbox order rely on it),
+MiniTOS has no simulation clock, and most changes (API, admin, scenario seed)
+have no sim time. `data.sim_time_ms` carries the simulation time alongside it
+when the change was caused by an OES execution event that sends
+`source_sim_time_ms`; it is null otherwise (no OES cause, or OES didn't send
+it, which is the case today). QA M2: the optional top-level `reset_epoch` is
+stamped with the same helper as the other MiniTOS envelopes while a
+scenario-reset epoch is stored. `data.source` is one of `minitos.api`,
 `minitos.admin`, `minitos.scenario`, `minitos.system`, `oes.execution`.
 
 Same-transaction outbox, as `order.released`: the outbox row is written in the

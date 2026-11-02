@@ -42,7 +42,7 @@ TYPES = {
 
 def check_schema(instance, schema, path='$'):
     """Stdlib JSON-Schema subset used by this schema: type, const, enum, required,
-    properties, additionalProperties: false, allOf/if/then, not/required, minimum and
+    properties, additionalProperties: false, allOf/if/then, not/required, minimum, pattern and
     format uuid/date-time. Unknown keywords would be ignored, so the schema
     only uses these (asserted below)."""
     errors = []
@@ -58,6 +58,8 @@ def check_schema(instance, schema, path='$'):
         errors.append(f'{path}: expected const {schema["const"]!r}, got {instance!r}')
     if 'enum' in schema and instance not in schema['enum']:
         errors.append(f'{path}: {instance!r} not in enum')
+    if 'pattern' in schema and isinstance(instance, str) and not re.search(schema['pattern'], instance):
+        errors.append(f'{path}: {instance!r} does not match {schema["pattern"]}')
     if 'minimum' in schema and isinstance(instance, int) and instance < schema['minimum']:
         errors.append(f'{path}: {instance!r} is below the minimum {schema["minimum"]}')
     fmt = schema.get('format')
@@ -92,7 +94,7 @@ def check_schema(instance, schema, path='$'):
 
 SUPPORTED_KEYWORDS = {
     '$schema', '$id', 'title', 'description', 'type', 'const', 'enum', 'required', 'properties',
-    'additionalProperties', 'allOf', 'if', 'then', 'not', 'format', 'minimum',
+    'additionalProperties', 'allOf', 'if', 'then', 'not', 'format', 'minimum', 'pattern',
 }
 
 
@@ -219,6 +221,28 @@ class VisitStatusChangedContractTests(TestCase):
             else:
                 self.assertEqual(payload['correlation_id'], payload['event_id'])
                 self.assertIsNone(payload['causation_id'])
+
+    def test_stamped_payloads_validate_against_the_schema(self):
+        # QA M2 fence active: every status event carries the stored epoch.
+        epoch = 'run-2026-11-02T08.40'
+        with self.captureOnCommitCallbacks(execute=True):
+            reset_scenario('import_v1', containers=2, reset_epoch=epoch)
+        visit = CarrierVisit.objects.get()
+        visit.status = CarrierVisit.IN_OPERATION
+        visit.save()
+        rows = list(IntegrationOutbox.objects.filter(schema=status_events.SCHEMA).order_by('created_at', 'pk'))
+        self.assertEqual(len(rows), 4)
+        for row in rows:
+            self.assertEqual(row.payload.get('reset_epoch'), epoch)
+            self.assertEqual(check_schema(row.payload, self.schema), [])
+        bad = json.loads(json.dumps(rows[-1].payload))
+        bad['reset_epoch'] = 'bad epoch!'
+        self.assertNotEqual(check_schema(bad, self.schema), [])
+
+    def test_unfenced_payloads_carry_no_epoch(self):
+        rows = self.produce_events()
+        self.assertTrue(rows)
+        self.assertTrue(all('reset_epoch' not in row.payload for row in rows))
 
     def test_schema_rejects_broken_payloads(self):
         good = self.produce_events()[0].payload

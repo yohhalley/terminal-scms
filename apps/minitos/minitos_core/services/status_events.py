@@ -29,7 +29,9 @@ outbox publisher (``publish_uns_outbox``) sends it to MQTT as for every other
 MiniTOS event.
 
 Envelope (architecture sync rule 7): ``schema`` (name and version, as every
-SCMS event), ``event_id``, ``occurred_at`` (MiniTOS wall clock at the save),
+SCMS event), ``event_id``, ``occurred_at`` (MiniTOS wall clock at the save;
+see below), the optional ``reset_epoch`` (QA M2, stamped like every other
+MiniTOS envelope while a scenario-reset fence is active),
 Enterprise/Site/terminal scope, ``aggregate`` {type, id, revision}, where
 ``revision`` is the visit's ``status_revision`` counter (+1 per event, 1 at
 creation), ``correlation_id`` and ``causation_id``:
@@ -42,6 +44,14 @@ creation), ``correlation_id`` and ``causation_id``:
 * Without an inherited correlation id, ``correlation_id`` equals this event's
   ``event_id`` (the event starts its own chain).
 
+``occurred_at`` stays wall-clock time, as in every other MiniTOS envelope: it
+is when MiniTOS committed the fact, which is also what the historian and the
+outbox order need; MiniTOS has no simulation clock of its own, and most status
+changes (API, admin, scenario seed) have no sim time at all. When the change was
+caused by an OES execution event carrying ``source_sim_time_ms``, that value is
+copied to ``data.sim_time_ms``; otherwise (no OES cause, or OES didn't send it,
+which is the case today) it is null.
+
 Visits at a location that is not a Site have no UNS topic root and publish
 nothing.
 """
@@ -53,6 +63,8 @@ from contextlib import contextmanager
 from django.conf import settings
 from django.db.models import F
 from django.utils import timezone
+
+from minitos_core.services.reset_epoch import stamp as stamp_reset_epoch
 
 SCHEMA = 'scms.visit.status_changed.v1'
 CARRIER_VISIT = 'carrier_visit'
@@ -264,4 +276,6 @@ def build_event(instance, from_status):
             entity_type: details,
         },
     }
+    # QA M2: fence the envelope to the current scenario run (no-op outside one).
+    stamp_reset_epoch(payload)
     return {'event_id': event_id, 'topic': topic, 'schema': SCHEMA, 'payload': payload, 'qos': 1}
