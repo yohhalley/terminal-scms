@@ -83,7 +83,10 @@ Inside the image the mode is fixed by `RUNNER_LAUNCH_MODE=process`,
     for a clean world).
   - The session no longer exists (wiped by a reset): the saved claim is dropped.
 - `docker compose stop` / redeploy sends SIGTERM: the runner stops Godot and
-  reports `stopped` (grace period 30 s), so a redeploy ends the running session.
+  reports `stopped` with the reason `stopped: runner shutdown` (grace period
+  30 s), so a redeploy ends the running session. OES stores that reason on the
+  session in place of the NDEATH "offline" note; a stop requested from OES
+  clears it.
   The final status is retried a few times; if OES still cannot be reached the
   recorded state is reported at the next start.
 - A crash reports `failed` with the traceback as `failure_reason`, capped at

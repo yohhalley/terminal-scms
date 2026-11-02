@@ -19,6 +19,10 @@ ERROR_DETAIL_LIMIT = 300
 # includes the truncation marker and leaves headroom below the OES limit.
 FAILURE_REASON_LIMIT = 1900
 TRUNCATION_MARKER = "…[truncated, see runner log]"
+# Reason sent with "stopped" when the runner itself shuts down (SIGTERM/SIGINT,
+# e.g. a redeploy or `docker compose restart`). OES stores it on the session,
+# so a cleanly ended session doesn't keep the NDEATH "offline" text.
+SHUTDOWN_STOP_REASON = "stopped: runner shutdown"
 def bound_failure_reason(reason):
     """Cap a failure_reason for OES; a cut is visible (marker), never silent.
 
@@ -367,15 +371,18 @@ class SessionWorker(threading.Thread):
         self.session_id = str(claim["session"]["id"])
         self.environment = claim["environment"]
         self._stopping = threading.Event()
+        self.stop_reason = ""
         self.container_name = ""
         self.process = None
         self.final_reported = False
 
-    def request_stop(self):
+    def request_stop(self, reason=""):
         if not self._stopping.is_set():
             # A requested stop (OES or SIGTERM) is final: record it before
             # touching Godot, so a runner killed now still reports "stopped".
-            self._mark("stopped")
+            # ``reason`` (e.g. SHUTDOWN_STOP_REASON) goes to OES with it.
+            self.stop_reason = reason
+            self._mark("stopped", reason)
         self._stopping.set()
         if self.container_name:
             self.launcher.stop(self.container_name)
@@ -400,6 +407,8 @@ class SessionWorker(threading.Thread):
             # the session a failure.
             LOG.warning("Error while stopping %s ignored: %s", self.session_id, failure_reason)
             status, failure_reason = "stopped", ""
+        if status == "stopped" and not failure_reason:
+            failure_reason = self.stop_reason
         self._mark(status, failure_reason)
         self._report_final(status, failure_reason)
         if self.final_reported:
@@ -570,7 +579,7 @@ class Runner:
             if not claimed:
                 time.sleep(self.poll_interval)
         for worker in self.workers.values():
-            worker.request_stop()
+            worker.request_stop(SHUTDOWN_STOP_REASON)
         for worker in self.workers.values():
             worker.join(timeout=20)
 
