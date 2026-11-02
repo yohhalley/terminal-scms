@@ -1,0 +1,135 @@
+name: SCMS e2e (S1 slice)
+
+# TCL-007 (T-001, D-021): full compose stack + headless Godot (fast timings),
+# reset to import_v1, run the S1 slice and assert the UNS business events with
+# a <= 5 s limit per step (D-037). Flaky runs get a ticket, never a looser limit.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  s1-slice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE_FILE: compose.yaml:tests/e2e/compose.e2e.yaml
+      COMPOSE_PROJECT_NAME: terminal-scms
+      E2E_STEP_LIMIT_S: "5"        # D-037. Do not raise; open a flaky-run ticket instead.
+      E2E_TIME_SCALE: "10"         # simulation session time_scale (fast profile stand-in)
+      E2E_REPORT_DIR: e2e-report
+      # D-016 rerun pass (reset again, same sequence). Blocked on QA M2 (reset must
+      # not accept stale messages from the previous run). Set to "1" once M2 is merged.
+      E2E_RERUN: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tests/e2e/requirements.txt
+
+      - name: Install the e2e runner
+        run: python -m pip install -r tests/e2e/requirements.txt
+
+      - name: Runner self-test
+        run: python -m unittest discover -v -s tests/e2e -p 'test_*.py'
+
+      - name: Create a throwaway .env (generated per run, never uploaded)
+        run: |
+          cp .env.example .env
+          runner_token="$(openssl rand -hex 32)"
+          oes_token="$(openssl rand -hex 32)"
+          echo "::add-mask::$runner_token"
+          echo "::add-mask::$oes_token"
+          sed -i \
+            -e "s/^SIMULATOR_RUNNER_TOKEN=.*/SIMULATOR_RUNNER_TOKEN=$runner_token/" \
+            -e "s/^OES_API_TOKEN=.*/OES_API_TOKEN=$oes_token/" .env
+          {
+            echo "SIMULATOR_RUNNER_TOKEN=$runner_token"
+            echo "OES_API_TOKEN=$oes_token"
+          } >> "$GITHUB_ENV"
+          docker compose config --quiet
+
+      - name: Build images (incl. the simulation profile's Godot image)
+        run: docker compose --profile simulation build
+
+      # The godot-simulator service is not started as a long-lived service: it
+      # needs a per-session environment, so the host runner below launches it
+      # (as on the testing server). Only the core services are brought up here.
+      - name: Start the stack and wait for health
+        run: docker compose up --detach --wait --wait-timeout 300
+
+      - name: Start the simulator host runner
+        run: |
+          mkdir -p "$E2E_REPORT_DIR"
+          OES_URL=http://127.0.0.1:8010 \
+          RUNNER_IDENTITY=ci-e2e \
+          RUNNER_POLL_INTERVAL=1 \
+          SIMULATOR_IMAGE=terminal-scms/godot-simulator:local \
+          SIMULATOR_DOCKER_NETWORK=terminal-scms \
+            nohup python3 apps/simulator-runner/runner.py > "$E2E_REPORT_DIR/simulator-runner.log" 2>&1 &
+          echo $! > "$E2E_REPORT_DIR/simulator-runner.pid"
+
+      - name: Reset to import_v1
+        run: make scenario-reset SCENARIO=import_v1
+
+      - name: Run the S1 slice
+        run: python tests/e2e/s1_slice.py --report-dir "$E2E_REPORT_DIR"
+
+      - name: Reset and rerun (D-016) — blocked on QA M2
+        if: env.E2E_RERUN == '1'
+        run: |
+          make scenario-reset SCENARIO=import_v1
+          python tests/e2e/s1_slice.py --report-dir "$E2E_REPORT_DIR/rerun" \
+            --compare-with "$E2E_REPORT_DIR/s1_slice.json"
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p "$E2E_REPORT_DIR/logs"
+          docker compose ps --all > "$E2E_REPORT_DIR/logs/compose-ps.txt" 2>&1 || true
+          docker compose logs --timestamps --no-color > "$E2E_REPORT_DIR/logs/compose.log" 2>&1 || true
+          for name in $(docker ps -a --filter label=scms.simulation-session --format '{{.Names}}'); do
+            docker logs --timestamps "$name" > "$E2E_REPORT_DIR/logs/$name.log" 2>&1 || true
+          done
+          if [ -f "$E2E_REPORT_DIR/simulator-runner.pid" ]; then
+            kill "$(cat "$E2E_REPORT_DIR/simulator-runner.pid")" 2>/dev/null || true
+          fi
+          rm -f .env
+
+      - name: Upload the e2e report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-s1-report
+          path: |
+            ${{ env.E2E_REPORT_DIR }}/*.md
+            ${{ env.E2E_REPORT_DIR }}/*.json
+            ${{ env.E2E_REPORT_DIR }}/*.jsonl
+            ${{ env.E2E_REPORT_DIR }}/rerun/
+          if-no-files-found: warn
+
+      - name: Upload container logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-s1-logs
+          path: |
+            ${{ env.E2E_REPORT_DIR }}/logs/
+            ${{ env.E2E_REPORT_DIR }}/simulator-runner.log
+          if-no-files-found: warn
+
+      - name: Tear down
+        if: always()
+        run: docker compose --profile simulation down --volumes --remove-orphans || true
