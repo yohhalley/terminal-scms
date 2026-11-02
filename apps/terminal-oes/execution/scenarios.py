@@ -20,12 +20,15 @@ from django.core.management.color import no_style
 from django.db import connection, models, transaction
 
 from .models import ExecutionOrder, SimulationSession, SiteProjection
+from .services.reset_epoch import set_epoch, validate_epoch
 
 APP_LABEL = "execution"
 SCENARIOS = ("import_v1",)
 
 VOLATILE_JSON_KEYS = frozenset({
     "event_id", "occurred_at", "generated_at", "published_at", "snapshot_checksum", "checksum",
+    # QA M2: the reset epoch is a fresh value per make scenario-reset.
+    "reset_epoch",
 })
 VOLATILE_FIELDS = {
     # Source event ids are uuid4 in MiniTOS (BE-owned) and the snapshot
@@ -35,6 +38,8 @@ VOLATILE_FIELDS = {
     "outboxevent": {"attempts", "last_error", "published_at"},
     "siteprojection": {"snapshot_checksum"},
     "simulationsession": {"configuration_checksum"},
+    # QA M2: one fresh run marker per reset (only its presence is compared).
+    "scenarioresetepoch": {"epoch"},
 }
 _ISO_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
 
@@ -52,8 +57,16 @@ def active_sessions():
 
 
 @transaction.atomic
-def reset_execution_tables(*, force=False):
-    """Empty every ``execution`` table (auth users survive) and restart sequences."""
+def reset_execution_tables(*, force=False, reset_epoch=None, scenario=""):
+    """Empty every ``execution`` table (auth users survive) and restart sequences.
+
+    QA M2: ``reset_epoch`` (the value ``make scenario-reset`` also gives MiniTOS)
+    is stored in the same transaction. From then on OES ignores MiniTOS
+    envelopes from any other epoch, including the previous run's outbox rows
+    that MiniTOS may still publish before its own reset. ``None``: no fence.
+    """
+    if reset_epoch:
+        reset_epoch = validate_epoch(reset_epoch)
     running = list(active_sessions().values_list("pk", flat=True))
     if running and not force:
         raise ValidationError(
@@ -72,6 +85,7 @@ def reset_execution_tables(*, force=False):
             cursor.execute("SET CONSTRAINTS ALL DEFERRED")
     else:
         connection.ops.execute_sql_flush(statements)
+    set_epoch(reset_epoch, scenario=scenario)
     return len(tables)
 
 
