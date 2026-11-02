@@ -350,6 +350,9 @@ class ImportV1SimulatorClockAndSeedTests(TestCase):
         self.assertIn('SIMULATOR_SEED=$(SEED)', target)
         self.assertIn('terminal-oes python manage.py scenario_reset $(SCENARIO) --noinput --seed $(SEED)', target)
         self.assertIn('--seed $(SEED) --containers $(CONTAINERS)', target)
+        # QA M2: both services get the same reset epoch in one make run.
+        self.assertRegex(makefile, r'(?m)^SCENARIO_RESET_EPOCH := ')
+        self.assertEqual(target.count('--reset-epoch $(SCENARIO_RESET_EPOCH)'), 2)
 
 
 class ContainerNumberTests(TestCase):

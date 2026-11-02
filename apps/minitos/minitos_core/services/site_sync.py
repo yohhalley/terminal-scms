@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 from minitos_core import models as domain
+from minitos_core.services.reset_epoch import stamp as stamp_reset_epoch
 
 
 DEFAULT_ENTERPRISE_CODE = 'terminal-velocity'
@@ -25,7 +26,7 @@ def _topic_root(site):
 
 
 def _event_payload(site, schema, event_id, data):
-    return {
+    payload = {
         'schema': schema,
         'event_id': str(event_id),
         'occurred_at': timezone.now().isoformat(),
@@ -43,6 +44,8 @@ def _event_payload(site, schema, event_id, data):
         },
         'data': data,
     }
+    # QA M2: fence the envelope to the current scenario run (no-op outside one).
+    return stamp_reset_epoch(payload)
 
 
 def _available_site_code(enterprise, location):

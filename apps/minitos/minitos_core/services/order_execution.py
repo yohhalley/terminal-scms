@@ -17,6 +17,7 @@ from minitos_core.models import (
     Position,
 )
 from minitos_core.services.layout import resolved_interface_point
+from minitos_core.services.reset_epoch import stamp as stamp_reset_epoch
 from minitos_core.services.site_sync import ensure_site_for_location
 
 
@@ -178,6 +179,8 @@ def _queue_released_order(order):
             'legs': legs,
         },
     }
+    # QA M2: fence the envelope to the current scenario run (no-op outside one).
+    stamp_reset_epoch(payload)
     event = IntegrationOutbox.objects.create(
         event_id=logical_event_id,
         topic=(
