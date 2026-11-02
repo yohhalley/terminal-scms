@@ -5,6 +5,11 @@
 events in strict order and enforces the per-step time limit (D-037). The workflow is
 `.github/workflows/e2e.yml` (job `s1-slice`).
 
+Only `scms.order.released.v1` and `scms.execution.event.v1` for the slice's order are
+in the strict order. Visit `scms.visit.status_changed.v1` events (TCL-003b, #37: one per
+seeded visit at reset, one at visit-in-operation, container-visit changes during
+execution) are recorded in `uns_messages.jsonl` but are neither matched nor "extra".
+
 ## What the job does
 
 1. Build the images (`--profile simulation`) and bring the core stack up with `--wait`.
