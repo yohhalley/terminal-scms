@@ -37,6 +37,38 @@ class SimulationStartCommandTests(TestCase):
         run("simulation_start", "--time-scale", "4")
         self.assertEqual(SimulationSession.objects.get().time_scale, 4.0)
 
+    def test_time_scale_outside_the_model_range_is_refused(self):
+        project_import_v1()
+        for value in ("0", "-1", "0.001", "100.5", "nan"):
+            with self.subTest(time_scale=value):
+                with self.assertRaisesMessage(CommandError, "--time-scale must be between 0.01 and 100"):
+                    run("simulation_start", "--time-scale", value)
+        self.assertFalse(SimulationSession.objects.exists())
+
+    def test_time_scale_range_bounds_are_accepted(self):
+        project_import_v1()
+        run("simulation_start", "--time-scale", "0.01")
+        self.assertEqual(SimulationSession.objects.get().time_scale, 0.01)
+        run("simulation_stop", "--wait", "0")
+        run("simulation_start", "--time-scale", "100")
+        self.assertEqual(
+            SimulationSession.objects.exclude(actual_state=SimulationSession.STOPPED).get().time_scale,
+            100.0,
+        )
+
+    def test_start_while_the_previous_session_is_stopping_fails(self):
+        project_import_v1()
+        run("simulation_start")
+        claim_next_session("runner-1")
+        with self.assertRaises(CommandError):
+            run("simulation_stop", "--wait", "0")
+        session = SimulationSession.objects.get()
+        self.assertEqual(session.actual_state, SimulationSession.STOPPING)
+
+        with self.assertRaisesMessage(CommandError, "still stopping"):
+            run("simulation_start")
+        self.assertEqual(SimulationSession.objects.count(), 1)
+
     def test_unknown_site_is_a_clear_error(self):
         with self.assertRaisesMessage(CommandError, "scenario-reset"):
             run("simulation_start", "--site", "nowhere")
