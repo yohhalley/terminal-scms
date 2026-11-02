@@ -12,6 +12,8 @@ states and order, not byte-identical messages).
 | Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`) | see the five commands below |
 | Release the discharge order | `make scenario-step STEP=release-discharge [ORDER=id]` | `docker compose exec -T minitos python manage.py scenario_step import_v1 release-discharge` |
 | Dispatch the next step | `make scenario-step STEP=dispatch-next [ORDER=tos-id]` | `docker compose exec -T terminal-oes python manage.py scenario_step import_v1 dispatch-next` |
+| Reset, then start the simulator | `make scenario-reset SIM=1` | `simulation_stop --wait 30` before step 1, `simulation_start` after step 4 (in `terminal-oes`) |
+| Start / stop a simulation | `make sim-start` / `make sim-stop` | `docker compose exec -T terminal-oes python manage.py simulation_start` / `simulation_stop --wait 30` |
 | Compare two resets | `make scenario-dump` | `... manage.py scenario_dump --checksum` in each service |
 
 `make scenario-reset` runs, in this order:
@@ -46,6 +48,19 @@ MiniTOS state is kept.
 
 Each service resets only its own database through its own management command;
 nothing writes across databases. Django users (admin accounts) are kept.
+
+## Playing `import_v1` with the simulator runner (Runner, S2)
+
+With the `simulator-runner` service running (`make up-runner`, see
+`apps/simulator-runner/README.md`), `make scenario-reset SIM=1` adds two steps:
+before step 1 it stops any active simulation session and waits up to 30 s for
+the runner to report it stopped (so the reset is not refused), and after step 4
+it starts a new session for Site `test-terminal` (`SITE=`, `TIME_SCALE=`). The
+runner then launches Godot headless, which loads the freshly projected Site
+from OES and connects to the broker.
+
+If `simulation_stop` times out, check `make logs-runner`; as a last resort run
+`scenario_reset ... --force` by hand.
 
 ## What `import_v1` seeds
 

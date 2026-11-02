@@ -211,6 +211,42 @@ services:
       - godot-simulator-data:/data
     networks: [scms]
 
+  # Runner (S2): long-running simulator runner for the testing server. It claims
+  # the OES simulation session (`make sim-start`, or `make scenario-reset SIM=1`)
+  # and runs headless Godot as a child process, so no Docker socket is needed.
+  # Restart-safe: claims are kept on the volume; after a restart the runner
+  # resumes a session OES still serves and releases (fails) any other one.
+  # Addresses and secrets come from .env only (see .env.example).
+  simulator-runner:
+    profiles: ["simulation"]
+    image: terminal-scms/simulator-runner:local
+    platform: ${GODOT_PLATFORM:-linux/amd64}
+    build:
+      context: ./apps/simulator-runner
+      additional_contexts:
+        godot: ${GODOT_CONTEXT:-./clients/godot-open-terminal}
+      args:
+        GODOT_VERSION: ${GODOT_VERSION:-4.2.1}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment:
+      OES_URL: ${SIMULATOR_OES_URL:-http://terminal-oes:8000}
+      SIMULATOR_RUNNER_TOKEN: ${SIMULATOR_RUNNER_TOKEN:?Set SIMULATOR_RUNNER_TOKEN in .env}
+      # Must stay the same across restarts, or saved claims cannot be resumed.
+      RUNNER_IDENTITY: ${RUNNER_IDENTITY:-compose-runner}
+      RUNNER_LAUNCH_MODE: process
+      RUNNER_POLL_INTERVAL: ${RUNNER_POLL_INTERVAL:-2}
+      LOG_LEVEL: ${RUNNER_LOG_LEVEL:-INFO}
+    depends_on:
+      hivemq:
+        condition: service_healthy
+      terminal-oes:
+        condition: service_healthy
+    volumes:
+      - simulator-runner-data:/data
+    networks: [scms]
+
 networks:
   scms:
     name: terminal-scms
@@ -221,3 +257,4 @@ volumes:
   minitos-db-data:
   oes-db-data:
   godot-simulator-data:
+  simulator-runner-data:

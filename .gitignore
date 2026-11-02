@@ -3,3 +3,5 @@
 **/.DS_Store
 historian/timebase/runtime/
 integrations/flowfuse/runtime/
+__pycache__/
+*.pyc
