@@ -7,10 +7,14 @@ They run on SQLite (settings_test); MQTT is replaced by a fake client.
 
 import io
 import json
+import os
 import random
 import unittest
 import uuid
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -19,7 +23,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from minitos_core.models import (
     CarrierVisit, Che, ContainerVisit, Enterprise, EquipmentType, IntegrationOutbox,
@@ -353,6 +357,56 @@ class ImportV1SimulatorClockAndSeedTests(TestCase):
         # QA M2: both services get the same reset epoch in one make run.
         self.assertRegex(makefile, r'(?m)^SCENARIO_RESET_EPOCH := ')
         self.assertEqual(target.count('--reset-epoch $(SCENARIO_RESET_EPOCH)'), 2)
+        # TL 2026-11-02: each service's reset stops the target with a re-run hint.
+        self.assertIn('|| $(call SCENARIO_RESET_FAILED,terminal-oes)', target)
+        self.assertIn('|| $(call SCENARIO_RESET_FAILED,minitos)', target)
+
+
+STUB_COMPOSE = '''#!/bin/sh
+echo "compose $*"
+case "$*" in *"$FAIL_SERVICE python manage.py scenario_reset"*) echo "reset blew up" >&2; exit 3;; esac
+exit 0
+'''
+
+
+@unittest.skipUnless((REPO_ROOT / 'Makefile').exists(), 'monorepo checkout required')
+@unittest.skipUnless(shutil.which('make'), 'make is not installed')
+class ScenarioResetMakeTargetTests(SimpleTestCase):
+    """TL 2026-11-02: make scenario-reset fails loudly when either service's reset fails.
+
+    Runs the real target against a copy of the Makefile in a temp dir with a stub
+    COMPOSE, so no containers are touched and no .env is created in the repo.
+    """
+
+    def make_scenario_reset(self, fail_service):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            shutil.copy(REPO_ROOT / 'Makefile', tmp / 'Makefile')
+            (tmp / '.env.example').write_text('')
+            stub = tmp / 'compose-stub'
+            stub.write_text(STUB_COMPOSE)
+            stub.chmod(0o755)
+            return subprocess.run(
+                ['make', '--no-print-directory', '-C', str(tmp), 'scenario-reset', f'COMPOSE={stub}'],
+                env={'PATH': os.environ.get('PATH', ''), 'FAIL_SERVICE': fail_service},
+                capture_output=True, text=True, timeout=60,
+            )
+
+    def test_failed_reset_exits_non_zero_and_asks_for_a_re_run(self):
+        for service in ('terminal-oes', 'minitos'):
+            with self.subTest(service=service):
+                result = self.make_scenario_reset(service)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f'scenario-reset: {service} reset failed', result.stderr)
+                self.assertIn('re-run scenario-reset', result.stderr)
+                # Stops there: nothing waits for a half-reset system to be ready.
+                self.assertNotIn('compose exec -T terminal-oes python manage.py scenario_wait_ready', result.stdout)
+
+    def test_successful_reset_runs_through_to_wait_ready(self):
+        result = self.make_scenario_reset('none')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('reset failed', result.stderr)  # make echoes the recipe on stdout
+        self.assertIn('compose exec -T terminal-oes python manage.py scenario_wait_ready', result.stdout)
 
 
 class ContainerNumberTests(TestCase):

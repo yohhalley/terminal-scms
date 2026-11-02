@@ -63,9 +63,16 @@ fence their cross-service messages with it:
   `scms.execution.event.v1`.
 - Consumers (`minitos_core.services.apply_execution_message`, OES
   `execution.services.messages.process_message`) compare it with their own
-  epoch. A different or missing `reset_epoch` is **ignored**: a warning
-  `Ignored <schema> <event_id> on <topic> from a previous scenario run: ...` is
-  logged, no inbox row is written, nothing changes, and the message is acked.
+  epoch. A different or missing `reset_epoch` is **ignored** (strict policy):
+  no inbox row is written, nothing changes, and the message is acked.
+- Every ignored message is logged at **INFO** (loggers
+  `minitos_core.services.reset_epoch` and `execution.services.reset_epoch`, both
+  sent to the console so drops show in container and CI logs):
+  `Ignored stale message type=<schema> event_id=<id> topic=<topic>: reset_epoch seen=<epoch|none> stored=<epoch> (previous scenario run; ignored_total=<n>).`
+- Each service keeps an in-process counter of ignored messages per message type:
+  `services.reset_epoch.ignored_count()` (total) or `ignored_count(<schema>)`;
+  `reset_ignored_count()` clears it. It restarts at 0 with the process, and the
+  running total is in every log line.
 - With no epoch stored (normal operation, tests, or a reset run by hand without
   `--reset-epoch`) nothing is stamped and every message is accepted, exactly as
   before. `scenario_reset` prints `reset epoch none (no stale-message fence)` then.
@@ -88,15 +95,22 @@ docker compose exec -T minitos python manage.py scenario_reset import_v1 --noinp
 docker compose exec -T terminal-oes python manage.py scenario_wait_ready
 ```
 
-If the MiniTOS reset fails after the OES reset (for example the TT route error
-below), OES already holds the new epoch and ignores MiniTOS's old-epoch
-messages until the reset is run again; rerun `make scenario-reset`.
+If either service's reset fails, `make scenario-reset` stops there with a
+non-zero exit and prints
+`scenario-reset: <terminal-oes|minitos> reset failed; the services are not on the same run. Fix the error above and re-run scenario-reset.`
+(`scenario_wait_ready` is not run). If the MiniTOS reset fails after the OES
+reset (for example the TT route error below), OES already holds the new epoch
+and ignores MiniTOS's old-epoch messages until the reset is run again; rerun
+`make scenario-reset`.
 An epoch is 1-64 characters: letters, digits, `.`, `_`, `:` or `-`; anything else
 is refused before any table is wiped.
 
 Tests: `minitos_core/test_scenario_reset_isolation.py` (P5) and
 `execution/test_scenario_reset_isolation.py` (O2) replay the previous run's
-message after a reset; the contract tests check the stamped envelope against the
+message after a reset and check the INFO log and the ignored counter;
+`minitos_core/test_scenario_import_v1.py` (`ScenarioResetMakeTargetTests`) runs
+the real target against a stub `COMPOSE` and checks the failure exit and message;
+the contract tests check the stamped envelope against the
 schema and feed goldens with and without `reset_epoch` to the MiniTOS consumer.
 
 If the TT leg cannot be routed (QC01 lane to BLOCK01.TL), the MiniTOS reset
