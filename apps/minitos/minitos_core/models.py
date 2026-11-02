@@ -2697,14 +2697,22 @@ class CarrierVisit(models.Model):
     # current status again is a no-op. The initial status of a new visit is not
     # a transition (the import_v1 seed creates the visit as Arrived, D-018).
     # Backward moves with a tracked reason are post-MVP (backlog).
+    # D-025 order. The rule is enforced in clean()/save() (and the API/serializer
+    # call status_transition_error()). QuerySet.update(status=...) and
+    # bulk_update() bypass it: don't use them to change a visit's status.
     STATUS_ORDER = (PLANNED, ANNOUNCED, ARRIVED, IN_OPERATION, COMPLETE, DEPARTED)
     STATUS_BACKWARD = 'visit_status_backward'
     STATUS_SKIPPED = 'visit_status_skipped'
     STATUS_TRANSITION_CODES = (STATUS_BACKWARD, STATUS_SKIPPED)
+    # Backward refusal is D-025 (Yael). Skip refusal is the Sprint 2 acceptance
+    # criterion, pending Yael's answer to E4 / spec Q23. If E4 allows forward
+    # skips, set this to False: every later status becomes allowed, backward
+    # stays refused.
+    REFUSE_SKIPPED_STEPS = True
 
     @classmethod
     def next_status(cls, current):
-        """The only status a visit in ``current`` may move to, or None at the end."""
+        """The status after ``current`` in STATUS_ORDER, or None at the end."""
         if current not in cls.STATUS_ORDER:
             return None
         index = cls.STATUS_ORDER.index(current)
@@ -2712,27 +2720,36 @@ class CarrierVisit(models.Model):
 
     @classmethod
     def allowed_next_statuses(cls, current):
-        nxt = cls.next_status(current)
-        return [nxt] if nxt else []
+        """Statuses a visit in ``current`` may move to (same status excluded)."""
+        if current not in cls.STATUS_ORDER:
+            return []
+        later = list(cls.STATUS_ORDER[cls.STATUS_ORDER.index(current) + 1:])
+        return later[:1] if cls.REFUSE_SKIPPED_STEPS else later
+
+    @classmethod
+    def _allowed_text(cls, from_status, allowed):
+        if not allowed:
+            return f'{from_status} is the final status.'
+        if len(allowed) == 1:
+            return f'The only allowed next status is {allowed[0]}.'
+        return f'Allowed next statuses: {", ".join(allowed)}.'
 
     @classmethod
     def status_transition_error(cls, name, from_status, to_status):
         """Return a VisitStatusTransitionError if ``from_status -> to_status`` is
-        refused by D-025, else None. Same status and unknown statuses return None
-        (unknown values are left to the field's choices validation)."""
+        refused (backward: D-025; skipped: only while REFUSE_SKIPPED_STEPS), else
+        None. Same status and unknown statuses return None (unknown values are
+        left to the field's choices validation)."""
         if from_status == to_status:
             return None
         if from_status not in cls.STATUS_ORDER or to_status not in cls.STATUS_ORDER:
             return None
         old_i = cls.STATUS_ORDER.index(from_status)
         new_i = cls.STATUS_ORDER.index(to_status)
-        if new_i == old_i + 1:
+        if new_i > old_i and (new_i == old_i + 1 or not cls.REFUSE_SKIPPED_STEPS):
             return None
         allowed = cls.allowed_next_statuses(from_status)
-        allowed_text = (
-            f'The only allowed next status is {allowed[0]}.' if allowed
-            else f'{from_status} is the final status.'
-        )
+        allowed_text = cls._allowed_text(from_status, allowed)
         if new_i < old_i:
             code = cls.STATUS_BACKWARD
             message = (
@@ -2744,8 +2761,7 @@ class CarrierVisit(models.Model):
             message = (
                 f'Visit {name} cannot skip from {from_status} to {to_status}: '
                 f'vessel-visit status moves one step at a time '
-                f'(Created, Announced, Arrived, InOperation, Complete, Departed; D-025). '
-                f'{allowed_text}'
+                f'({", ".join(cls.STATUS_ORDER)}; D-025). {allowed_text}'
             )
         return VisitStatusTransitionError(message, code, from_status, to_status, allowed)
 

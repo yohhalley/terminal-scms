@@ -32,7 +32,7 @@ from .models import (
     ProcessHierarchy, ProcessVersion, RouteEdge, RouteNode, ServiceCargoRoute, Site,
     SiteConfigurationSnapshot,
     SignalBinding, SignalDefinition, StorageGrid, TransferInterface,
-    VisitCargoRoute, WorkQueue, validate_iana_timezone,
+    VisitCargoRoute, VisitStatusTransitionError, WorkQueue, validate_iana_timezone,
 )
 from .serializers import (
     AccessPolicySerializer, BerthSegmentSerializer, BulkContainerVisitSerializer,
@@ -672,7 +672,24 @@ class CarrierVisitViewSet(viewsets.ModelViewSet):
         location_pk = self.kwargs.get('location_pk')
         if location_pk:
             queryset = queryset.filter(location=location_pk)
+        if self.request is not None and self.request.method in ('PUT', 'PATCH'):
+            # D-025: lock the visit row so the serializer checks the status
+            # transition against the stored status (see update()).
+            queryset = queryset.select_for_update(of=('self',))
         return queryset
+
+    def update(self, request, *args, **kwargs):
+        """PUT/PATCH under a row lock. A D-025 refusal is always a 400 on
+        ``status`` with the transition code, never a 500, even if the model's
+        own check in save() is the one that refuses (e.g. a concurrent writer
+        on a database without row locks)."""
+        try:
+            with transaction.atomic():
+                return super().update(request, *args, **kwargs)
+        except VisitStatusTransitionError as error:
+            raise DRFValidationError(
+                {'status': [error.transition_message]}, code=error.transition_code,
+            ) from error
 
 
 class CarrierServiceViewSet(viewsets.ModelViewSet):
