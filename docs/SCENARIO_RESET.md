@@ -81,15 +81,19 @@ Yard planning seed (TCL-012, #10): the reset also stores `SEED` in MiniTOS
 (`ScenarioSeed`, one row, wiped by the next reset). When the visit later goes
 InOperation (TCL-010: admin panel, API, Django admin or
 `make scenario-step STEP=visit-in-operation`), each new discharge order gets a
-random free BLOCK01 ground slot drawn from
+random free BLOCK01 slot drawn from
 `random.Random("TCL-012:<SEED>:<visit id>")`, so the same `SEED` gives the same
 slots after a reset. "Free" means no container (`container_visit` empty,
 `is_occupied` false), not `is_reserved`, and not the destination of an open
-order (not complete, failed or cancelled) or of one of its legs. A full BLOCK01
-refuses InOperation with `discharge_no_free_slot`; nothing spills into another
-block. The QA M2 reset epoch is not part of the seed (it is new on every reset).
-Until TCL-010b the seed pre-creates the order, with a slot from the scenario RNG
-above, and InOperation adopts it.
+order (not complete, failed or cancelled) or of one of its legs, at any tier up
+to `StorageGrid.max_tier` (import_v1 BLOCK01 is 3). Planning fills ground
+(tier 1) first, then stacks on tier 2 and up; a higher tier is only chosen when
+every lower tier of the same pile is already held, so no floating containers
+are planned (Yael, 5 Nov 2026). A fully stacked BLOCK01 refuses InOperation with
+`discharge_no_free_slot`; nothing spills into another block. The QA M2 reset
+epoch is not part of the seed (it is new on every reset). Until TCL-010b the
+seed pre-creates the order, with a slot from the scenario RNG above, and
+InOperation adopts it.
 Event ids, wall-clock timestamps and the snapshot checksum (it embeds
 `generated_at`) still differ per run; the canonical dump masks exactly those.
 Outbox delivery bookkeeping (`attempts`, `last_error`, `published_at`) is also

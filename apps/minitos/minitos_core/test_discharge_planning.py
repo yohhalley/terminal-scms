@@ -25,7 +25,7 @@ from minitos_core.models import (
     Position,
 )
 from minitos_core.scenarios import reset_scenario, run_step
-from minitos_core.services import discharge_planning
+from minitos_core.services import discharge_planning, yard_planning
 from minitos_core.services.discharge_planning import (
     CODE_NO_FREE_SLOT,
     DischargePlanningError,
@@ -42,7 +42,13 @@ def drop_seeded_orders():
 
 
 def block_slots():
+    """Ground (tier 1) slots of BLOCK01."""
     return Position.objects.filter(pile__storage_grid__name='BLOCK01', tier=1)
+
+
+def all_block_slots():
+    """Every BLOCK01 slot up to the grid max_tier (for full-block tests)."""
+    return Position.objects.filter(pile__storage_grid__name='BLOCK01')
 
 
 class DischargePlanningTestBase(TestCase):
@@ -140,7 +146,7 @@ class CreatesOrdersTests(DischargePlanningTestBase):
 
     def test_rng_is_injectable_and_draws_from_the_free_slots(self):
         free = list(discharge_planning.free_yard_slots(block_slots().first().pile.storage_grid))
-        expected = random.Random(42).sample(free, self.containers)
+        expected = yard_planning.choose_slots(free, self.containers, random.Random(42))
 
         planned = plan_visit_discharge(self.visit, rng=random.Random(42))
 
@@ -153,8 +159,9 @@ class CreatesOrdersTests(DischargePlanningTestBase):
     def test_reserved_or_occupied_slots_are_not_used(self):
         grid = block_slots().first().pile.storage_grid
         free = list(discharge_planning.free_yard_slots(grid))
-        keep = free[:self.containers]
-        block_slots().exclude(pk__in=[slot.pk for slot in keep]).update(is_reserved=True)
+        # Keep the first free ground slots so the plan stays on tier 1.
+        keep = [slot for slot in free if slot.tier == 1][:self.containers]
+        all_block_slots().exclude(pk__in=[slot.pk for slot in keep]).update(is_reserved=True)
 
         self.move_to_in_operation()
 
@@ -176,14 +183,14 @@ class CreatesOrdersTests(DischargePlanningTestBase):
         )
 
     def test_no_free_slot_refuses_in_operation_with_a_clear_error(self):
-        block_slots().update(is_reserved=True)
+        all_block_slots().update(is_reserved=True)
         self.visit.status = CarrierVisit.IN_OPERATION
 
         with self.assertRaises(DischargePlanningError) as caught:
             self.visit.save()
 
         self.assertEqual(caught.exception.planning_code, CODE_NO_FREE_SLOT)
-        self.assertIn('0 free ground slot', caught.exception.planning_message)
+        self.assertIn('0 free slot', caught.exception.planning_message)
         self.assertIn('BLOCK01', caught.exception.planning_message)
         self.assertIn('V001', caught.exception.planning_message)
         self.visit.refresh_from_db()
@@ -192,15 +199,18 @@ class CreatesOrdersTests(DischargePlanningTestBase):
 
     def test_fewer_free_slots_than_containers_plans_nothing(self):
         grid = block_slots().first().pile.storage_grid
-        free = list(discharge_planning.free_yard_slots(grid))
-        block_slots().exclude(pk__in=[slot.pk for slot in free[:self.containers - 1]]).update(is_reserved=True)
+        free = [slot for slot in discharge_planning.free_yard_slots(grid) if slot.tier == 1]
+        keep = free[:self.containers - 1]
+        all_block_slots().exclude(pk__in=[slot.pk for slot in keep]).update(is_reserved=True)
 
         with self.assertRaises(DischargePlanningError):
             plan_visit_discharge(self.visit)
 
         self.assertFalse(self.discharge_orders().exists())
-        self.assertEqual(Position.objects.filter(is_reserved=False, pile__storage_grid=grid, tier=1).count(),
-                         self.containers - 1)
+        self.assertEqual(
+            Position.objects.filter(is_reserved=False, pile__storage_grid=grid).count(),
+            self.containers - 1,
+        )
 
 
 class AdoptsExistingOrderTests(DischargePlanningTestBase):
@@ -273,7 +283,7 @@ class AdoptsExistingOrderTests(DischargePlanningTestBase):
         self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
 
     def test_adopted_seed_with_no_free_slot_still_moves(self):
-        block_slots().update(is_reserved=True)
+        all_block_slots().update(is_reserved=True)
         self.move_to_in_operation()
         self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
 
@@ -316,7 +326,7 @@ class TriggerPathTests(DischargePlanningTestBase):
         self.assertEqual(self.discharge_orders().count(), self.containers)
 
     def test_transition_api_no_free_slot_is_409_with_code(self):
-        block_slots().update(is_reserved=True)
+        all_block_slots().update(is_reserved=True)
         response = self.transition('InOperation')
         self.assertEqual(response.status_code, status.HTTP_409_CONFLICT, response.content)
         self.assertEqual(response.data['code'], CODE_NO_FREE_SLOT)
@@ -332,13 +342,13 @@ class TriggerPathTests(DischargePlanningTestBase):
             'minitos_core:carrier-visit-detail',
             kwargs={'location_pk': self.visit.location_id, 'pk': self.visit.pk},
         )
-        block_slots().update(is_reserved=True)
+        all_block_slots().update(is_reserved=True)
         response = client.patch(url, {'status': 'InOperation'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
         self.assertEqual(response.data['status'][0].code, CODE_NO_FREE_SLOT)
         self.assertFalse(self.discharge_orders().exists())
 
-        block_slots().update(is_reserved=False)
+        all_block_slots().update(is_reserved=False)
         response = client.patch(url, {'status': 'InOperation'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
         self.assertEqual(self.discharge_orders().count(), self.containers)
@@ -351,7 +361,7 @@ class TriggerPathTests(DischargePlanningTestBase):
         self.assertEqual(self.discharge_orders().count(), self.containers)
 
     def test_admin_change_page_no_free_slot_shows_the_error_on_status(self):
-        block_slots().update(is_reserved=True)
+        all_block_slots().update(is_reserved=True)
         response = self.admin_post('InOperation')
         self.assertEqual(response.status_code, 200)
         errors = response.context['adminform'].form.errors

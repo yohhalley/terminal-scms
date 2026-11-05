@@ -12,8 +12,9 @@ Which block
     block lane by code).
 
 What "free" means (``free_yard_slots``)
-    A ground slot (tier 1) of the block's grid, with an operational position
-    (so an order can point at it), that is
+    A slot of the block's grid at tier 1..``StorageGrid.max_tier`` (the layout
+    source of truth for stack height; import_v1's BLOCK01 is max_tier=3), with
+    an operational position (so an order can point at it), that is
 
     * not occupied: no ``container_visit`` and ``is_occupied`` is False;
     * not reserved: ``is_reserved`` is False (planning sets it when it picks
@@ -23,7 +24,13 @@ What "free" means (``free_yard_slots``)
       such an order ends on it. This catches a slot an order points at even
       if its ``is_reserved`` flag was never set or was cleared.
 
-    Upper tiers are not planned (no stacking in the MVP).
+    Capacity counts every such slot. Stacking order is enforced by
+    ``choose_slots`` (Yael, 5 Nov 2026): fill ground (tier 1) first, then
+    tier 2, then tier 3, and so on. A tier-N slot is only chosen when every
+    lower tier of the same pile is already held (occupied, reserved, an
+    open-order target, or chosen earlier in the same draw), so planning
+    never places a floating container. ``discharge_no_free_slot`` is raised
+    only when every tier is full.
 
 How seeding works (``slot_rng``)
     The draw uses its own ``random.Random`` (never the global ``random``
@@ -78,25 +85,77 @@ def open_order_destination_q():
 
 
 def free_yard_slots(grid):
-    """Free ground slots of ``grid`` (see the module docstring), by pk."""
+    """Unheld slots of ``grid`` up to ``grid.max_tier`` (see the module docstring).
+
+    Returns every unheld slot with an operational position; ``choose_slots``
+    then fills the lowest available tier first and refuses floating stacks.
+    Ordered by pk so a locked ``select_for_update`` list stays stable.
+    """
     return (
         Position.objects.filter(
-            pile__storage_grid=grid, tier=1, container_visit__isnull=True,
-            is_reserved=False, is_occupied=False, operational_position__isnull=False,
+            pile__storage_grid=grid,
+            tier__lte=grid.max_tier,
+            container_visit__isnull=True,
+            is_reserved=False,
+            is_occupied=False,
+            operational_position__isnull=False,
         )
         .exclude(open_order_destination_q())
-        .select_related('operational_position')
+        .select_related('operational_position', 'pile')
         .order_by('pk')
     )
 
 
 def choose_slots(free, count, rng):
-    """``count`` distinct slots from the ``free`` list (in pk order), drawn
-    with ``rng``. The caller checks there are enough (and raises its own
-    clear error otherwise)."""
+    """``count`` distinct slots from ``free``, lowest tier first, no floating.
+
+    Within each tier, picks randomly with ``rng``. Tier 1 is exhausted before
+    any tier 2 is considered, and so on up to the highest tier present in
+    ``free``. A tier-N slot is only eligible when every lower tier of the same
+    pile is already held outside ``free``, or was chosen earlier in this call
+    (so a single plan can fill ground and then stack on the piles it just
+    reserved). The caller checks there are enough unheld slots overall; this
+    raises if stacking rules make fewer than ``count`` reachable.
+    """
+    free = list(free)
     if count > len(free):
         raise ValueError(f'{count} slot(s) needed, {len(free)} free.')
-    return rng.sample(list(free), count)
+    if count == 0:
+        return []
+
+    free_keys = {(slot.pile_id, slot.tier) for slot in free}
+    remaining = {slot.pk: slot for slot in free}
+    chosen = []
+    chosen_keys = set()
+    max_tier = max(slot.tier for slot in free)
+
+    for tier in range(1, max_tier + 1):
+        need = count - len(chosen)
+        if need <= 0:
+            break
+        candidates = []
+        for slot in remaining.values():
+            if slot.tier != tier:
+                continue
+            if all(
+                (slot.pile_id, lower) in chosen_keys
+                or (slot.pile_id, lower) not in free_keys
+                for lower in range(1, tier)
+            ):
+                candidates.append(slot)
+        if not candidates:
+            continue
+        pick = rng.sample(candidates, min(need, len(candidates)))
+        for slot in pick:
+            chosen.append(slot)
+            chosen_keys.add((slot.pile_id, slot.tier))
+            del remaining[slot.pk]
+
+    if len(chosen) < count:
+        raise ValueError(
+            f'{count} slot(s) needed, only {len(chosen)} reachable without a floating stack.'
+        )
+    return chosen
 
 
 def prefer_import_block(lanes):

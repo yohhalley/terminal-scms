@@ -18,11 +18,13 @@ Idempotent: a container that already has a live discharge (MOVE_IN) order is
 adopted, not planned again. The import_v1 seed still pre-creates its orders
 until TCL-010b, so on the demo path every order is adopted.
 
-The yard slot is a random free ground slot (tier 1) of BLOCK01 (the block
-served by the block lane), drawn from a seeded ``random.Random`` (D-016: the
-same scenario seed and visit give the same slots on a rerun). TCL-012 owns the
-block choice, what "free" means and the seed: see ``services.yard_planning``.
-Tests can pass their own ``rng``.
+The yard slot is a random free slot of BLOCK01 (the block served by the
+block lane), drawn from a seeded ``random.Random`` (D-016: the same scenario
+seed and visit give the same slots on a rerun). TCL-012 fills ground (tier 1)
+first, then stacks on higher tiers up to ``StorageGrid.max_tier`` without
+floating containers. TCL-012 owns the block choice, what "free" means, the
+stacking order and the seed: see ``services.yard_planning``. Tests can pass
+their own ``rng``.
 """
 
 import itertools
@@ -159,8 +161,9 @@ def _work_queue(visit):
 
 
 def free_yard_slots(grid):
-    """Free ground slots of ``grid`` that a plan can still reserve (TCL-012
-    definition in ``services.yard_planning``)."""
+    """Unheld yard slots of ``grid`` that a plan can still reserve (TCL-012
+    definition in ``services.yard_planning``; stacking order is applied by
+    ``choose_slots``)."""
     return yard_planning.free_yard_slots(grid)
 
 
@@ -277,7 +280,7 @@ def check_discharge_plannable(visit):
 def _no_free_slot(visit, grid, needed, free):
     _fail(
         visit, CODE_NO_FREE_SLOT,
-        f'{needed} container(s) need a yard slot but block {grid.name} has {free} free ground slot(s)',
+        f'{needed} container(s) need a yard slot but block {grid.name} has {free} free slot(s)',
     )
 
 
