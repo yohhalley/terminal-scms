@@ -35,8 +35,8 @@ help:
 		'  make run-simulator-runner Start the restricted host-side Godot runner' \
 		'  make scenario-reset [SCENARIO=import_v1] [SEED=n] [CONTAINERS=1-5]' \
 		'                      Wipe OES + MiniTOS data, clear retained MQTT, seed and publish the Site' \
-		'  make scenario-step STEP=release-discharge|dispatch-next [ORDER=id]' \
-		'                      Run one scripted demo step (MiniTOS release / OES dispatch)' \
+		'  make scenario-step STEP=visit-in-operation|release-discharge|dispatch-next [ORDER=id]' \
+		'                      Run one scripted demo step (MiniTOS visit/release, OES dispatch)' \
 		'  make scenario-dump  Print canonical-state checksums of both databases'
 
 init:
@@ -151,11 +151,11 @@ scenario-reset: init
 
 scenario-step: init
 	@case '$(STEP)' in \
-	release-discharge) \
+	visit-in-operation|release-discharge) \
 		$(COMPOSE) exec -T minitos python manage.py scenario_step $(SCENARIO) $(STEP) $(SCENARIO_ORDER_ARG) ;; \
 	dispatch-next) \
 		$(COMPOSE) exec -T terminal-oes python manage.py scenario_step $(SCENARIO) $(STEP) $(SCENARIO_ORDER_ARG) ;; \
-	*) echo 'Usage: make scenario-step STEP=release-discharge|dispatch-next [ORDER=id]'; exit 2 ;; \
+	*) echo 'Usage: make scenario-step STEP=visit-in-operation|release-discharge|dispatch-next [ORDER=id]'; exit 2 ;; \
 	esac
 
 scenario-dump: init

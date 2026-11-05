@@ -32,7 +32,7 @@ from .models import (
     ProcessHierarchy, ProcessVersion, RouteEdge, RouteNode, ServiceCargoRoute, Site,
     SiteConfigurationSnapshot,
     SignalBinding, SignalDefinition, StorageGrid, TransferInterface,
-    VisitCargoRoute, WorkQueue, validate_iana_timezone,
+    VisitCargoRoute, VisitStatusTransitionError, WorkQueue, validate_iana_timezone,
 )
 from .serializers import (
     AccessPolicySerializer, BerthSegmentSerializer, BulkContainerVisitSerializer,
@@ -54,6 +54,7 @@ from .serializers import (
     TransferInterfaceSerializer, UserSerializer, VisitCargoRouteSerializer,
     WorkQueueSerializer,
 )
+from .services.discharge_planning import DischargePlanningError
 from .permissions import IsMESService, IsOESServiceOrAuthenticated
 from .services import (
     EXECUTION_EVENTS, accessible_terminals, apply_execution_event, create_site,
@@ -672,7 +673,35 @@ class CarrierVisitViewSet(viewsets.ModelViewSet):
         location_pk = self.kwargs.get('location_pk')
         if location_pk:
             queryset = queryset.filter(location=location_pk)
+        if self.request is not None and self.request.method in ('PUT', 'PATCH'):
+            # D-025: lock the visit row so the serializer checks the status
+            # transition against the stored status. select_for_update() only
+            # holds the lock inside a transaction: this relies on update()
+            # wrapping super().update() (and so get_object()) in
+            # transaction.atomic(). Outside one, Django raises
+            # TransactionManagementError on PostgreSQL (SQLite ignores the
+            # lock), so don't call get_object() for
+            # PUT/PATCH from anywhere else without an atomic block.
+            queryset = queryset.select_for_update(of=('self',))
         return queryset
+
+    def update(self, request, *args, **kwargs):
+        """PUT/PATCH under a row lock. A D-025 refusal is always a 400 on
+        ``status`` with the transition code, never a 500, even if the model's
+        own check in save() is the one that refuses (e.g. a concurrent writer
+        on a database without row locks)."""
+        try:
+            with transaction.atomic():
+                return super().update(request, *args, **kwargs)
+        except VisitStatusTransitionError as error:
+            raise DRFValidationError(
+                {'status': [error.transition_message]}, code=error.transition_code,
+            ) from error
+        except DischargePlanningError as error:
+            # TCL-010: InOperation refused because discharge planning cannot run.
+            raise DRFValidationError(
+                {'status': [error.planning_message]}, code=error.planning_code,
+            ) from error
 
 
 class CarrierServiceViewSet(viewsets.ModelViewSet):
@@ -1371,37 +1400,66 @@ def bulk_create_container_visits(request):
 def transition_visit_status(request, visit_id):
     """
     API endpoint for transitioning visit status.
+
+    D-025: the status only moves forward, one step at a time
+    (Created -> Announced -> Arrived -> InOperation -> Complete -> Departed).
+    - 200: changed, or same status (no-op, nothing saved).
+    - 400: missing status, or a value that is not a visit status.
+    - 404: unknown visit.
+    - 409 {success: false, code, message, from_status, to_status, allowed_next}:
+      code ``visit_status_backward`` or ``visit_status_skipped``.
     """
-    try:
-        visit = CarrierVisit.objects.get(id=visit_id)
-    except CarrierVisit.DoesNotExist:
-        return Response({'error': 'Visit not found'}, status=status.HTTP_404_NOT_FOUND)
-
     new_status = request.data.get('status')
-    if not new_status:
-        return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
+    with transaction.atomic():
+        try:
+            visit = CarrierVisit.objects.select_for_update().get(id=visit_id)
+        except CarrierVisit.DoesNotExist:
+            return Response({'error': 'Visit not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    # TCL-032: the legacy VisitStateManager/VisitSerializer never existed in this
-    # codebase. Use the same rules as the CarrierVisit API (CarrierVisitSerializer:
-    # status must be one of CarrierVisit.STATUS_CHOICES); no transition graph is
-    # enforced because none is defined yet (open question for the PO).
-    # A same-status request is a 200 no-op: nothing is saved, so save() does not
-    # recompute etd or bump last_updated.
-    old_status = visit.status
-    if new_status == old_status:
-        return Response({
-            'success': True,
-            'message': f'Visit {visit.name} is already {old_status}; no change.',
-            'visit': CarrierVisitSerializer(visit).data,
-        })
-    serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
-    if not serializer.is_valid():
-        return Response({
-            'success': False,
-            'message': f'Invalid status {new_status!r} for visit {visit.name}.',
-            'errors': serializer.errors,
-        }, status=status.HTTP_400_BAD_REQUEST)
-    serializer.save()
+        if not new_status:
+            return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # TCL-032: validate through CarrierVisitSerializer (status choices).
+        # A same-status request is a 200 no-op: nothing is saved, so save() does not
+        # recompute etd or bump last_updated.
+        old_status = visit.status
+        if new_status == old_status:
+            return Response({
+                'success': True,
+                'message': f'Visit {visit.name} is already {old_status}; no change.',
+                'visit': CarrierVisitSerializer(visit).data,
+            })
+        refusal = CarrierVisit.status_transition_error(visit.name, old_status, new_status)
+        if refusal is not None:
+            return Response({
+                'success': False,
+                'code': refusal.transition_code,
+                'message': refusal.transition_message,
+                'from_status': refusal.from_status,
+                'to_status': refusal.to_status,
+                'allowed_next': refusal.allowed_next,
+            }, status=status.HTTP_409_CONFLICT)
+        serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'code': 'visit_status_unknown',
+                'message': f'Invalid status {new_status!r} for visit {visit.name}.',
+                'errors': serializer.errors,
+            }, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            with transaction.atomic():
+                serializer.save()
+        except DischargePlanningError as error:
+            # TCL-010: moving to InOperation plans the discharge; if it cannot,
+            # the visit keeps its status.
+            return Response({
+                'success': False,
+                'code': error.planning_code,
+                'message': error.planning_message,
+                'from_status': old_status,
+                'to_status': new_status,
+            }, status=status.HTTP_409_CONFLICT)
     return Response({
         'success': True,
         'message': f'Visit {visit.name} status changed from {old_status} to {visit.status}.',

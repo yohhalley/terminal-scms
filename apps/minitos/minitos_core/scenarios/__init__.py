@@ -26,18 +26,23 @@ def reset_scenario(name, *, seed=None, containers=1):
     Runs in one transaction: a failing seed leaves the previous state intact.
     MQTT is not touched here; the outbox rows are published by the normal
     ``publish_uns_outbox`` worker.
+
+    TCL-012: ``seed`` is stored (``ScenarioSeed``) so planning that runs later,
+    e.g. the yard slot draw at InOperation, uses the same seed (D-016).
     """
     import random
 
     from django.db import transaction
 
     from ..services.che_components import ensure_component_catalog, ensure_signal_catalog
+    from ..services.yard_planning import set_scenario_seed
     from .base import wipe_minitos_tables
 
     scenario = get_scenario(name)
     seed = scenario.DEFAULT_SEED if seed is None else int(seed)
     with transaction.atomic():
         tables = wipe_minitos_tables()
+        set_scenario_seed(name, seed)
         ensure_signal_catalog(ensure_component_catalog())
         result = scenario.seed(random.Random(seed), containers=containers)
     result['tables_wiped'] = tables
