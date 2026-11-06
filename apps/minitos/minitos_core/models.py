@@ -217,6 +217,10 @@ class ContainerVisit(models.Model):
         choices=STATUS_CHOICES,
         default=PREADVISED,
     )
+    # TCL-003b: aggregate revision of the visit's status history; +1 per published
+    # scms.visit.status_changed.v1 event (1 = the first status at creation).
+    # Maintained by services/status_events.py; not edited by hand.
+    status_revision = models.PositiveIntegerField(default=0, editable=False)
     current_che = models.ForeignKey(
         'Che', related_name='carried_container_visits',
         on_delete=models.RESTRICT, blank=True, null=True,
@@ -1581,6 +1585,24 @@ class IntegrationOutbox(models.Model):
         ordering = ['created_at']
 
 
+
+class ScenarioResetEpoch(models.Model):
+    """QA M2: the reset epoch (generation marker) of the current scenario run.
+
+    ``make scenario-reset`` writes one row with the same opaque value into both
+    services. Every MiniTOS outbox envelope carries it as ``reset_epoch`` and the
+    OES execution-event consumer ignores envelopes from any other epoch, so a
+    message queued or in flight from the previous run cannot change the new one.
+    No row (normal operation, or a reset without ``--reset-epoch``) means no fence.
+    """
+
+    epoch = models.CharField(max_length=64)
+    scenario = models.CharField(max_length=40, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.scenario or "scenario"} reset epoch {self.epoch}'
+
 ###################################
 class OrderRoutePlan(models.Model):
     DRAFT = 'draft'
@@ -2594,6 +2616,10 @@ class CarrierVisit(models.Model):
         choices=STATUS_CHOICES,
         default=PLANNED,
     )
+    # TCL-003b: aggregate revision of the visit's status history; +1 per published
+    # scms.visit.status_changed.v1 event (1 = the first status at creation).
+    # Maintained by services/status_events.py; not edited by hand.
+    status_revision = models.PositiveIntegerField(default=0, editable=False)
     location = models.ForeignKey(
         'Location',
         on_delete=models.RESTRICT,

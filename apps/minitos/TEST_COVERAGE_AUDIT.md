@@ -136,6 +136,23 @@ and available (spec K3); K7 seed 1 and simulator-clock epoch, pinned against
 and rolls it back (BE S-2). `test_order_execution.LegMovementModeTests` (3 tests)
 pins `_leg_movement_mode` directly: out-of-order sequences, mixed modes, no edges
 (BE S-1).
+QA M2 (2026-11-02) adds `minitos_core/test_scenario_reset_isolation.py` (11 tests):
+a previous run's `leg_dispatched` (PR #24 P5) delivered after a fenced reset is
+ignored (no inbox row, order and canonical checksum unchanged), also before the
+order is released and when the envelope has no `reset_epoch`; the current run's
+events still apply; an unfenced reset keeps the old behaviour; the reset stamps
+`reset_epoch` on site and order envelopes only when an epoch is set, two resets
+with different epochs give the same checksum, and an invalid epoch is refused
+before wiping. `test_contract_execution_events` gains two consumer checks (goldens
+with the current epoch apply; without it they are ignored under a fence). Not
+covered without Docker: a real broker redelivering a queued QoS 1 message.
+QA M1 (2026-11-02) adds `test_scenario_import_v1.ScenarioDumpBusinessTimesTests`
+(5 tests): the canonical dump masks only the explicit volatile allow-list, so
+shifting `eta`, `ata`, `etd` or `Order.etc` by +3 days changes the checksum (QA
+probe PB), business times appear literally in the dump, a reset + release run
+with the wall clock three days ahead gives the same dump (pins the allow-list),
+the allow-list names real fields only, and setting `released_at` still changes the
+checksum.
 
 `test_pow_models.py` and `test_visit_cargo_routes.py` are demonstration scripts,
 not Django `TestCase` classes, so `manage.py test` does not discover them.
