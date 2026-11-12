@@ -28,6 +28,7 @@ from .mqtt import connect as connect_mqtt, create_client
 from .services.dispatch import apply_command_event, dispatch_next_operation
 from .services.ingestion import ingest_released_order
 from .services.site_sync import (
+    _import_equipment,
     _snapshot_checksum,
     ingest_site_configuration_published,
     ingest_site_created,
@@ -602,6 +603,75 @@ class SiteSynchronizationTests(TestCase):
         self.assertEqual(unchanged.pk, site.pk)
         self.assertEqual(unchanged.source_revision, 1)
         stale_loader.assert_not_called()
+
+    def _imported_site(self):
+        payload = self.site_event()
+        return ingest_site_created('site/topic', payload)
+
+    def _che(self, **state):
+        che = {
+            'id': 17, 'name': 'SC01', 'equipment_type_id': 4,
+            'is_in_maintenance': False, 'latitude': 17.94, 'longitude': -102.15,
+            'rotation': 90.0,
+        }
+        che.update(state)
+        return {'equipment': {'types': [{'id': 4, 'equipment_type': 'SC'}], 'ches': [che]}}
+
+    def _flags(self, site):
+        equipment = EquipmentState.objects.get(site=site, tos_che_id=17)
+        return equipment.powered_on, equipment.is_available
+
+    def test_import_equipment_takes_power_and_availability_from_minitos(self):
+        site = self._imported_site()
+
+        _import_equipment(site, self._che(powered_on=True, is_available=True))
+        self.assertEqual(self._flags(site), (True, True))
+
+        _import_equipment(site, self._che(powered_on=False, is_available=False))
+        self.assertEqual(self._flags(site), (False, False))
+        self.assertEqual(EquipmentState.objects.filter(site=site).count(), 1)
+
+    def test_import_equipment_defaults_missing_or_invalid_flags_to_false(self):
+        site = self._imported_site()
+
+        _import_equipment(site, self._che())
+        self.assertEqual(self._flags(site), (False, False))
+
+        _import_equipment(site, self._che(powered_on='true', is_available=1))
+        self.assertEqual(self._flags(site), (False, False))
+
+    def test_import_equipment_keeps_available_implies_powered_and_not_in_maintenance(self):
+        site = self._imported_site()
+
+        _import_equipment(site, self._che(powered_on=False, is_available=True))
+        self.assertEqual(self._flags(site), (False, False))
+
+        _import_equipment(
+            site, self._che(powered_on=True, is_available=True, is_in_maintenance=True),
+        )
+        self.assertEqual(self._flags(site), (True, False))
+
+    def test_configuration_resync_updates_existing_equipment_flags(self):
+        def publish(revision, **state):
+            payload, snapshot = self.configuration_event(revision)
+            snapshot['equipment']['ches'][0].update(state)
+            payload['data']['snapshot_checksum'] = _snapshot_checksum(snapshot)
+            return ingest_site_configuration_published(
+                'configuration/topic', payload, snapshot_loader=Mock(return_value={
+                    'revision': revision,
+                    'checksum': payload['data']['snapshot_checksum'],
+                    'payload': snapshot,
+                }),
+            )
+
+        site = publish(1, powered_on=False, is_available=False)
+        self.assertEqual(self._flags(site), (False, False))
+        pk = EquipmentState.objects.get(site=site, tos_che_id=17).pk
+
+        site = publish(2, powered_on=True, is_available=True)
+        self.assertEqual(site.source_revision, 2)
+        self.assertEqual(self._flags(site), (True, True))
+        self.assertEqual(EquipmentState.objects.get(site=site, tos_che_id=17).pk, pk)
 
     def test_checksum_failure_keeps_projection_unready_and_records_failure(self):
         payload, snapshot = self.configuration_event(checksum='0' * 64)

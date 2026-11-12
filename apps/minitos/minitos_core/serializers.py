@@ -821,6 +821,19 @@ class CarrierVisitSerializer(serializers.ModelSerializer):
             'calculated_duration_display',
         ]
 
+    def validate_status(self, value):
+        # D-025: forward-only, one step at a time (CarrierVisit.status_transition_error).
+        # A new visit may start at any status; the same status is a no-op.
+        if self.instance is not None:
+            error = CarrierVisit.status_transition_error(
+                self.instance.name, self.instance.status, value,
+            )
+            if error is not None:
+                raise serializers.ValidationError(
+                    error.transition_message, code=error.transition_code,
+                )
+        return value
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         berth = attrs.get('planned_berth', getattr(self.instance, 'planned_berth', None))

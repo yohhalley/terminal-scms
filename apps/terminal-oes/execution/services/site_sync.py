@@ -152,6 +152,17 @@ def _validate_snapshot(document, identity, data):
     return snapshot
 
 
+# A CHE whose MiniTOS state is missing or not a JSON boolean is imported as
+# powered off and unavailable (the model default): OES must never offer
+# equipment for dispatch on a guess.
+IMPORTED_FLAG_DEFAULT = False
+
+
+def _imported_flag(che, key):
+    value = che.get(key)
+    return value if isinstance(value, bool) else IMPORTED_FLAG_DEFAULT
+
+
 def _import_equipment(site, snapshot):
     equipment = snapshot.get('equipment') or {}
     type_codes = {
@@ -162,6 +173,15 @@ def _import_equipment(site, snapshot):
     for che in equipment.get('ches', []):
         che_id = int(che['id'])
         equipment_type_id = che.get('equipment_type_id')
+        # Power and availability come from MiniTOS (it seeds them; the
+        # simulator bootstrap is built from these rows). Availability also
+        # keeps the OES invariant: powered on and not in maintenance.
+        powered_on = _imported_flag(che, 'powered_on')
+        is_in_maintenance = bool(che.get('is_in_maintenance', False))
+        is_available = (
+            _imported_flag(che, 'is_available') and powered_on and not is_in_maintenance
+        )
+        # update_or_create: a re-sync (new revision) updates existing rows too.
         EquipmentState.objects.update_or_create(
             site=site,
             tos_che_id=che_id,
@@ -169,11 +189,11 @@ def _import_equipment(site, snapshot):
                 'name': che['name'],
                 'equipment_type_id': equipment_type_id,
                 'equipment_type_code': type_codes.get(equipment_type_id, ''),
-                'powered_on': False,
+                'powered_on': powered_on,
                 'working': False,
-                'is_available': False,
+                'is_available': is_available,
                 'is_dispatched': False,
-                'is_in_maintenance': bool(che.get('is_in_maintenance', False)),
+                'is_in_maintenance': is_in_maintenance,
                 'latitude': che.get('latitude'),
                 'longitude': che.get('longitude'),
                 'rotation': float(che.get('rotation', 0.0)),

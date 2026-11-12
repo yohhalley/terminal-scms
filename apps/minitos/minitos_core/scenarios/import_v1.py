@@ -34,6 +34,7 @@ from ..services import (
     current_layout, geographic_distance_m, local_to_geographic, publish_layout,
     sync_axis_graph, sync_berth_bollards, sync_interface_positions, sync_yard_grid,
 )
+from ..services.discharge_planning import plan_visit_discharge
 from ..services.order_execution import EXCEPTION_BLOCK_NAME, release_order
 from ..services.routing import _endpoint_node, _shortest_path
 from ..services.site_sync import (
@@ -420,6 +421,45 @@ def release_discharge(order_id=None):
     return release_order(order.pk)
 
 
+class VisitInOperationResult:
+    """Outcome of the ``visit-in-operation`` step, printed by scenario_step."""
+
+    def __init__(self, visit, old_status, planned):
+        self.visit = visit
+        self.old_status = old_status
+        self.planned = planned
+
+    def summary(self):
+        created = sum(1 for item in self.planned if item.created)
+        adopted = len(self.planned) - created
+        orders = ', '.join(str(item.order.pk) for item in self.planned) or 'none'
+        return (
+            f'visit {self.visit.name} {self.old_status} -> {self.visit.status}; '
+            f'discharge orders {orders} ({created} created, {adopted} adopted).'
+        )
+
+
+def visit_in_operation(order_id=None):
+    """Step ``visit-in-operation`` (TCL-010, design sec. 8 (a)): move the seeded
+    visit Arrived -> InOperation through CarrierVisit.save(), the same path as
+    the API and the admin, so discharge planning runs. A rerun saves nothing
+    (the visit is already InOperation) and planning is idempotent, so it only
+    reports (adopts) the orders that exist."""
+    if order_id is not None:
+        raise ValidationError('visit-in-operation takes no --order.')
+    with transaction.atomic():
+        visit = CarrierVisit.objects.select_for_update().filter(name=VISIT_NAME).first()
+        if visit is None:
+            raise ValidationError(f'No {VISIT_NAME} visit; run scenario-reset.')
+        old_status = visit.status
+        if old_status != CarrierVisit.IN_OPERATION:
+            visit.status = CarrierVisit.IN_OPERATION
+            visit.save()
+        planned = plan_visit_discharge(visit)
+    return VisitInOperationResult(visit, old_status, planned)
+
+
 STEPS = {
+    'visit-in-operation': visit_in_operation,
     'release-discharge': release_discharge,
 }

@@ -1,6 +1,7 @@
 from django.urls import path, include, re_path
 from django.conf.urls import include
 from django.contrib.auth.models import User
+from django.db import transaction
 from rest_framework import routers, serializers, viewsets
 from rest_framework_nested import routers as nested_routers
 
@@ -133,8 +134,10 @@ urlpatterns = [
 
     # Visit API endpoints
     path('api/bulk-create-container-visits/', views.bulk_create_container_visits, name='bulk_create_container_visits'),
-    path('api/visits/<int:visit_id>/transition-status/', views.transition_visit_status, name='transition_visit_status'),
-    path('api/container-visits/<int:container_id>/transition-status/', views.transition_container_status, name='transition_container_status'),
+    # TCL-003b: atomic, so the status change and its status-changed outbox row
+    # commit together (same-transaction outbox).
+    path('api/visits/<int:visit_id>/transition-status/', transaction.atomic(views.transition_visit_status), name='transition_visit_status'),
+    path('api/container-visits/<int:container_id>/transition-status/', transaction.atomic(views.transition_container_status), name='transition_container_status'),
     path('api/visits/<int:visit_id>/status-summary/', views.visit_status_summary, name='visit_status_summary'),
 
     # Terminal Editor API endpoints

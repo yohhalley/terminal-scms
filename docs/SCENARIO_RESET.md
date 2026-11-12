@@ -9,21 +9,23 @@ states and order, not byte-identical messages).
 
 | What | Make | Without Make |
 | --- | --- | --- |
-| Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`) | see the five commands below |
+| Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`, `RESET_EPOCH=` optional) | see the steps below; pass the same `--reset-epoch` to both services |
 | Release the discharge order | `make scenario-step STEP=release-discharge [ORDER=id]` | `docker compose exec -T minitos python manage.py scenario_step import_v1 release-discharge` |
 | Dispatch the next step | `make scenario-step STEP=dispatch-next [ORDER=tos-id]` | `docker compose exec -T terminal-oes python manage.py scenario_step import_v1 dispatch-next` |
 | Reset, then start the simulator | `make scenario-reset SIM=1` | `simulation_stop --wait 30` before step 1, `simulation_start` after step 4 (in `terminal-oes`) |
 | Start / stop a simulation | `make sim-start` / `make sim-stop` | `docker compose exec -T terminal-oes python manage.py simulation_start` / `simulation_stop --wait 30` |
 | Compare two resets | `make scenario-dump` | `... manage.py scenario_dump --checksum` in each service |
 
-`make scenario-reset` runs, in this order:
+`make scenario-reset` first generates one reset epoch for the run
+(`<UTC timestamp>-<8 random hex>`, or `RESET_EPOCH=...` if given) and prints it,
+then runs, in this order:
 
 0. `SIMULATOR_SEED=$(SEED) docker compose up --detach --no-deps --wait terminal-oes`:
    recreates `terminal-oes` only if its `SIMULATOR_SEED` differs from `SEED`
    (otherwise a no-op), so the next simulator session gets the same seed.
-1. `terminal-oes: scenario_reset import_v1 --noinput --seed $(SEED)`: checks that
+1. `terminal-oes: scenario_reset import_v1 --noinput --seed $(SEED) --reset-epoch <epoch>`: checks that
    OES would hand the simulator `SIMULATOR_SEED=$(SEED)` (it stops before wiping
-   if not), then empties every `execution` table. It refuses while a simulation
+   if not), then empties every `execution` table and stores the epoch. It refuses while a simulation
    session is active; stop the simulation on the OES Simulations page first (or
    pass `--force` by hand).
 2. `minitos: clear_retained_mqtt`: publishes an empty retained payload to every
@@ -31,16 +33,87 @@ states and order, not byte-identical messages).
    `spBv1.0/STATE/<host>` topic is never cleared. `--dry-run` only lists topics.
    It waits `--settle-seconds` (default 1) for retained messages; on a slow or
    remote broker run it by hand with `--settle-seconds 3`.
-3. `minitos: scenario_reset import_v1 --noinput --seed $(SEED)`: empties every `minitos_core`
-   table, restarts id sequences, restores the CHE component and signal
+3. `minitos: scenario_reset import_v1 --noinput --seed $(SEED) --containers $(CONTAINERS) --reset-epoch <epoch>`:
+   empties every `minitos_core` table, restarts id sequences, stores the epoch, restores the CHE component and signal
    catalogues, seeds the scenario and publishes the Site through the normal
    layout publish path (outbox `scms.site.created.v1` and
    `scms.site.configuration.published.v1`). It prints `canonical-sha256 ...`.
 4. `terminal-oes: scenario_wait_ready`: waits up to 60 s for the OES Site
    projection to become READY (needs the broker, `minitos-outbox` and
-   `oes-uns-consumer` to be running). If it times out, run `make scenario-reset`
-   again: a stale higher Site revision from the previous run, still in flight
-   while OES was wiped, can make OES skip the new revision 1.
+   `oes-uns-consumer` to be running). If it times out, check that
+   `minitos-outbox` and `oes-uns-consumer` run, then run `make scenario-reset`
+   again. (Before QA M2 a stale higher Site revision from the previous run could
+   make OES skip the new revision 1; with the reset epoch it is ignored.)
+
+## Stale messages from the previous run (QA M2)
+
+After a reset the ids restart at 1, the Site uuid5 is the same and both inboxes
+are empty, so a message from the previous run would look like a valid new one:
+OES's MQTT session is persistent (`clean_session=False`, QoS 1) and keeps queued
+messages, the Makefile wipes OES while MiniTOS still has its old outbox rows, and
+`minitos-outbox` / `oes-outbox` may still publish rows they read before the wipe.
+In the PR #24 review a previous run's `leg_dispatched` was applied by MiniTOS
+(P5) and a previous run's `order.released` was taken by OES (O2).
+
+Both services therefore store the **reset epoch** of the run (table
+`ScenarioResetEpoch`, one row, rewritten inside the reset transaction) and
+fence their cross-service messages with it:
+
+- Producers add a top-level `reset_epoch` key to every envelope they create
+  while an epoch is stored: MiniTOS `scms.site.created.v1`,
+  `scms.site.configuration.published.v1`, `scms.order.released.v1`; OES
+  `scms.execution.event.v1`.
+- Consumers (`minitos_core.services.apply_execution_message`, OES
+  `execution.services.messages.process_message`) compare it with their own
+  epoch. A different or missing `reset_epoch` is **ignored** (strict policy):
+  no inbox row is written, nothing changes, and the message is acked.
+- Every ignored message is logged at **INFO** (loggers
+  `minitos_core.services.reset_epoch` and `execution.services.reset_epoch`, both
+  sent to the console so drops show in container and CI logs):
+  `Ignored stale message type=<schema> event_id=<id> topic=<topic>: reset_epoch seen=<epoch|none> stored=<epoch> (previous scenario run; ignored_total=<n>).`
+- Each service keeps an in-process counter of ignored messages per message type:
+  `services.reset_epoch.ignored_count()` (total) or `ignored_count(<schema>)`;
+  `reset_ignored_count()` clears it. It restarts at 0 with the process, and the
+  running total is in every log line.
+- With no epoch stored (normal operation, tests, or a reset run by hand without
+  `--reset-epoch`) nothing is stamped and every message is accepted, exactly as
+  before. `scenario_reset` prints `reset epoch none (no stale-message fence)` then.
+- Sparkplug traffic between OES and Godot is not fenced: command and simulation
+  session ids are uuid4, so results for the previous run's commands are already
+  rejected.
+- The epoch is masked in the canonical dump (two resets still give the same
+  checksum).
+
+The field is an optional, additive v1 envelope field (see
+`contracts/schemas/scms.execution.event.v1.schema.json`); the version is unchanged.
+
+Without Make, generate one epoch and pass the same value to both services:
+
+```bash
+EPOCH=$(date -u +%Y%m%dT%H%M%SZ)-manual
+docker compose exec -T terminal-oes python manage.py scenario_reset import_v1 --noinput --seed 1 --reset-epoch "$EPOCH"
+docker compose exec -T minitos python manage.py clear_retained_mqtt
+docker compose exec -T minitos python manage.py scenario_reset import_v1 --noinput --seed 1 --reset-epoch "$EPOCH"
+docker compose exec -T terminal-oes python manage.py scenario_wait_ready
+```
+
+If either service's reset fails, `make scenario-reset` stops there with a
+non-zero exit and prints
+`scenario-reset: <terminal-oes|minitos> reset failed; the services are not on the same run. Fix the error above and re-run scenario-reset.`
+(`scenario_wait_ready` is not run). If the MiniTOS reset fails after the OES
+reset (for example the TT route error below), OES already holds the new epoch
+and ignores MiniTOS's old-epoch messages until the reset is run again; rerun
+`make scenario-reset`.
+An epoch is 1-64 characters: letters, digits, `.`, `_`, `:` or `-`; anything else
+is refused before any table is wiped.
+
+Tests: `minitos_core/test_scenario_reset_isolation.py` (P5) and
+`execution/test_scenario_reset_isolation.py` (O2) replay the previous run's
+message after a reset and check the INFO log and the ignored counter;
+`minitos_core/test_scenario_import_v1.py` (`ScenarioResetMakeTargetTests`) runs
+the real target against a stub `COMPOSE` and checks the failure exit and message;
+the contract tests check the stamped envelope against the
+schema and feed goldens with and without `reset_epoch` to the MiniTOS consumer.
 
 If the TT leg cannot be routed (QC01 lane to BLOCK01.TL), the MiniTOS reset
 fails with "Reset rolled back: import_v1: no road route ..." and the previous
@@ -96,6 +169,28 @@ Event ids, wall-clock timestamps and the snapshot checksum (it embeds
 Outbox delivery bookkeeping (`attempts`, `last_error`, `published_at`) is also
 masked, so the checksum is the same whether or not the outbox publisher has
 already drained the queue.
+
+What the canonical dump masks (QA M1): an explicit allow-list, `VOLATILE_FIELDS`
+and `VOLATILE_JSON_KEYS` in `minitos_core/scenarios/base.py` and
+`execution/scenarios.py`. Every other value is compared literally, including the
+seeded business times `CarrierVisit.eta`/`ata`/`etd` and `Order.etc` (before M1
+every datetime and every ISO-looking string was blanked, so moving them by three
+days went unnoticed). A masked value still shows whether it is set: `null` stays
+`null`, anything else becomes `"<volatile>"`. Only the outbox delivery
+bookkeeping is masked unconditionally (`ALWAYS_MASKED_FIELDS`).
+
+| Service | Masked model fields (wall clock or per-run ids) |
+| --- | --- |
+| MiniTOS | carriervisit `created_at`, `last_updated`; che `state_updated_at`; containervisit `last_updated`; currentsignalvalue `recorded_at`, `source_timestamp`; enterprise, site `created_at`, `updated_at` (site also `published_at`); layoutversion `created_at`, `updated_at`, `published_at`; operationalstateinterval `started_at`; orderrouteplan `calculated_at`; order `released_at`; integrationoutbox `event_id`, `created_at`; siteconfigurationsnapshot `checksum`, `created_at`; scenarioresetepoch `epoch`, `created_at` |
+| terminal-oes | inboxevent `event_id`, `received_at`, `processed_at`; enterprise/site projection `created_at`, `updated_at` (site also `snapshot_checksum`, `last_reconciled_at`); simulationsession `configuration_checksum`, `created_at`, `updated_at`; executionorder `released_at`, `started_at`, `created_at`, `updated_at`; equipmentstate `last_seen_at`; dispatchassignment `assigned_at`; equipmentcommand, outboxevent `created_at`; commandresultreceipt `received_at`; handoff `created_at`, `updated_at`; scenarioresetepoch `epoch`, `created_at` |
+
+Masked JSON keys (any depth, both services): `event_id`, `occurred_at`,
+`generated_at`, `published_at`, `snapshot_checksum`, `reset_epoch`, and the
+wall-clock copies `state_updated_at`, `created_at`, `updated_at`, `released_at`
+(OES also `checksum`). Tests run a reset with the wall clock moved three days
+ahead and expect the same dump, so a new wall-clock field fails the test until it
+is added to the list with a reason; shifting `eta`, `ata`, `etd` or `etc` by three
+days must change the checksum.
 
 ## Event fixture for terminal-oes
 
