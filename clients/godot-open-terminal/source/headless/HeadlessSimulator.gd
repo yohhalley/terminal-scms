@@ -374,8 +374,10 @@ func _process(delta: float):
 
 
 ## One fixed simulation step. Only sim time enters here, never frame delta.
-## Movement runs first and QC handlers second, so a TT that reaches the transfer
-## point in this step is seen by the QC in the same step, whatever the CHE order.
+## Movement runs first and QC/RTG handlers second, so a TT that reaches the
+## transfer point in this step is seen by the crane in the same step, whatever
+## the CHE order. No-show clocks are evaluated last, in one place, after that
+## hand-off chance: giver first (TCL-011 rev 2, S1).
 func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		var che: Dictionary = _ches[che_id]
@@ -391,6 +393,7 @@ func _simulation_step(step_s: float):
 	for che_id in _ches.keys():
 		if _active_commands.has(che_id) and _is_rtg_command(_active_commands[che_id]):
 			_step_rtg(int(che_id), _ches[che_id], _active_commands[che_id])
+	_publish_due_handoff_timeouts()
 	_check_leg_stalls(int(round(step_s * 1000.0)))
 	if _clock.now_ms - _last_checkpoint_sim_ms >= SIM_TIME_CHECKPOINT_MS:
 		_save_runtime_state()
@@ -930,7 +933,7 @@ static func is_container_number_format(container_number: String) -> bool:
 
 func _step_qc(che_id: int, che: Dictionary, command: Dictionary):
 	var ready_id = _ready_counterpart_for(che_id, command)
-	var events = QcDischarge.step(command, _clock.now_ms, ready_id)
+	var events = QcDischarge.step(command, _clock.now_ms, ready_id, false)
 	_active_commands[che_id] = command
 	if events.is_empty():
 		_publish_when_due(che)
@@ -999,7 +1002,7 @@ func _complete_tt_handoff(tt_id: int, qc_id: int):
 
 func _step_rtg(che_id: int, che: Dictionary, command: Dictionary):
 	var ready_id = _ready_tt_for_rtg(che_id, command)
-	var events = RtgStack.step(command, _clock.now_ms, ready_id)
+	var events = RtgStack.step(command, _clock.now_ms, ready_id, false)
 	_active_commands[che_id] = command
 	if events.is_empty():
 		_publish_when_due(che)
@@ -1141,7 +1144,6 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 		che["speed_mps"] = 0.0
 		_consume_idle_energy(che, delta)
 		_ches[che_id] = che
-		_check_tt_no_show(che_id, command)
 		_publish_when_due(che)
 		return
 	var latitude = float(che.get("latitude", 0.0))
@@ -1199,31 +1201,119 @@ func _drive_towards(che_id: int, che: Dictionary, target_latitude: float, target
 	return false
 
 
+## TCL-011 rev 2 (S1): evaluate both clocks of each open hand-off in one place
+## per tick, giver first. If the giver's no-show is due, publish only the
+## giver's handoff_timed_out and close the hand-off locally so the receiver
+## does not publish. The receiver publishes only if its clock expired and the
+## giver's did not. One report per HandoffId, independent of CHE iteration
+## order (D-016). OES still applies "first arrived wins" as the safety net;
+## this does not invent OES behaviour. Timeouts run after movement and crane
+## steps so a counterpart that became ready in this tick can still complete
+## the transfer (if both CHEs are at the lane, the hand-off happens).
+func _publish_due_handoff_timeouts():
+	var sides_by_id := {}
+	for che_key in _active_commands.keys():
+		var che_id = int(che_key)
+		var command: Dictionary = _active_commands[che_key]
+		var handoff_id = str(command.get("handoff_id", ""))
+		if handoff_id.is_empty() or _command_handoff_closed(command):
+			continue
+		if not sides_by_id.has(handoff_id):
+			sides_by_id[handoff_id] = {}
+		sides_by_id[handoff_id][_handoff_side(command)] = che_id
+	var handoff_ids: Array = sides_by_id.keys()
+	handoff_ids.sort()
+	for handoff_id in handoff_ids:
+		var sides: Dictionary = sides_by_id[handoff_id]
+		var giver_id = int(sides.get("giver", 0))
+		var receiver_id = int(sides.get("receiver", 0))
+		if giver_id > 0 and _no_show_due_for(giver_id):
+			_publish_handoff_timeout(giver_id)
+			_mark_handoff_closed(str(handoff_id))
+		elif receiver_id > 0 and _no_show_due_for(receiver_id):
+			_publish_handoff_timeout(receiver_id)
+			_mark_handoff_closed(str(handoff_id))
+
+
+func _command_handoff_closed(command: Dictionary) -> bool:
+	var handoff_id = str(command.get("handoff_id", ""))
+	return bool(command.get("handoff_timed_out", false)) or (
+		not handoff_id.is_empty() and str(command.get("handoff_timed_out_id", "")) == handoff_id
+	)
+
+
+func _mark_handoff_closed(handoff_id: String):
+	if handoff_id.is_empty():
+		return
+	for che_key in _active_commands.keys():
+		var command: Dictionary = _active_commands[che_key]
+		if str(command.get("handoff_id", "")) != handoff_id:
+			continue
+		command["handoff_timed_out_id"] = handoff_id
+		if _is_crane_command(command):
+			command["handoff_timed_out"] = true
+		_active_commands[che_key] = command
+	_save_runtime_state()
+
+
+func _no_show_due_for(che_id: int) -> bool:
+	if not _active_commands.has(che_id):
+		return false
+	var command: Dictionary = _active_commands[che_id]
+	if _command_handoff_closed(command):
+		return false
+	if _is_qc_command(command):
+		return QcDischarge.no_show_due(command, _clock.now_ms)
+	if _is_rtg_command(command):
+		return RtgStack.no_show_due(command, _clock.now_ms)
+	return _tt_no_show_due(command)
+
+
 ## TCL-034, D-027 "same logic" on the TT side: W2 (TT at the QC lane waits for
 ## its QC with H1, Sim/Timing/QcNoShowTimeoutS) and W3 (TT at the block lane
-## waits for its RTG with H2, Sim/Timing/RtgNoShowTimeoutS). As for the QC
-## (D-013): handoff_timed_out once, the TT keeps its state (and the box at H2),
-## the HandoffId no longer pairs, and the TT waits for OES to cancel. The waiter
-## reports; OES accepting a TT-side report is BE work (TCL-011 §6.3).
-## H1 reports on the leg command id (receiver); H2 on the assign_handoff id
-## (giver), like the H2 handoff_completed. Assumption, pending BE confirmation.
-func _check_tt_no_show(che_id: int, command: Dictionary):
+## waits for its RTG with H2, Sim/Timing/RtgNoShowTimeoutS).
+func _tt_no_show_due(command: Dictionary) -> bool:
 	var handoff_id = str(command.get("handoff_id", ""))
-	if handoff_id.is_empty() or str(command.get("handoff_timed_out_id", "")) == handoff_id:
-		return
+	if handoff_id.is_empty() or _command_handoff_closed(command):
+		return false
 	if not command.has("handoff_wait_since_ms"):
-		return
+		return false
+	var timeout_s := _tt_no_show_timeout_s_for(command)
+	if timeout_s <= 0:
+		return false
+	return _clock.now_ms - int(command.handoff_wait_since_ms) >= timeout_s * 1000
+
+
+func _tt_no_show_timeout_s_for(command: Dictionary) -> int:
 	var phase = str(command.get("tt_phase", ""))
 	var side = _handoff_side(command)
-	var timeout_s := 0
 	if phase == TT_AT_SOURCE_WAITING and side == "receiver":
-		timeout_s = _qc_no_show_timeout_s
-	elif phase == TT_AT_DESTINATION_WAITING and side == "giver":
-		timeout_s = _rtg_no_show_timeout_s
-	else:
+		return _qc_no_show_timeout_s
+	if phase == TT_AT_DESTINATION_WAITING and side == "giver":
+		return _rtg_no_show_timeout_s
+	return 0
+
+
+func _publish_handoff_timeout(che_id: int):
+	if not _active_commands.has(che_id):
 		return
-	if _clock.now_ms - int(command.handoff_wait_since_ms) < timeout_s * 1000:
+	var command: Dictionary = _active_commands[che_id]
+	var handoff_id = str(command.get("handoff_id", ""))
+	if _is_crane_command(command):
+		command["handoff_timed_out"] = true
+		command["handoff_timed_out_id"] = handoff_id
+		_active_commands[che_id] = command
+		_save_runtime_state()
+		_publish_events(che_id, command, [{"event": "handoff_timed_out"}])
+		_publish_equipment_state(_ches[che_id], true)
 		return
+	# As for the QC (D-013): handoff_timed_out once, the TT keeps its state
+	# (and the box at H2), the HandoffId no longer pairs, and the TT waits for
+	# OES to cancel. The waiter reports; OES accepting a TT-side report is BE
+	# work (TCL-011 §6.3). H1 reports on the leg command id (receiver); H2 on
+	# the assign_handoff id (giver), like the H2 handoff_completed. Assumption,
+	# pending BE confirmation.
+	var side = _handoff_side(command)
 	command["handoff_timed_out_id"] = handoff_id
 	_active_commands[che_id] = command
 	_save_runtime_state()
@@ -1234,7 +1324,9 @@ func _check_tt_no_show(che_id: int, command: Dictionary):
 	_publish_events(che_id, report, [
 		{"event": "handoff_timed_out", "counterpart_che_id": counterpart_id, "handoff_role": side},
 	])
-	print("HEADLESS TT %s timed out waiting %s s at %s for HandoffId %s" % [che_id, timeout_s, phase, handoff_id])
+	print("HEADLESS TT %s timed out waiting %s s at %s for HandoffId %s" % [
+		che_id, _tt_no_show_timeout_s_for(command), str(command.get("tt_phase", "")), handoff_id
+	])
 
 
 ## True when a result for this command id moves the CHE's active leg on (its

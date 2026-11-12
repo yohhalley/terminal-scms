@@ -114,6 +114,7 @@ func _initialize():
 	_test_tt_waits_for_qc_no_show_w2()
 	_test_realistic_hold_is_not_a_w2_no_show()
 	_test_tt_waits_for_rtg_no_show_w3()
+	_test_same_tick_giver_first_w3_w4()
 	_test_leg_stall_clock()
 	_test_no_show_paths_do_not_stall()
 	# TCL-011 rev 2 (B1): the stall clock runs only in motion/work states.
@@ -1589,6 +1590,87 @@ func _test_tt_waits_for_rtg_no_show_w3():
 	_run_steps(simulator, 200)
 	_assert(_find(_results(simulator), "RTG01", "handoff_completed").is_empty(), "An RTG after the TT time-out gets no transfer")
 	_free_simulator(simulator)
+
+
+## TCL-011 rev 2 (S1): when W3 (TT giver waiting for the RTG) and W4 (RTG
+## receiver waiting for the TT) fall due in the same tick, Godot publishes the
+## giver's handoff_timed_out first, closes the hand-off locally, and the
+## receiver does not publish. One required event, deterministic for a seed,
+## independent of CHE iteration order.
+func _test_same_tick_giver_first_w3_w4():
+	_assert_same_tick_w3_w4(false)
+	_assert_same_tick_w3_w4(true)
+
+
+func _assert_same_tick_w3_w4(reversed_order: bool):
+	var label = "reversed CHE order" if reversed_order else "default CHE order"
+	var simulator = _waiting_h2_simulator()
+	if reversed_order:
+		_reverse_iteration_order(simulator)
+	# Both clocks already running on the same HandoffId; pairing was blocked
+	# in the setup so the no-shows can fall due (if both CHEs were ready, the
+	# hand-off would happen).
+	var start_ms = int(simulator._clock.now_ms)
+	simulator._active_commands[TT_ID]["handoff_wait_since_ms"] = start_ms
+	simulator._active_commands[RTG_ID]["waiting_since_ms"] = start_ms
+	var before = _timeout_results(_results(simulator)).size()
+	_assert(_run_until(simulator, func(): return _timeout_results(_results(simulator)).size() > before, 2000), "W3 and W4 due in the same tick must publish (%s)" % label)
+	var timeouts = _timeout_results(_results(simulator)).slice(before)
+	_assert(timeouts.size() == 1, "S1: exactly one handoff_timed_out when W3 and W4 fall due together (%s: %s)" % [label, timeouts])
+	var item = timeouts[0]
+	_assert(item.device == "TT01", "S1: the giver (TT / W3) publishes (%s: %s)" % [label, item.device])
+	_assert(str(item.m.get("Command/Result/HandoffRole", "")) == "giver", "S1: the report is the giver's (%s)" % label)
+	_assert(str(item.m.get("Command/Result/HandoffId", "")) == HANDOFF_ID_2, "S1: the report carries H2 (%s)" % label)
+	_assert(int(item.m.get("Sim/TimeMs", 0)) == start_ms + 30000, "S1: both clocks expire at wait start + 30 s (%s)" % label)
+	_assert(_events_of(_results(simulator), "RTG01").count("handoff_timed_out") == 0, "S1: the receiver (RTG / W4) does not publish (%s)" % label)
+	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 1, "S1: the giver publishes once (%s)" % label)
+	_assert(str(simulator._active_commands[RTG_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID_2 and bool(simulator._active_commands[RTG_ID].get("handoff_timed_out", false)), "S1: the hand-off is closed locally on the receiver too (%s)" % label)
+	_assert(not _events_of(_results(simulator), "RTG01").has("handoff_completed") and not _events_of(_results(simulator), "TT01").has("failed"), "S1: no transfer and no stall (%s)" % label)
+	# A later step must not let the closed receiver publish or complete.
+	_run_steps(simulator, 20)
+	_assert(_timeout_results(_results(simulator)).size() == before + 1, "S1: still one report after further steps (%s)" % label)
+	_free_simulator(simulator)
+
+
+## H1 completed, H2 assigned, TT at the block lane and RTG in waiting_for_tt,
+## both no-show clocks 30 s (test-only).
+func _waiting_h2_simulator() -> HeadlessSimulator:
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator.configure_rtg_no_show_timeout("30") and simulator.configure_tt_no_show_timeout("30"), "Short test-only W3 and W4 time-outs")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 2000), "S1 setup: H1 completes")
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 2000), "S1 setup: TT at the block lane")
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	# Block pairing before the first RTG step, otherwise H2 would complete.
+	simulator._active_commands[RTG_ID]["counterpart_che_id"] = 999
+	_assert(_run_until(simulator, func(): return str(simulator._active_commands.get(RTG_ID, {}).get("work_state", "")) == "waiting_for_tt", 200), "S1 setup: RTG waiting for the TT")
+	return simulator
+
+
+func _timeout_results(results: Array) -> Array:
+	var out: Array = []
+	for item in results:
+		if str(item.m.get("Command/Result/Event", "")) == "handoff_timed_out":
+			out.append(item)
+	return out
+
+
+## Rebuild _ches and _active_commands in reverse insertion order so a bug that
+## published in CHE-map order would show up as the receiver going first.
+func _reverse_iteration_order(simulator: HeadlessSimulator):
+	simulator._ches = _reversed_dict(simulator._ches)
+	simulator._active_commands = _reversed_dict(simulator._active_commands)
+
+
+func _reversed_dict(source: Dictionary) -> Dictionary:
+	var keys: Array = source.keys()
+	keys.reverse()
+	var out := {}
+	for key in keys:
+		out[key] = source[key]
+	return out
 
 
 ## TCL-011 §8(d): a live leg without progress for LegStallTimeoutS -> failed.
