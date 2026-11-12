@@ -54,6 +54,7 @@ from .serializers import (
     TransferInterfaceSerializer, UserSerializer, VisitCargoRouteSerializer,
     WorkQueueSerializer,
 )
+from .services.discharge_planning import DischargePlanningError
 from .permissions import IsMESService, IsOESServiceOrAuthenticated
 from .services import (
     EXECUTION_EVENTS, accessible_terminals, apply_execution_event, create_site,
@@ -695,6 +696,11 @@ class CarrierVisitViewSet(viewsets.ModelViewSet):
         except VisitStatusTransitionError as error:
             raise DRFValidationError(
                 {'status': [error.transition_message]}, code=error.transition_code,
+            ) from error
+        except DischargePlanningError as error:
+            # TCL-010: InOperation refused because discharge planning cannot run.
+            raise DRFValidationError(
+                {'status': [error.planning_message]}, code=error.planning_code,
             ) from error
 
 
@@ -1441,7 +1447,19 @@ def transition_visit_status(request, visit_id):
                 'message': f'Invalid status {new_status!r} for visit {visit.name}.',
                 'errors': serializer.errors,
             }, status=status.HTTP_400_BAD_REQUEST)
-        serializer.save()
+        try:
+            with transaction.atomic():
+                serializer.save()
+        except DischargePlanningError as error:
+            # TCL-010: moving to InOperation plans the discharge; if it cannot,
+            # the visit keeps its status.
+            return Response({
+                'success': False,
+                'code': error.planning_code,
+                'message': error.planning_message,
+                'from_status': old_status,
+                'to_status': new_status,
+            }, status=status.HTTP_409_CONFLICT)
     return Response({
         'success': True,
         'message': f'Visit {visit.name} status changed from {old_status} to {visit.status}.',
