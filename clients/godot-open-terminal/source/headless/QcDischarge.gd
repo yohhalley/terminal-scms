@@ -62,7 +62,10 @@ static func start(
 
 ## Advances the machine to `now_ms`. `ready_counterpart_id` is the CHE id of a
 ## TT that is ready to receive this container now, or 0.
-static func step(command: Dictionary, now_ms: int, ready_counterpart_id: int) -> Array:
+## `emit_no_show` (default true for isolated tests): the simulator passes false
+## and publishes no-shows itself, giver first, after every side has had a
+## chance to complete the hand-off in this tick (TCL-011 rev 2, S1).
+static func step(command: Dictionary, now_ms: int, ready_counterpart_id: int, emit_no_show := true) -> Array:
 	var events: Array = []
 	for _guard in range(4):
 		var state = str(command.get("work_state", IDLE))
@@ -79,13 +82,22 @@ static func step(command: Dictionary, now_ms: int, ready_counterpart_id: int) ->
 			break
 		elif state == WAITING_FOR_TT and ready_counterpart_id > 0:
 			events.append_array(_deposit(command, ready_counterpart_id))
-		elif state == WAITING_FOR_TT and _no_show_due(command, now_ms):
+		elif state == WAITING_FOR_TT and emit_no_show and _no_show_due(command, now_ms):
 			command["handoff_timed_out"] = true
 			events.append(_event("handoff_timed_out"))
 			break
 		else:
 			break
 	return events
+
+
+## True when this QC is in waiting_for_tt and its no-show clock has expired.
+static func no_show_due(command: Dictionary, now_ms: int) -> bool:
+	return (
+		str(command.get("work_state", IDLE)) == WAITING_FOR_TT
+		and not bool(command.get("handoff_timed_out", false))
+		and _no_show_due(command, now_ms)
+	)
 
 
 ## OES cancel: stop wherever the machine is, clear the container from the QC

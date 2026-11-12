@@ -55,7 +55,10 @@ class DockerLauncherTests(unittest.TestCase):
             "SIMULATOR_RTG_HOLD_WAIT_MIN_S": "15",
             "SIMULATOR_RTG_HOLD_WAIT_MAX_S": "25",
             "SIMULATOR_TT_NO_SHOW_TIMEOUT_S": "300",
-            "SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED": "false",
+            "SIMULATOR_TIMING_PROFILE": "fast",
+            "SIMULATOR_QC_NO_SHOW_TIMEOUT_S": "300",
+            "SIMULATOR_RTG_NO_SHOW_TIMEOUT_S": "300",
+            "SIMULATOR_LEG_STALL_TIMEOUT_S": "600",
             "SIMULATOR_COMMAND_TTL_S": "600",
             "SIMULATOR_SCENARIO_ID": "import-discharge-ci",
             "SIMULATOR_DEFAULT_SPEED_MPS": "4.0",
@@ -95,6 +98,55 @@ class DockerLauncherTests(unittest.TestCase):
         environment["UNTRUSTED_DOCKER_ARGUMENT"] = "--privileged"
         with self.assertRaisesRegex(ValueError, "unknown"):
             DockerLauncher("allowed").command(environment)
+
+
+GODOT_SOURCE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "clients", "godot-open-terminal", "source",
+)
+# SIMULATOR_* keys the runner passes that Godot does not read itself.
+NOT_READ_BY_GODOT = {"SIMULATOR_VERSION"}
+# Retired keys Godot names only to warn about them (TCL-011 rev 2, S4).
+RETIRED = {"SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED"}
+
+
+def godot_simulator_keys():
+    """Every quoted SIMULATOR_* name in the Godot sources (what Godot reads)."""
+    import re
+    keys = set()
+    for root, _dirs, files in os.walk(GODOT_SOURCE):
+        for name in files:
+            if name.endswith(".gd"):
+                with open(os.path.join(root, name), encoding="utf-8") as handle:
+                    keys.update(re.findall(r'"(SIMULATOR_[A-Z0-9_]+)"', handle.read()))
+    return keys - NOT_ENVIRONMENT - RETIRED
+
+
+# Quoted SIMULATOR_* literals in Godot that are not environment keys.
+NOT_ENVIRONMENT = {"SIMULATOR_FAILURE"}  # exception reason code
+
+
+class GodotAllowlistTests(unittest.TestCase):
+    """TCL-034 (TCL-011 §6.2): the runner allowlist and Godot agree both ways."""
+
+    def setUp(self):
+        if not os.path.isdir(GODOT_SOURCE):
+            self.skipTest("Godot sources not available in this context")
+
+    def test_every_key_godot_reads_is_allowlisted(self):
+        keys = godot_simulator_keys()
+        self.assertIn("SIMULATOR_LEG_STALL_TIMEOUT_S", keys)
+        self.assertLessEqual(keys, ALLOWED_ENVIRONMENT)
+
+    def test_every_allowlisted_simulator_key_is_read_by_godot(self):
+        allowed = {key for key in ALLOWED_ENVIRONMENT if key.startswith("SIMULATOR_")}
+        self.assertLessEqual(allowed - NOT_READ_BY_GODOT, godot_simulator_keys())
+
+    def test_the_retired_rtg_switch_is_not_allowlisted_and_godot_only_warns(self):
+        self.assertNotIn("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", ALLOWED_ENVIRONMENT)
+        path = os.path.join(GODOT_SOURCE, "headless", "HeadlessSimulator.gd")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn('RETIRED_ENV_KEYS := ["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED"', source)
 
 
 class RunnerTests(unittest.TestCase):
@@ -151,6 +203,21 @@ class ProcessLauncherTests(unittest.TestCase):
         self.assertNotIn("SIMULATOR_RUNNER_TOKEN", child)
         self.assertEqual(child["HOME"], os.path.join(self.data_root, session_id))
         self.assertTrue(child["XDG_DATA_HOME"].startswith(child["HOME"]))
+
+    def test_test_runs_pass_the_fast_profile_from_the_claim_only(self):
+        # TCL-034: Godot's built-in profile is realistic (D-039); tests and CI
+        # pass SIMULATOR_TIMING_PROFILE=fast in the claim environment. The
+        # runner's own environment never leaks into the child.
+        launcher = ProcessLauncher("godot", "/app", self.data_root)
+        environment = launch_environment()
+        environment["SIMULATOR_TIMING_PROFILE"] = "fast"
+        with patch.dict(os.environ, {"SIMULATOR_TIMING_PROFILE": "realistic"}):
+            _name, _command, child = launcher.command(environment)
+        self.assertEqual(child["SIMULATOR_TIMING_PROFILE"], "fast")
+        del environment["SIMULATOR_TIMING_PROFILE"]
+        with patch.dict(os.environ, {"SIMULATOR_TIMING_PROFILE": "fast"}):
+            _name, _command, child = launcher.command(environment)
+        self.assertNotIn("SIMULATOR_TIMING_PROFILE", child)
 
     def test_unknown_or_missing_environment_is_rejected(self):
         launcher = ProcessLauncher("godot", "/app", self.data_root)

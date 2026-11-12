@@ -278,6 +278,8 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
 
 **S1 timeout caveat (until the Sim params task lands):** in S1 there is **no timeout** while the TT waits at the block for the RTG (contract §3.3a; `SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED` / `Sim/Timing/RtgNoShowTimeoutEnabled` default `false` [PR #17]). If H2 never completes, the run stalls at `waiting_for_handoff` with no exception. Stop the session and reset (`make scenario-reset SCENARIO=import_v1`).
 
+**S2 (TCL-034):** the RTG switch is retired. A TT waiting at the block for its RTG times out after `SIMULATOR_RTG_NO_SHOW_TIMEOUT_S` (default 300 s, `handoff_timed_out`), and any leg in a motion/work state fails after `SIMULATOR_LEG_STALL_TIMEOUT_S` (default 600 s, `failed` + `SIMULATOR_FAILURE`). See `clients/godot-open-terminal/NOTES-TCL-034.md`.
+
 **Preconditions:** step 3 passed: `Handoff(H1)` is `transferred`, and the TT carries the container. RTG01 is idle in `BLOCK01`. The RTG leg's destination slot is free.
 
 | Aspect | Expected | Evidence |
