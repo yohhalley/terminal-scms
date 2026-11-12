@@ -93,7 +93,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-godot
       - name: Import project
-        run: timeout 300 "$GODOT_BIN" --headless --editor --path . --quit
+        # `--editor --quit` imports nothing on Godot 4.2; the script loops
+        # editor passes until every *.import target exists, or fails.
+        run: ../../.github/scripts/godot-import.sh .
       - name: test_headless_sim.gd
         run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_headless_sim.gd
       - name: test_terminal_integration.gd
@@ -132,6 +134,8 @@ jobs:
           echo "HiveMQ did not open port 1883" >&2
           exit 1
       - name: Import project
-        run: timeout 300 "$GODOT_BIN" --headless --editor --path . --quit
+        # `--editor --quit` imports nothing on Godot 4.2; the script loops
+        # editor passes until every *.import target exists, or fails.
+        run: ../../.github/scripts/godot-import.sh .
       - name: test_local_mqtt_broker.gd
         run: ../../.github/scripts/run-godot-test.sh 120 tests/integration/test_local_mqtt_broker.gd
