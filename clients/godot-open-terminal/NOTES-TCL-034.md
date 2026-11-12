@@ -82,12 +82,17 @@ that break the margin are logged as warnings and are not rejected.
 
 * BE: OES accepts `handoff_timed_out` from the TT (W2/W3) and the RTG (W4), and
   handles `failed` + `SIMULATOR_FAILURE` from the stall clock (§6.3). Unconfirmed.
+* BE: OES needs to persist the new NBIRTH fields (`Sim/Timing/Profile`,
+  `QcNoShowTimeoutS`, `RtgNoShowTimeoutS`, `LegStallTimeoutS`). Unconfirmed.
 * BE: the W3 report is sent on the TT `assign_handoff` command id. Unconfirmed.
 * Same-tick giver-first rule (TCL-011 rev 2, S1): if the giver and receiver
   no-show clocks expire in the same tick, Godot publishes only the giver's
   `handoff_timed_out` and closes the hand-off locally. The receiver publishes
   only if its clock expired and the giver's did not. One report per HandoffId,
-  independent of CHE iteration order. Covered by a W3+W4 regression test.
+  independent of CHE iteration order. Covered by W3+W4 and W1+W2 regression
+  tests (including reversed CHE maps) and a receiver-due-first case.
+* A stall on one side of an open hand-off closes it locally so the counterpart
+  no-show cannot later publish a second `handoff_timed_out`.
 * QA: the built-in holds are now `realistic` (QC 90 to 120 s, RTG 60 to 120 s);
   tests and CI run `fast` (2 to 5 s). The old 10 to 30 s holds are gone. Survey
   cases that assume [10, 30] need explicit hold keys.
@@ -96,11 +101,13 @@ that break the margin are logged as warnings and are not rejected.
 
 `tests/unit/test_headless_sim.gd` covers both profiles, precedence (env >
 profile > default), determinism per profile, fast steps ≤ 5 s, margins for both
-profiles, W1 to W4, giver-first same-tick publication of W3+W4 (including
-reversed CHE iteration order), and the stall clock: a manual H2 dispatch wait of
-more than 600 s (and of 10 × the clock) raises nothing, a stall while driving or
-while holding fails after 600 s, and the clock stays paused in W1 to W4 even
-when the no-show time-out is longer than the stall clock.
+profiles, W1 to W4, giver-first same-tick publication of W3+W4 and W1+W2
+(including reversed CHE iteration order), a receiver-due-first case, and the
+stall clock: a manual H2 dispatch wait of more than 600 s (and of 10 × the
+clock) raises nothing, a stall while driving or while holding fails after
+600 s, the clock stays paused in W1 to W4 even when the no-show time-out is
+longer than the stall clock, and a stall on one side closes the hand-off so the
+counterpart does not later publish `handoff_timed_out`.
 `apps/simulator-runner/test_runner.py` and
 `apps/terminal-oes/execution/test_handoffs.py` check both ways that the keys
 Godot reads, the OES settings list and the runner allowlist match.

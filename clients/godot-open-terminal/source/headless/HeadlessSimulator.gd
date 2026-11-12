@@ -72,8 +72,9 @@ const RETIRED_ENV_KEYS := ["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", "SIM_RTG_NO_
 ## W4), also after the no-show fired while OES has not cancelled yet; (ii)
 ## waiting on OES: the TT in at_destination_waiting with no hand-off (the S2
 ## manual-dispatch gap before dispatch-next #2), and finished legs waiting for
-## the next DCMD. The clock runs only in motion/work states (driving,
-## gantrying, holding, picking, dropping).
+## the next DCMD. "idle" also pauses a crane leg that never leaves idle after
+## start. The clock runs only in motion/work states (driving, gantrying,
+## holding, picking, dropping).
 const STALL_PAUSED_STATES := [TT_AT_SOURCE_WAITING, TT_AT_DESTINATION_WAITING, "waiting_for_tt", "done", "idle"]
 ## Sim-time command TTL (seconds) applied when a DCMD carries no ExpiresAtMs.
 const DEFAULT_COMMAND_TTL_S := 600
@@ -1374,9 +1375,14 @@ func _check_leg_stalls(step_ms: int):
 			continue
 		var che: Dictionary = _ches[che_id]
 		var che_name = str(che.get("name", che_id))
+		var handoff_id = str(command.get("handoff_id", ""))
 		_mark_che_idle(che)
 		_ches[che_id] = che
 		_active_commands.erase(che_key)
+		# One report per HandoffId: a stall must close the hand-off so the
+		# counterpart's no-show clock cannot later publish handoff_timed_out.
+		if not handoff_id.is_empty():
+			_mark_handoff_closed(handoff_id)
 		_save_runtime_state()
 		var context = command.duplicate()
 		context["detail"] = "no progress on %s within %s s" % [che_name, _leg_stall_timeout_s]

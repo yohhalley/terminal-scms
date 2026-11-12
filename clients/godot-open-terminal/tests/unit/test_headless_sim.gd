@@ -115,6 +115,8 @@ func _initialize():
 	_test_realistic_hold_is_not_a_w2_no_show()
 	_test_tt_waits_for_rtg_no_show_w3()
 	_test_same_tick_giver_first_w3_w4()
+	_test_same_tick_giver_first_w1_w2()
+	_test_receiver_due_first_giver_not_yet()
 	_test_leg_stall_clock()
 	_test_no_show_paths_do_not_stall()
 	# TCL-011 rev 2 (B1): the stall clock runs only in motion/work states.
@@ -122,6 +124,7 @@ func _initialize():
 	_test_stall_fires_while_moving()
 	_test_stall_fires_while_working()
 	_test_stall_paused_in_no_show_waits()
+	_test_stall_closes_pending_handoff()
 	_test_retired_rtg_key_only_warns()
 	_cleanup_state_file()
 	if not _failed:
@@ -1673,6 +1676,77 @@ func _reversed_dict(source: Dictionary) -> Dictionary:
 	return out
 
 
+## TCL-011 rev 2 (S1): same giver-first rule at H1, when W1 (QC giver waiting
+## for the TT) and W2 (TT receiver waiting for the QC) fall due together.
+func _test_same_tick_giver_first_w1_w2():
+	_assert_same_tick_w1_w2(false)
+	_assert_same_tick_w1_w2(true)
+
+
+func _assert_same_tick_w1_w2(reversed_order: bool):
+	var label = "reversed CHE order" if reversed_order else "default CHE order"
+	var simulator = _waiting_h1_simulator()
+	if reversed_order:
+		_reverse_iteration_order(simulator)
+	var start_ms = int(simulator._clock.now_ms)
+	simulator._active_commands[QC_ID]["waiting_since_ms"] = start_ms
+	simulator._active_commands[TT_ID]["handoff_wait_since_ms"] = start_ms
+	var before = _timeout_results(_results(simulator)).size()
+	_assert(_run_until(simulator, func(): return _timeout_results(_results(simulator)).size() > before, 2000), "W1 and W2 due in the same tick must publish (%s)" % label)
+	var timeouts = _timeout_results(_results(simulator)).slice(before)
+	_assert(timeouts.size() == 1, "S1: exactly one handoff_timed_out when W1 and W2 fall due together (%s: %s)" % [label, timeouts])
+	var item = timeouts[0]
+	_assert(item.device == "QC01", "S1: the giver (QC / W1) publishes (%s: %s)" % [label, item.device])
+	_assert(str(item.m.get("Command/Result/HandoffId", "")) == HANDOFF_ID, "S1: the report carries H1 (%s)" % label)
+	_assert(int(item.m.get("Sim/TimeMs", 0)) == start_ms + 30000, "S1: both clocks expire at wait start + 30 s (%s)" % label)
+	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 0, "S1: the receiver (TT / W2) does not publish (%s)" % label)
+	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 1, "S1: the giver publishes once (%s)" % label)
+	_assert(str(simulator._active_commands[TT_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID, "S1: the hand-off is closed locally on the receiver too (%s)" % label)
+	_assert(not _events_of(_results(simulator), "QC01").has("handoff_completed") and not _events_of(_results(simulator), "TT01").has("failed"), "S1: no transfer and no stall (%s)" % label)
+	_run_steps(simulator, 20)
+	_assert(_timeout_results(_results(simulator)).size() == before + 1, "S1: still one report after further steps (%s)" % label)
+	_free_simulator(simulator)
+
+
+## Receiver clock expires first, giver not yet due: only the receiver publishes,
+## the hand-off is closed, and the giver does not publish when its clock later
+## falls due. Same H1 harness as the W1+W2 same-tick case.
+func _test_receiver_due_first_giver_not_yet():
+	var simulator = _waiting_h1_simulator("60", "30")
+	var start_ms = int(simulator._clock.now_ms)
+	simulator._active_commands[QC_ID]["waiting_since_ms"] = start_ms
+	simulator._active_commands[TT_ID]["handoff_wait_since_ms"] = start_ms
+	var before = _timeout_results(_results(simulator)).size()
+	_assert(_run_until(simulator, func(): return _timeout_results(_results(simulator)).size() > before, 2000), "Receiver-due-first must publish W2")
+	var timeouts = _timeout_results(_results(simulator)).slice(before)
+	_assert(timeouts.size() == 1, "Receiver-due-first: exactly one handoff_timed_out (%s)" % [timeouts])
+	var item = timeouts[0]
+	_assert(item.device == "TT01", "Receiver-due-first: the receiver (TT / W2) publishes (%s)" % item.device)
+	_assert(str(item.m.get("Command/Result/HandoffRole", "")) == "receiver", "Receiver-due-first: the report is the receiver's")
+	_assert(str(item.m.get("Command/Result/HandoffId", "")) == HANDOFF_ID, "Receiver-due-first: the report carries H1")
+	_assert(int(item.m.get("Sim/TimeMs", 0)) == start_ms + 30000, "Receiver-due-first: W2 expires at wait start + 30 s")
+	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 0, "Receiver-due-first: the giver (QC / W1) does not publish")
+	_assert(str(simulator._active_commands[QC_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID and bool(simulator._active_commands[QC_ID].get("handoff_timed_out", false)), "Receiver-due-first: the hand-off is closed locally on the giver too")
+	_run_until(simulator, func(): return int(simulator._clock.now_ms) >= start_ms + 60000, 1000)
+	_run_steps(simulator, 20)
+	_assert(_timeout_results(_results(simulator)).size() == before + 1, "Receiver-due-first: giver still silent after its own clock falls due")
+	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 0, "Receiver-due-first: QC never publishes")
+	_free_simulator(simulator)
+
+
+## QC in waiting_for_tt and TT at the QC lane, pairing blocked, both no-show
+## clocks as given (defaults 30 s, test-only).
+func _waiting_h1_simulator(tt_timeout_s := "30", qc_timeout_s := "30") -> HeadlessSimulator:
+	var simulator = _new_simulator(13, QC_LAT)
+	_assert(simulator.configure_tt_no_show_timeout(tt_timeout_s) and simulator.configure_qc_no_show_timeout(qc_timeout_s), "Short test-only W1 and W2 time-outs")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	# Block pairing before the first step, otherwise H1 would complete.
+	simulator._active_commands[QC_ID]["counterpart_che_id"] = 999
+	_assert(_run_until(simulator, func(): return str(simulator._active_commands.get(QC_ID, {}).get("work_state", "")) == "waiting_for_tt" and _tt_phase(simulator) == "at_source_waiting", 2000), "S1 setup: QC waiting for the TT and TT at the QC lane")
+	return simulator
+
+
 ## TCL-011 §8(d): a live leg without progress for LegStallTimeoutS -> failed.
 ## Here the TT crawls (0.1 m/s) so it is still driving when the clock expires.
 func _test_leg_stall_clock():
@@ -1817,6 +1891,35 @@ func _test_no_show_paths_do_not_stall():
 	_assert(events.has("handoff_timed_out") and not events.has("failed"), "W1 fires; no stall (%s)" % [events])
 	_run_steps(simulator, 7000)
 	_assert(not _events_of(_results(simulator), "QC01").has("failed"), "Never cancelled: still no stall (waiting on OES)")
+	_free_simulator(simulator)
+
+
+## A stall on one side of an open hand-off closes it locally so the other
+## side's no-show cannot later publish a second handoff_timed_out. Example:
+## the TT stalls while driving to the block with H2 assigned; the RTG is
+## already in W4 and must stay silent after its clock falls due.
+func _test_stall_closes_pending_handoff():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator.configure_leg_stall_timeout("60") and simulator.configure_tt_no_show_timeout("120"), "Short stall, longer W4")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 2000), "Stall-closes setup: H1 completes")
+	simulator._default_speed_mps = 0.1
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	_assert(_run_until(simulator, func(): return str(simulator._active_commands.get(RTG_ID, {}).get("work_state", "")) == "waiting_for_tt", 200), "Stall-closes setup: RTG waiting for the TT")
+	_assert(_tt_phase(simulator) == "driving_to_destination", "Stall-closes setup: TT still driving to the block")
+	var wait_since = int(simulator._active_commands[RTG_ID].get("waiting_since_ms", 0))
+	_assert(_run_until(simulator, func(): return not _find(_results(simulator), "TT01", "failed").is_empty(), 2000), "TT stall must fire while driving with H2 assigned")
+	var failed = _find(_results(simulator), "TT01", "failed")
+	_assert(str(failed.get("Command/Result/Reason", "")) == "SIMULATOR_FAILURE", "Stall-closes: TT failed with SIMULATOR_FAILURE")
+	_assert(not simulator._active_commands.has(TT_ID) and simulator._active_commands.has(RTG_ID), "Stall-closes: TT leg erased, RTG still waiting")
+	_assert(str(simulator._active_commands[RTG_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID_2 and bool(simulator._active_commands[RTG_ID].get("handoff_timed_out", false)), "Stall-closes: H2 is closed locally on the RTG")
+	_assert(_events_of(_results(simulator), "RTG01").count("handoff_timed_out") == 0 and _events_of(_results(simulator), "TT01").count("handoff_timed_out") == 0, "Stall-closes: no handoff_timed_out at the stall")
+	_run_until(simulator, func(): return int(simulator._clock.now_ms) >= wait_since + 120000, 2000)
+	_run_steps(simulator, 20)
+	_assert(_events_of(_results(simulator), "RTG01").count("handoff_timed_out") == 0, "Stall-closes: RTG no-show stays silent after its clock falls due")
+	_assert(_timeout_results(_results(simulator)).is_empty(), "Stall-closes: no handoff_timed_out for H2 at all")
 	_free_simulator(simulator)
 
 

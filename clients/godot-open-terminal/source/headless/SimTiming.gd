@@ -67,16 +67,16 @@ static func worst_normal_waits_s(qc_hold: Array, rtg_hold: Array, speed_mps: flo
 	}
 
 
-## Margin violations as text ([] = ok). `timeouts` holds tt / qc / rtg no-show
-## and leg_stall seconds. TCL-011 rev 2 (B1, N2): the stall clock only runs in
-## motion/work states and is paused in every wait, so it must clear the longest
-## single motion/work phase (a crane hold or the TT drive), not a no-show wait.
 ## Longest single motion/work phase without a progress result (whole seconds).
 static func longest_motion_or_work_s(qc_hold: Array, rtg_hold: Array, speed_mps: float) -> int:
 	var drive_s = int(ceil(DEMO_MAX_TT_DRIVE_M / max(speed_mps, 0.1)))
 	return maxi(maxi(int(qc_hold[1]), int(rtg_hold[1])), drive_s)
 
 
+## Margin violations as text ([] = ok). `timeouts` holds tt / qc / rtg no-show
+## and leg_stall seconds. TCL-011 rev 2 (B1, N2): the stall clock only runs in
+## motion/work states and is paused in every wait, so it must clear the longest
+## single motion/work phase (a crane hold or the TT drive), not a no-show wait.
 static func margin_violations(qc_hold: Array, rtg_hold: Array, speed_mps: float, timeouts: Dictionary) -> Array:
 	var waits = worst_normal_waits_s(qc_hold, rtg_hold, speed_mps)
 	var checks = [
