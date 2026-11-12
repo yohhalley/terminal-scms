@@ -18,6 +18,52 @@ not carry the key. Producer check: `execution/test_scenario_reset_isolation.py`
 `minitos_core/test_contract_execution_events.py` (goldens with the current epoch
 apply, goldens without it are ignored under a fence).
 
+## `schemas/scms.visit.status_changed.v1.schema.json`
+TCL-003b (S2 slice of D-026, timestamps per D-024): the MiniTOS -> UNS visit
+milestone event. One event per saved status change of a carrier visit (vessel,
+barge, truck, train) or a container visit, including the first status at
+creation (`from_status` null). Topics, QoS 1, not retained:
+
+    scms/v2/{enterprise}/{site}/tos/carrier-visits/{id}/status-changed
+    scms/v2/{enterprise}/{site}/tos/container-visits/{id}/status-changed
+
+The hyphenated lowercase-kebab topic segments (`carrier-visits`,
+`container-visits`, `status-changed`) are intentional and match the
+lowercase-kebab enterprise/site codes.
+
+Envelope (docs/ARCHITECTURE.md synchronization rule 7):
+- `schema`: name and version (`scms.visit.status_changed.v1`), as every SCMS event;
+- `event_id`, `occurred_at` (MiniTOS wall clock at the save), `enterprise`, `site`, `terminal`;
+- `aggregate` `{type, id, revision}`: `type`/`id` equal `data.entity_type`/`entity_id`;
+  `revision` is the visit's `status_revision` column, +1 per event of that visit
+  (1 = creation), so it strictly increases per aggregate;
+- `causation_id`: the triggering message id (the OES execution `event_id`), else null;
+- `correlation_id`: inherited conversation id: the OES message's `correlation_id`
+  (else its `event_id`) or the HTTP `X-Correlation-ID` header; without one it
+  equals this event's `event_id`.
+  `correlation_id`/`causation_id` sit at the top level as in
+  `scms.execution.event.v1` (`scms.order.released.v1` doesn't carry them yet).
+
+`occurred_at` stays wall-clock time, as in every MiniTOS envelope: it is when
+MiniTOS committed the fact (the historian and the outbox order rely on it),
+MiniTOS has no simulation clock, and most changes (API, admin, scenario seed)
+have no sim time. `data.sim_time_ms` carries the simulation time alongside it
+when the change was caused by an OES execution event that sends
+`source_sim_time_ms`; it is null otherwise (no OES cause, or OES didn't send
+it, which is the case today). QA M2: the optional top-level `reset_epoch` is
+stamped with the same helper as the other MiniTOS envelopes while a
+scenario-reset epoch is stored. `data.source` is one of `minitos.api`,
+`minitos.admin`, `minitos.scenario`, `minitos.system`, `oes.execution`.
+
+Same-transaction outbox, as `order.released`: the outbox row is written in the
+transaction that saves the status, so a rolled-back change is never published
+and a committed one keeps its event; a same-status save publishes nothing.
+Producer `minitos_core/services/status_events.py`; contract test
+`minitos_core/test_contract_status_events.py` validates every produced payload
+and topic and the per-aggregate revisions (skips without this folder, fails
+under `SCMS_CONTRACT_STRICT=1`) and checks the status/source enums against the
+models.
+
 ## `golden/scms.execution.event.v1/*.json`
 One full leg (`leg_dispatched` ... `leg_completed`) exactly as the real OES outbox
 publisher (`publish_outbox._publish_batch`) puts it on the wire: topic, QoS,

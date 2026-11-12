@@ -34,6 +34,9 @@ VOLATILE_JSON_KEYS = frozenset({
     # snapshot equipment.ches[].state_updated_at and layout.version
     # created_at/updated_at, order.released payload data.order.released_at.
     'state_updated_at', 'created_at', 'updated_at', 'released_at',
+    # TCL-003b: the seed's status-changed events start their own correlation
+    # chain, so correlation_id equals their (uuid4) event_id.
+    'correlation_id',
 })
 VOLATILE_FIELDS = {
     # Wall-clock stamps (auto_now/auto_now_add or set from timezone.now() while

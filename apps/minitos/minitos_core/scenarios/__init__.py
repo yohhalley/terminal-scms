@@ -38,13 +38,14 @@ def reset_scenario(name, *, seed=None, containers=1, reset_epoch=None):
 
     from ..services.che_components import ensure_component_catalog, ensure_signal_catalog
     from ..services.reset_epoch import set_epoch, validate_epoch
+    from ..services.status_events import SOURCE_SCENARIO, status_event_source
     from .base import wipe_minitos_tables
 
     scenario = get_scenario(name)
     seed = scenario.DEFAULT_SEED if seed is None else int(seed)
     if reset_epoch:
         reset_epoch = validate_epoch(reset_epoch)
-    with transaction.atomic():
+    with status_event_source(SOURCE_SCENARIO), transaction.atomic():
         tables = wipe_minitos_tables()
         set_epoch(reset_epoch, scenario=name)
         ensure_signal_catalog(ensure_component_catalog())
@@ -62,4 +63,7 @@ def run_step(name, step, **options):
     except KeyError as exc:
         known = ', '.join(sorted(scenario.STEPS))
         raise LookupError(f'Unknown step {step!r} for {name}. Known steps: {known}.') from exc
-    return handler(**options)
+    from ..services.status_events import SOURCE_SCENARIO, status_event_source
+
+    with status_event_source(SOURCE_SCENARIO):
+        return handler(**options)

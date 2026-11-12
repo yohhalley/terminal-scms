@@ -9,6 +9,10 @@ from django.utils.dateparse import parse_datetime
 from minitos_core.models import IntegrationInbox, Order
 from minitos_core.services.order_execution import apply_execution_event
 from minitos_core.services.reset_epoch import ignore_if_stale
+from minitos_core.services.status_events import (
+    SOURCE_OES_EXECUTION,
+    status_event_source,
+)
 
 
 def _decode(payload):
@@ -60,15 +64,23 @@ def apply_execution_message(topic, raw_payload):
             if not created and inbox.status == IntegrationInbox.PROCESSED:
                 return order
             occurred_at = parse_datetime(data.get('occurred_at', '')) or timezone.now()
-            order = apply_execution_event(
-                order.pk,
-                event_name,
-                leg_id=data.get('leg_id'),
-                che_id=data.get('che_id'),
-                position_id=data.get('position_id'),
-                occurred_at=occurred_at,
-                details=data,
-            )
+            # TCL-003b: container-visit status events caused by this message
+            # carry its id as causation, its correlation_id (else its id) as
+            # correlation and, when OES sends it, the simulation time.
+            with status_event_source(
+                SOURCE_OES_EXECUTION, causation_id=event_id,
+                correlation_id=payload.get('correlation_id') or event_id,
+                sim_time_ms=payload.get('source_sim_time_ms'),
+            ):
+                order = apply_execution_event(
+                    order.pk,
+                    event_name,
+                    leg_id=data.get('leg_id'),
+                    che_id=data.get('che_id'),
+                    position_id=data.get('position_id'),
+                    occurred_at=occurred_at,
+                    details=data,
+                )
             inbox.status = IntegrationInbox.PROCESSED
             inbox.error = ''
             inbox.processed_at = timezone.now()

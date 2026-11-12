@@ -195,6 +195,8 @@ class ResetEpochSeedTests(TestCase):
         self.assertEqual(schemas, {
             'scms.site.created.v1', 'scms.site.configuration.published.v1',
             'scms.order.released.v1',
+            # TCL-003b: the seeded visits' creation events (stamped too).
+            'scms.visit.status_changed.v1',
         })
 
     def test_reset_without_epoch_stamps_nothing(self):

@@ -317,8 +317,19 @@ class ImportV1SeedContentTests(TestCase):
         self.assertEqual(site.configuration_revision, 1)
         self.assertEqual(SiteConfigurationSnapshot.objects.count(), 1)
         schemas = list(IntegrationOutbox.objects.order_by('created_at').values_list('schema', 'topic'))
+        visit = CarrierVisit.objects.get()
+        container_visit = ContainerVisit.objects.get()
+        # TCL-003b: the seeded visits publish their first status (from_status null).
         self.assertEqual(schemas, [
             ('scms.site.created.v1', 'scms/v2/terminal-velocity/test-terminal/tos/site/created'),
+            (
+                'scms.visit.status_changed.v1',
+                f'scms/v2/terminal-velocity/test-terminal/tos/carrier-visits/{visit.pk}/status-changed',
+            ),
+            (
+                'scms.visit.status_changed.v1',
+                f'scms/v2/terminal-velocity/test-terminal/tos/container-visits/{container_visit.pk}/status-changed',
+            ),
             (PUBLISHED_SCHEMA, 'scms/v2/terminal-velocity/test-terminal/tos/configuration/published'),
         ])
         self.assertFalse(IntegrationOutbox.objects.filter(retain=True).exists())

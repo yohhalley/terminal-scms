@@ -67,6 +67,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # TCL-003b: tags visit status events with their source (admin or API).
+    'minitos_core.services.status_events.StatusEventSourceMiddleware',
 ]
 
 # Add WhiteNoise for production (Heroku or Docker)
