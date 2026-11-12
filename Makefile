@@ -3,6 +3,9 @@ SCENARIO ?= import_v1
 STEP ?=
 SEED ?= 1
 CONTAINERS ?= 1
+SIM ?= 0
+SITE ?= test-terminal
+TIME_SCALE ?= 1.0
 # QA M2: run marker for make scenario-reset (generated per run unless given).
 RESET_EPOCH ?=
 
@@ -11,7 +14,8 @@ RESET_EPOCH ?=
 	test test-minitos test-oes migrations shell-minitos shell-oes \
 	create-minitos-admin create-oes-admin run-simulator-runner \
 		logs-simulator logs-mqtt diagnose build-simulator test-runner test-godot \
-	scenario-reset scenario-step scenario-dump
+	scenario-reset scenario-step scenario-dump \
+	up-runner logs-runner sim-start sim-stop
 
 help:
 	@printf '%s\n' \
@@ -35,7 +39,12 @@ help:
 		'  make create-minitos-admin Create a MiniTOS administrator' \
 		'  make create-oes-admin     Create an OES console administrator' \
 		'  make run-simulator-runner Start the restricted host-side Godot runner' \
-		'  make scenario-reset [SCENARIO=import_v1] [SEED=n] [CONTAINERS=1-5]' \
+		'  make up-runner      Build and start the simulator-runner service (simulation profile)' \
+		'  make logs-runner    Follow the simulator-runner service log (runner + Godot)' \
+		'  make sim-start [SITE=test-terminal] [TIME_SCALE=1.0]' \
+		'                      Start a simulation session; the runner service launches Godot' \
+		'  make sim-stop       Stop every active simulation session and wait for the runner' \
+		'  make scenario-reset [SCENARIO=import_v1] [SEED=n] [CONTAINERS=1-5] [SIM=1]' \
 		'                      Wipe OES + MiniTOS data, clear retained MQTT, seed and publish the Site' \
 		'  make scenario-step STEP=visit-in-operation|release-discharge|dispatch-next [ORDER=id]' \
 		'                      Run one scripted demo step (MiniTOS visit/release, OES dispatch)' \
@@ -155,9 +164,12 @@ else
 SCENARIO_RESET_EPOCH := $(strip $(RESET_EPOCH))
 endif
 
+# SIM=1 (Runner, S2): stop the running simulation first and start a fresh session
+# at the end, so the simulator-runner service plays the reseeded scenario.
 scenario-reset: init
 	@echo "scenario-reset: reset epoch $(SCENARIO_RESET_EPOCH)"
 	SIMULATOR_SEED=$(SEED) $(COMPOSE) up --detach --no-deps --wait terminal-oes
+	@if [ '$(SIM)' = '1' ]; then $(COMPOSE) exec -T terminal-oes python manage.py simulation_stop --wait 30; fi
 	$(COMPOSE) exec -T terminal-oes python manage.py scenario_reset $(SCENARIO) --noinput --seed $(SEED) \
 		--reset-epoch $(SCENARIO_RESET_EPOCH) || $(call SCENARIO_RESET_FAILED,terminal-oes)
 	$(COMPOSE) exec -T minitos python manage.py clear_retained_mqtt
@@ -165,6 +177,21 @@ scenario-reset: init
 		--seed $(SEED) --containers $(CONTAINERS) --reset-epoch $(SCENARIO_RESET_EPOCH) \
 		|| $(call SCENARIO_RESET_FAILED,minitos)
 	$(COMPOSE) exec -T terminal-oes python manage.py scenario_wait_ready --timeout 60
+	@if [ '$(SIM)' = '1' ]; then $(COMPOSE) exec -T terminal-oes python manage.py simulation_start \
+		--site $(SITE) --time-scale $(TIME_SCALE); fi
+
+# Runner (S2): the simulator-runner compose service (profile "simulation").
+up-runner: init
+	$(COMPOSE) --profile simulation up --build --detach --wait simulator-runner
+
+logs-runner:
+	$(COMPOSE) --profile simulation logs -f --tail=200 simulator-runner
+
+sim-start: init
+	$(COMPOSE) exec -T terminal-oes python manage.py simulation_start --site $(SITE) --time-scale $(TIME_SCALE)
+
+sim-stop: init
+	$(COMPOSE) exec -T terminal-oes python manage.py simulation_stop --wait 30
 
 scenario-step: init
 	@case '$(STEP)' in \

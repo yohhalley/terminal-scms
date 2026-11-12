@@ -239,6 +239,10 @@ def report_runner_status(session_id, runner_identity, runner_status, failure_rea
         session.actual_state = SimulationSession.STOPPED
         session.desired_state = SimulationSession.STOPPED_DESIRED
         session.stopped_at = now
+        # A clean stop is not a failure: replace any stale text (e.g. the
+        # NDEATH "offline" note written while Godot shut down) with the
+        # runner's reason, such as "stopped: runner shutdown", or clear it.
+        session.failure_reason = failure_reason
     elif runner_status == SimulationSession.RUNNER_FAILED:
         session.actual_state = SimulationSession.FAILED
         session.failure_reason = failure_reason or "Simulator runner failed."

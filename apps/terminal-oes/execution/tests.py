@@ -36,6 +36,7 @@ from .services.site_sync import (
 from .services.simulations import (
     bootstrap_document,
     claim_next_session,
+    report_runner_status,
     start_simulation,
     stop_simulation,
 )
@@ -1003,6 +1004,37 @@ class SparkplugRuntimeTests(TestCase):
         self.assertEqual(command.status, EquipmentCommand.COMPLETE)
         self.assertEqual(self.order.status, ExecutionOrder.COMPLETE)
         self.assertEqual(CommandResultReceipt.objects.filter(pk=result_id).count(), 1)
+
+    def _runner_shutdown_ndeath(self):
+        """Runner SIGTERM: Godot's NDEATH arrives before the runner's "stopped"."""
+        self.session.runner_identity = "runner-1"
+        self.session.save(update_fields=["runner_identity"])
+        self._birth_node()
+        process_sparkplug_message(
+            self.node_topic.replace("NBIRTH", "NDEATH"),
+            encode_payload([{"name": "bdSeq", "type": "Int64", "value": 3}],
+                           include_sequence=False),
+        )
+        self.session.refresh_from_db()
+        self.assertIn("awaiting a new NBIRTH", self.session.failure_reason)
+
+    def test_runner_shutdown_stop_records_its_reason_not_the_ndeath_text(self):
+        self._runner_shutdown_ndeath()
+        report_runner_status(
+            self.session.pk, "runner-1", SimulationSession.RUNNER_STOPPED,
+            "stopped: runner shutdown",
+        )
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.actual_state, SimulationSession.STOPPED)
+        self.assertEqual(self.session.desired_state, SimulationSession.STOPPED_DESIRED)
+        self.assertEqual(self.session.failure_reason, "stopped: runner shutdown")
+
+    def test_a_stopped_report_without_reason_clears_the_stale_ndeath_text(self):
+        self._runner_shutdown_ndeath()
+        report_runner_status(self.session.pk, "runner-1", SimulationSession.RUNNER_STOPPED)
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.actual_state, SimulationSession.STOPPED)
+        self.assertEqual(self.session.failure_reason, "")
 
     def test_node_death_invalidates_equipment_and_blocks_dispatch(self):
         self._birth_node()
