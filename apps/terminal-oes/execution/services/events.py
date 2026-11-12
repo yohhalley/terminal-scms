@@ -1,6 +1,7 @@
 from django.utils import timezone
 
 from execution.models import OutboxEvent
+from execution.services.reset_epoch import stamp as stamp_reset_epoch
 from execution.uns import execution_event_topic
 
 
@@ -30,32 +31,35 @@ def queue_execution_event(
     if extra:
         data.update(extra)
     identity = {"event_id": event_id} if event_id else {}
+    payload = {
+        "schema": "scms.execution.event.v1",
+        "event_id": None,
+        "enterprise": {
+            "id": str(order.site.enterprise.source_id),
+            "code": order.site.enterprise.code,
+            "name": order.site.enterprise.name,
+        },
+        "site": {
+            "id": str(order.site.source_id),
+            "code": order.site.code,
+            "name": order.site.name,
+            "source_location_id": order.site.source_location_id,
+            "configuration_revision": order.site.source_revision,
+        },
+        # B3: MiniTOS apply_execution_message reads terminal.id (its Location pk).
+        "terminal": {
+            "id": order.site.source_location_id,
+            "code": order.site.code,
+        },
+        "data": data,
+    }
+    # QA M2: fence the envelope to the current scenario run (no-op outside one).
+    stamp_reset_epoch(payload)
     return OutboxEvent.objects.create(
         **identity,
         topic=execution_event_topic(order.site, order.tos_order_id),
         schema="scms.execution.event.v1",
-        payload={
-            "schema": "scms.execution.event.v1",
-            "event_id": None,
-            "enterprise": {
-                "id": str(order.site.enterprise.source_id),
-                "code": order.site.enterprise.code,
-                "name": order.site.enterprise.name,
-            },
-            "site": {
-                "id": str(order.site.source_id),
-                "code": order.site.code,
-                "name": order.site.name,
-                "source_location_id": order.site.source_location_id,
-                "configuration_revision": order.site.source_revision,
-            },
-            # B3: MiniTOS apply_execution_message reads terminal.id (its Location pk).
-            "terminal": {
-                "id": order.site.source_location_id,
-                "code": order.site.code,
-            },
-            "data": data,
-        },
+        payload=payload,
         qos=1,
     )
 

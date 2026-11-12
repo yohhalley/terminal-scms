@@ -9,6 +9,15 @@ The OES -> MiniTOS execution event envelope as decided in the TCL-002 backend
 review (section 2.7) and vault decision T-006. `terminal.id` is required because
 MiniTOS `apply_execution_message` reads it.
 
+QA M2 added the optional top-level `reset_epoch` string (additive, still v1).
+OES sends it only after `make scenario-reset` stored a reset epoch; MiniTOS then
+ignores an event whose `reset_epoch` is not its own stored epoch (see
+`docs/SCENARIO_RESET.md`). The goldens are produced without an epoch, so they do
+not carry the key. Producer check: `execution/test_scenario_reset_isolation.py`
+(a stamped event validates against the schema); consumer checks:
+`minitos_core/test_contract_execution_events.py` (goldens with the current epoch
+apply, goldens without it are ignored under a fence).
+
 ## `golden/scms.execution.event.v1/*.json`
 One full leg (`leg_dispatched` ... `leg_completed`) exactly as the real OES outbox
 publisher (`publish_outbox._publish_batch`) puts it on the wire: topic, QoS,

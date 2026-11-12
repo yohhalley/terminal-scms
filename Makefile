@@ -3,6 +3,8 @@ SCENARIO ?= import_v1
 STEP ?=
 SEED ?= 1
 CONTAINERS ?= 1
+# QA M2: run marker for make scenario-reset (generated per run unless given).
+RESET_EPOCH ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help init setup config build pull up stop down restart ps logs \
@@ -139,14 +141,29 @@ create-oes-admin: init
 # SEED (default 1, spec K7) is one knob for both seeds: terminal-oes is recreated
 # with SIMULATOR_SEED=$(SEED) when it differs (a no-op otherwise), so the next
 # simulator session gets the same seed as the MiniTOS scenario RNG.
+# QA M2: both resets get the same fresh RESET_EPOCH. Each service stamps it on
+# the envelopes it publishes and ignores envelopes from any other epoch, so a
+# message from the previous run (queued for the persistent OES session, or an
+# old MiniTOS outbox row published between the two wipes) is not accepted.
 SCENARIO_ORDER_ARG = $(if $(ORDER),--order $(ORDER),)
+# A failed service reset leaves the two services on different runs: stop with a
+# non-zero exit and say so, instead of carrying on to scenario_wait_ready.
+SCENARIO_RESET_FAILED = { echo "scenario-reset: $(1) reset failed; the services are not on the same run. Fix the error above and re-run scenario-reset." >&2; exit 1; }
+ifeq ($(strip $(RESET_EPOCH)),)
+SCENARIO_RESET_EPOCH := $(shell date -u +%Y%m%dT%H%M%SZ)-$(shell od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+else
+SCENARIO_RESET_EPOCH := $(strip $(RESET_EPOCH))
+endif
 
 scenario-reset: init
+	@echo "scenario-reset: reset epoch $(SCENARIO_RESET_EPOCH)"
 	SIMULATOR_SEED=$(SEED) $(COMPOSE) up --detach --no-deps --wait terminal-oes
-	$(COMPOSE) exec -T terminal-oes python manage.py scenario_reset $(SCENARIO) --noinput --seed $(SEED)
+	$(COMPOSE) exec -T terminal-oes python manage.py scenario_reset $(SCENARIO) --noinput --seed $(SEED) \
+		--reset-epoch $(SCENARIO_RESET_EPOCH) || $(call SCENARIO_RESET_FAILED,terminal-oes)
 	$(COMPOSE) exec -T minitos python manage.py clear_retained_mqtt
 	$(COMPOSE) exec -T minitos python manage.py scenario_reset $(SCENARIO) --noinput \
-		--seed $(SEED) --containers $(CONTAINERS)
+		--seed $(SEED) --containers $(CONTAINERS) --reset-epoch $(SCENARIO_RESET_EPOCH) \
+		|| $(call SCENARIO_RESET_FAILED,minitos)
 	$(COMPOSE) exec -T terminal-oes python manage.py scenario_wait_ready --timeout 60
 
 scenario-step: init
