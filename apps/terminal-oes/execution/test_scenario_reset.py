@@ -9,6 +9,7 @@ execution snapshot MiniTOS serves over HTTP. The HTTP fetch is replaced by
 import io
 import json
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +22,7 @@ from django.utils import timezone
 
 from .models import (
     DispatchAssignment,
+    ExecutionOperation,
     EquipmentState,
     ExecutionOrder,
     InboxEvent,
@@ -28,12 +30,20 @@ from .models import (
     SiteProjection,
 )
 from .scenarios import (
+    ALWAYS_MASKED_FIELDS,
+    VOLATILE,
+    VOLATILE_FIELDS,
     canonical_checksum,
     canonical_dump,
     reset_execution_tables,
     wait_for_ready_site,
 )
 from .services.ingestion import ingest_released_order
+from .services.simulations import (
+    bootstrap_document,
+    claim_next_session,
+    start_simulation,
+)
 from .services.site_sync import ingest_site_configuration_published, ingest_site_created
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "scenario_import_v1_events.json"
@@ -77,6 +87,31 @@ class ScenarioResetTests(TestCase):
         self.assertEqual(
             sorted(site.equipment.values_list("name", "equipment_type_code")),
             [("QC01", "STS"), ("RTG01", "RTG"), ("TT01", "TT"), ("TT02", "TT")],
+        )
+
+    def test_after_reset_all_four_seed_ches_are_powered_on_and_available(self):
+        """AC2.3 regression: OES used to import every CHE powered off/unavailable,
+        and the simulator bootstrap carried those values over MiniTOS's seed."""
+        project_import_v1()
+        call_command("scenario_reset", "import_v1", "--noinput", stdout=io.StringIO())
+        site, _ = project_import_v1()
+
+        flags = {
+            che.name: (che.powered_on, che.is_available, che.is_dispatched)
+            for che in EquipmentState.objects.filter(site=site)
+        }
+        self.assertEqual(flags, {
+            name: (True, True, False) for name in ("QC01", "TT01", "TT02", "RTG01")
+        })
+
+        # The simulator is bootstrapped from these OES rows.
+        start_simulation(site.pk)
+        session, token = claim_next_session("runner-test")
+        bootstrap = bootstrap_document(session, token)
+        self.assertEqual(
+            {row["name"]: (row["powered_on"], row["is_available"])
+             for row in bootstrap["equipment_state"]},
+            {name: (True, True) for name in ("QC01", "TT01", "TT02", "RTG01")},
         )
 
     def test_two_resets_produce_identical_canonical_state(self):
@@ -168,6 +203,99 @@ class ScenarioResetTests(TestCase):
         out = io.StringIO()
         call_command("scenario_dump", "--checksum", stdout=out)
         self.assertEqual(out.getvalue().strip(), canonical_checksum(canonical_dump()))
+
+
+def wall_clock_shifted(days):
+    """Every timezone.now() (auto_now/auto_now_add included) runs ``days`` later."""
+    real_now = timezone.now
+    return mock.patch(
+        "django.utils.timezone.now", side_effect=lambda: real_now() + timedelta(days=days),
+    )
+
+
+def first_differences(first, second, limit=10):
+    found = []
+    for table in sorted(set(first) | set(second)):
+        rows_a, rows_b = first.get(table, []), second.get(table, [])
+        if len(rows_a) != len(rows_b):
+            found.append(f"{table}: {len(rows_a)} != {len(rows_b)} rows")
+            continue
+        for row_a, row_b in zip(rows_a, rows_b):
+            for key in sorted(set(row_a) | set(row_b)):
+                if row_a.get(key) != row_b.get(key):
+                    found.append(f"{table}.{key}: {row_a.get(key)!r} != {row_b.get(key)!r}")
+    return found[:limit]
+
+
+class CanonicalDumpBusinessTimesTests(TestCase):
+    """QA M1 (PR #24 review): only the explicit volatile allow-list is masked."""
+
+    def project_and_release(self):
+        reset_execution_tables()
+        _, events = project_import_v1()
+        released = json.loads(json.dumps(events["scms.order.released.v1"]))
+        # MiniTOS stamps the release with its wall clock.
+        released["payload"]["data"]["order"]["released_at"] = timezone.now().isoformat()
+        return ingest_released_order(released["topic"], released["payload"])
+
+    def test_volatile_allow_list_covers_every_wall_clock_field(self):
+        """Project + release three days later in wall-clock time gives the same dump.
+
+        If this fails, a new field depends on the wall clock: add it to
+        VOLATILE_FIELDS (or take it from the MiniTOS payload) and say why.
+        """
+        self.project_and_release()
+        first = canonical_dump()
+        with wall_clock_shifted(3):
+            self.project_and_release()
+        second = canonical_dump()
+        self.assertEqual(first_differences(first, second), [])
+        self.assertEqual(canonical_checksum(first), canonical_checksum(second))
+
+    def test_three_day_shift_of_a_business_time_changes_the_checksum(self):
+        # Before M1 every datetime was "<time>", so only null/non-null was seen.
+        order = self.project_and_release()
+        operation = order.operations.order_by("sequence").first()
+        planned = timezone.now().replace(microsecond=0)
+        ExecutionOperation.objects.filter(pk=operation.pk).update(planned_start=planned)
+        before = canonical_checksum(canonical_dump())
+        ExecutionOperation.objects.filter(pk=operation.pk).update(
+            planned_start=planned + timedelta(days=3),
+        )
+        self.assertNotEqual(before, canonical_checksum(canonical_dump()))
+
+    def test_business_times_are_dumped_literally(self):
+        order = self.project_and_release()
+        operation = order.operations.order_by("sequence").first()
+        planned = timezone.now().replace(microsecond=0)
+        ExecutionOperation.objects.filter(pk=operation.pk).update(planned_start=planned)
+        rows = canonical_dump()["execution_executionoperation"]
+        self.assertIn(planned.isoformat(), [row["planned_start"] for row in rows])
+
+    def test_masked_values_still_compare_set_versus_unset(self):
+        self.project_and_release()
+        before = canonical_checksum(canonical_dump())
+        SiteProjection.objects.update(last_reconciled_at=None)
+        self.assertNotEqual(before, canonical_checksum(canonical_dump()))
+        self.assertEqual(
+            {row["last_reconciled_at"] for row in canonical_dump()["execution_siteprojection"]}, {None},
+        )
+        self.assertNotIn(None, {row["created_at"] for row in canonical_dump()["execution_siteprojection"]})
+        self.assertEqual(
+            {row["created_at"] for row in canonical_dump()["execution_siteprojection"]}, {VOLATILE},
+        )
+
+    def test_allow_list_names_real_fields_only(self):
+        from django.apps import apps
+
+        models = {
+            model._meta.model_name: model
+            for model in apps.get_app_config("execution").get_models()
+        }
+        for table, fields in list(VOLATILE_FIELDS.items()) + list(ALWAYS_MASKED_FIELDS.items()):
+            self.assertIn(table, models)
+            names = {field.attname for field in models[table]._meta.concrete_fields}
+            self.assertLessEqual(fields, names, table)
 
 
 class ScenarioWaitReadyTests(TestCase):

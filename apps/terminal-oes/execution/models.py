@@ -485,6 +485,24 @@ class OutboxEvent(models.Model):
         ordering = ["created_at"]
 
 
+
+class ScenarioResetEpoch(models.Model):
+    """QA M2: the reset epoch (generation marker) of the current scenario run.
+
+    ``make scenario-reset`` writes the same opaque value here and in MiniTOS.
+    OES stamps it into every ``scms.execution.event.v1`` envelope as
+    ``reset_epoch`` and ignores MiniTOS envelopes (site.created,
+    configuration.published, order.released) from any other epoch. No row means
+    no fence (normal operation, or a reset without ``--reset-epoch``).
+    """
+
+    epoch = models.CharField(max_length=64)
+    scenario = models.CharField(max_length=40, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.scenario or 'scenario'} reset epoch {self.epoch}"
+
 class CommandResultReceipt(models.Model):
     APPLIED = "applied"
     INFORMATIONAL = "informational"
