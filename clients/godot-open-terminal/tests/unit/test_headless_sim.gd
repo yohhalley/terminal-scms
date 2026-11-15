@@ -106,6 +106,7 @@ func _initialize():
 	_test_rtg_no_show_always_on()
 	_test_rtg_rules_and_config()
 	# TCL-034: timing profiles, W2/W3 no-shows, leg stall clock, margins.
+	_test_hold_derived_from_cycle()
 	_test_timing_profiles_and_precedence()
 	_test_timing_env_precedence()
 	_test_fast_profile_steps_capped()
@@ -722,7 +723,7 @@ func _test_configurable_qc_waits():
 	var command = simulator._active_commands[QC_ID]
 	_assert(int(command.hold_wait_ms) == 4000 and int(command.wait_until_ms) == 4000, "Configured hold wait applies from receipt")
 	var defaults = HeadlessSimulator.new()
-	_assert(defaults._qc_wait_s.hold == [90, 120] and defaults._rtg_wait_s.hold == [60, 120], "TCL-034: built-in default profile realistic (D-039)")
+	_assert(defaults._qc_wait_s.hold == _realistic_hold("qc") and defaults._rtg_wait_s.hold == _realistic_hold("rtg"), "TCL-034: built-in default profile realistic (D-039)")
 	defaults._mqtt.free()
 	defaults._bootstrap.free()
 	defaults.free()
@@ -1398,9 +1399,26 @@ func _clear_timing_env():
 		OS.unset_environment(key.replace("SIMULATOR_", "SIM_"))
 
 
+## D-051: the realistic hold the profile implies (cycle - simulated motion).
+func _realistic_hold(che_kind: String) -> Array:
+	return SimTiming.hold_range("realistic", che_kind)
+
+
+## TCL-034e (D-051): realistic is a full cycle; hold = max(0, cycle - motion).
+func _test_hold_derived_from_cycle():
+	_assert(SimTiming.PROFILES.realistic.has("qc_cycle") and SimTiming.PROFILES.realistic.has("rtg_cycle"), "realistic stores the crane cycle (D-051)")
+	_assert(SimTiming.QC_SIMULATED_MOTION_S == 0 and SimTiming.RTG_SIMULATED_MOTION_S == 0, "No crane motion is simulated today")
+	_assert(SimTiming.hold_range("realistic", "qc") == SimTiming.hold_from_cycle(SimTiming.REALISTIC_QC_CYCLE_S, SimTiming.QC_SIMULATED_MOTION_S), "QC hold = cycle - motion")
+	_assert(SimTiming.hold_range("realistic", "rtg") == SimTiming.hold_from_cycle(SimTiming.REALISTIC_RTG_CYCLE_S, SimTiming.RTG_SIMULATED_MOTION_S), "RTG hold = cycle - motion")
+	_assert(SimTiming.REALISTIC_QC_CYCLE_S == [60, 60] and SimTiming.REALISTIC_RTG_CYCLE_S == [60, 60], "Default realistic cycle is 60 s (Y1 pending)")
+	_assert(SimTiming.hold_from_cycle([60, 70], 15) == [45, 55], "Simulated motion shrinks the hold")
+	_assert(SimTiming.hold_from_cycle([60, 70], 65) == [0, 5], "The hold never goes below 0")
+	_assert(SimTiming.hold_range("fast", "qc") == [2, 5] and SimTiming.hold_range("fast", "rtg") == [2, 5], "fast keeps its 2..5 s holds as is")
+
+
 func _test_timing_profiles_and_precedence():
 	var plain = HeadlessSimulator.new()
-	_assert(plain._timing_profile == "realistic" and plain._qc_wait_s.hold == [90, 120] and plain._rtg_wait_s.hold == [60, 120], "Built-in default Sim/Timing/Profile is realistic (D-039)")
+	_assert(plain._timing_profile == "realistic" and plain._qc_wait_s.hold == _realistic_hold("qc") and plain._rtg_wait_s.hold == _realistic_hold("rtg"), "Built-in default Sim/Timing/Profile is realistic (D-039)")
 	plain._mqtt.free()
 	plain._bootstrap.free()
 	plain.free()
@@ -1411,8 +1429,9 @@ func _test_timing_profiles_and_precedence():
 		_assert(_birth_metric(simulator, name) == 300, "NBIRTH %s defaults to 300" % name)
 	_assert(_birth_metric(simulator, "Sim/Timing/LegStallTimeoutS") == 600, "NBIRTH LegStallTimeoutS defaults to 600")
 	_assert(simulator.configure_timing_profile("REALISTIC"), "realistic profile applies (case-insensitive)")
-	_assert(simulator._qc_wait_s.hold == [90, 120] and simulator._rtg_wait_s.hold == [60, 120], "realistic: QC 90..120 s, RTG 60..120 s hold (D-039)")
-	_assert(_birth_metric(simulator, "Sim/Timing/QcHoldMinS") == 90 and _birth_metric(simulator, "Sim/Timing/RtgHoldMaxS") == 120, "NBIRTH reports the actual hold values")
+	_assert(simulator._qc_wait_s.hold == _realistic_hold("qc") and simulator._rtg_wait_s.hold == _realistic_hold("rtg"), "realistic: QC and RTG hold = cycle - simulated motion (D-051)")
+	_assert(simulator._qc_wait_s.hold == [60, 60] and simulator._rtg_wait_s.hold == [60, 60], "realistic default: 60 s cycle, 0 s motion -> 60 s hold (TCL-034e default, Y1 pending)")
+	_assert(_birth_metric(simulator, "Sim/Timing/QcHoldMinS") == _realistic_hold("qc")[0] and _birth_metric(simulator, "Sim/Timing/RtgHoldMaxS") == _realistic_hold("rtg")[1], "NBIRTH reports the actual (effective) hold values")
 	_assert(not simulator.configure_timing_profile("turbo") and simulator._timing_profile == "realistic", "Unknown profile keeps the current one")
 	_assert(simulator.configure_timing_profile("fast") and simulator._qc_wait_s.hold == [2, 5], "fast: hold 2..5 s")
 	_assert(not simulator.configure_qc_no_show_timeout("0") and not simulator.configure_rtg_no_show_timeout("x") and not simulator.configure_leg_stall_timeout("-5"), "Invalid time-outs are refused")
@@ -1425,23 +1444,25 @@ func _test_timing_env_precedence():
 	_clear_timing_env()
 	var simulator = _new_chain_simulator(42, QC_LAT)
 	simulator._configure_timing()
-	_assert(simulator._timing_profile == "realistic" and simulator._qc_wait_s.hold == [90, 120], "No env: built-in default profile realistic")
+	var qc_real = _realistic_hold("qc")
+	var rtg_real = _realistic_hold("rtg")
+	_assert(simulator._timing_profile == "realistic" and simulator._qc_wait_s.hold == qc_real, "No env: built-in default profile realistic")
 	OS.set_environment("SIMULATOR_TIMING_PROFILE", "fast")
 	simulator._configure_timing()
 	_assert(simulator._timing_profile == "fast" and simulator._qc_wait_s.hold == [2, 5] and simulator._rtg_wait_s.hold == [2, 5], "env fast beats the default")
 	OS.set_environment("SIMULATOR_TIMING_PROFILE", "realistic")
-	OS.set_environment("SIMULATOR_RTG_HOLD_WAIT_MAX_S", "100")
-	OS.set_environment("SIMULATOR_QC_WAIT_MIN_S", "95")
+	OS.set_environment("SIMULATOR_RTG_HOLD_WAIT_MAX_S", str(rtg_real[1] + 40))
+	OS.set_environment("SIMULATOR_QC_WAIT_MIN_S", str(qc_real[1] - 5))
 	simulator._configure_timing()
-	_assert(simulator._qc_wait_s.hold == [95, 120], "Generic QC wait key overrides the profile (%s)" % [simulator._qc_wait_s.hold])
-	_assert(simulator._rtg_wait_s.hold == [60, 100], "RTG hold key overrides the profile (%s)" % [simulator._rtg_wait_s.hold])
-	OS.set_environment("SIMULATOR_QC_HOLD_WAIT_MIN_S", "99")
+	_assert(simulator._qc_wait_s.hold == [qc_real[1] - 5, qc_real[1]], "Generic QC wait key overrides the profile (%s)" % [simulator._qc_wait_s.hold])
+	_assert(simulator._rtg_wait_s.hold == [rtg_real[0], rtg_real[1] + 40], "RTG hold key overrides the profile (%s)" % [simulator._rtg_wait_s.hold])
+	OS.set_environment("SIMULATOR_QC_HOLD_WAIT_MIN_S", str(qc_real[1] - 1))
 	OS.set_environment("SIMULATOR_QC_NO_SHOW_TIMEOUT_S", "301")
 	OS.set_environment("SIMULATOR_RTG_NO_SHOW_TIMEOUT_S", "302")
 	OS.set_environment("SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "303")
 	OS.set_environment("SIMULATOR_LEG_STALL_TIMEOUT_S", "900")
 	simulator._configure_timing()
-	_assert(simulator._qc_wait_s.hold == [99, 120], "The hold key wins over the generic key")
+	_assert(simulator._qc_wait_s.hold == [qc_real[1] - 1, qc_real[1]], "The hold key wins over the generic key")
 	_assert(simulator._qc_no_show_timeout_s == 301 and simulator._rtg_no_show_timeout_s == 302 and simulator._tt_no_show_timeout_s == 303, "No-show time-outs come from env")
 	_assert(simulator._leg_stall_timeout_s == 900 and _birth_metric(simulator, "Sim/Timing/LegStallTimeoutS") == 900, "Leg stall time-out comes from env and is on NBIRTH")
 	_clear_timing_env()
@@ -1500,7 +1521,13 @@ func _test_profile_determinism():
 	_assert(not fast_a.is_empty() and fast_a == fast_b, "fast: deterministic per seed")
 	_assert(not real_a.is_empty() and real_a == real_b, "realistic: deterministic per seed")
 	_assert(fast_a != real_a, "The profile changes the run")
-	_assert(_profile_trace(77, "realistic") != real_a, "realistic: another seed changes the run")
+	# A fixed realistic cycle (TCL-034e default [60, 60]) draws no randomness, so
+	# another seed only changes the run when the cycle is a range (Y1).
+	if _realistic_hold("qc")[0] < _realistic_hold("qc")[1] or _realistic_hold("rtg")[0] < _realistic_hold("rtg")[1]:
+		_assert(_profile_trace(77, "realistic") != real_a, "realistic: another seed changes the run")
+	else:
+		_assert(_profile_trace(77, "realistic") == real_a, "realistic with a fixed cycle: the seed does not change the hold")
+	_assert(_profile_trace(77, "fast") != fast_a, "fast: another seed changes the run")
 	var qc_hold := 0
 	var picked := -1
 	for row in real_a:
@@ -1508,7 +1535,7 @@ func _test_profile_determinism():
 			picked = row[3]
 		if row[0] == "QC01" and row[1] == "handoff_completed":
 			qc_hold = row[3] - picked
-	_assert(qc_hold >= 90000, "realistic: the QC holds >= 90 s (%s ms)" % qc_hold)
+	_assert(qc_hold >= _realistic_hold("qc")[0] * 1000, "realistic: the QC holds >= the cycle minimum (%s ms)" % qc_hold)
 
 
 ## TCL-011 §8(g): every time-out >= 2 x the profile's worst normal wait.
@@ -1527,7 +1554,8 @@ func _test_timing_margins_both_profiles():
 		_free_simulator(simulator)
 	var tight = _new_chain_simulator(42, QC_LAT)
 	tight.configure_timing_profile("realistic")
-	tight.configure_qc_no_show_timeout("200")
+	# W2 worst = realistic QC hold max; one second under 2 x that must be reported.
+	tight.configure_qc_no_show_timeout(str(2 * _realistic_hold("qc")[1] - 1))
 	_assert(tight.timing_margin_violations().size() == 1, "A too-short W2 time-out is reported (%s)" % [tight.timing_margin_violations()])
 	_free_simulator(tight)
 
@@ -1567,7 +1595,8 @@ func _test_realistic_hold_is_not_a_w2_no_show():
 	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 2000), "realistic H1 completes")
 	var results = _results(simulator)
 	var waited = int(_find(results, "TT01", "handoff_completed")["Sim/TimeMs"]) - int(_find(results, "TT01", "arrived_at_source")["Sim/TimeMs"])
-	_assert(waited >= 90000 and not _events_of(results, "TT01").has("handoff_timed_out"), "TT waited %s ms through the hold without a time-out" % waited)
+	# The TT arrives one fixed step after the QC command, so it waits hold - 1 step.
+	_assert(waited >= _realistic_hold("qc")[0] * 1000 - simulator._clock.step_ms and not _events_of(results, "TT01").has("handoff_timed_out"), "TT waited %s ms through the hold without a time-out" % waited)
 	_free_simulator(simulator)
 
 

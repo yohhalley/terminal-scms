@@ -122,7 +122,8 @@ var _start_epoch_ms := 0
 ## NBIRTH Sim/ScenarioId: OES bootstrap session.scenario_id, else SIMULATOR_SCENARIO_ID.
 var _scenario_id := ""
 var _last_checkpoint_sim_ms := 0
-## Sim/Timing/Profile (`fast` | `realistic`); sets the hold ranges below.
+## Sim/Timing/Profile (`fast` | `realistic`); sets the hold ranges below
+## (realistic: hold = cycle - simulated motion, D-051; SimTiming.gd).
 var _timing_profile := SimTiming.DEFAULT_PROFILE
 ## Whole seconds, inclusive, per QC wait step. D-012: only the hold wait exists.
 var _qc_wait_s := {
