@@ -48,8 +48,9 @@ const DEFAULT_RTG_NO_SHOW_TIMEOUT_S := 300
 const DEFAULT_LEG_STALL_TIMEOUT_S := 600
 
 ## Longest normal TT drive used for the W4 margin: the demo layout's longest
-## QC lane -> block lane road (TCL-011 §8(g): "TT drive 25-50 s").
-## PENDING E22 (whether the RTG wait clock includes the TT drive); assumption.
+## QC lane -> block lane road (TCL-011 §8(g): "TT drive 25-50 s"). D-052: W4
+## starts when the RTG is at the bay and ready to pick; the RTG can be ready
+## before the loaded TT arrives (TCL-011 N4), so the drive stays the worst W4.
 const DEMO_MAX_TT_DRIVE_M := 200.0
 ## TCL-011 §8(g): every time-out >= 2 x the worst normal wait it can cut short.
 const MARGIN_FACTOR := 2
@@ -81,8 +82,8 @@ static func hold_from_cycle(cycle_s: Array, motion_s: int) -> Array:
 ## Worst normal waits (whole seconds) per wait of TCL-011 §4 / §8(g):
 ## W1 QC waits for TT ~ one TT cycle, bounded by the RTG hold (H2 frees the TT);
 ## W2 TT waits for QC = the rest of a QC hold; W3 TT waits for RTG = one RTG
-## cycle; W4 RTG waits for TT = the TT drive (E22: whether the RTG clock
-## includes the drive is open; counting it is the safe side).
+## cycle; W4 RTG waits for TT = the TT drive (D-052: the clock starts at
+## ready-to-pick, which can be before the TT arrives).
 static func worst_normal_waits_s(qc_hold: Array, rtg_hold: Array, speed_mps: float) -> Dictionary:
 	var drive_s = int(ceil(DEMO_MAX_TT_DRIVE_M / max(speed_mps, 0.1)))
 	return {

@@ -97,6 +97,7 @@ func _initialize():
 	_test_device_id_mapping()
 	_test_mqtt_packet_id_wraps()
 	_test_rtg_state_machine()
+	_test_w4_starts_at_ready_to_pick()
 	_test_chain_happy_path_d016()
 	_test_rtg_commanded_slot()
 	_test_chain_late_tt_at_rtg()
@@ -1058,6 +1059,40 @@ func _test_rtg_state_machine():
 	_assert(_names(RtgStack.step(command, 300000, 0)) == ["handoff_timed_out"], "RTG times out after 300 s")
 	_assert(RtgStack.step(command, 300100, TT_ID).is_empty(), "A TT after the time-out gets no transfer")
 	_assert(_names(RtgStack.cancel(command)) == ["cancelled"] and str(command.work_state) == "idle", "Cancel clears the RTG")
+
+
+## TCL-034e (D-052): W4 starts when the RTG leaves gantry_to_bay (at the bay,
+## ready to pick), never at the command; a TT already at the lane means no W4.
+func _test_w4_starts_at_ready_to_pick():
+	var slot = {"position_id": 0, "position_code": "BLOCK01-DUMMY-01"}
+	var command = _rtg_command()
+	RtgStack.start(command, 10000, slot, 30000)
+	_assert(int(command.ready_to_pick_at_ms) == -1 and int(command.waiting_since_ms) == 0, "D-052: no ready-to-pick time at the command")
+	_assert(_names(RtgStack.step(command, 4000, 0)) == ["waiting_for_handoff"], "D-052: RTG at the bay with no TT waits")
+	_assert(int(command.ready_to_pick_at_ms) == 4000 and int(command.waiting_since_ms) == 4000, "D-052: W4 starts at ready-to-pick")
+	_assert(RtgStack.step(command, 33999, 0).is_empty(), "D-052: no W4 time-out before ready-to-pick + 30 s")
+	_assert(_names(RtgStack.step(command, 34000, 0)) == ["handoff_timed_out"], "D-052: W4 times out at ready-to-pick + 30 s")
+	command = _rtg_command()
+	RtgStack.start(command, 10000, slot, 30000)
+	var picked = RtgStack.step(command, 2500, TT_ID)
+	_assert(_names(picked) == ["handoff_completed"] and int(command.ready_to_pick_at_ms) == 2500, "D-052: TT already at the lane -> pick at ready-to-pick")
+	_assert(int(command.waiting_since_ms) == 0 and str(command.work_state) == "holding", "D-052: no W4 opens when the TT is ready")
+	# Simulator: the RTG is commanded while the loaded TT still drives to the block.
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 2000), "D-052 setup: H1 completes")
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	var commanded_ms = int(simulator._clock.now_ms)
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	_assert(_run_until(simulator, func(): return str(simulator._active_commands.get(RTG_ID, {}).get("work_state", "")) == "waiting_for_tt", 50), "D-052: RTG waits for the driving TT")
+	var rtg: Dictionary = simulator._active_commands[RTG_ID]
+	var waiting = _find(_results(simulator), "RTG01", "waiting_for_handoff")
+	_assert(int(rtg.ready_to_pick_at_ms) > commanded_ms, "D-052: ready-to-pick is the first step after the command (0 s gantry)")
+	_assert(int(rtg.waiting_since_ms) == int(rtg.ready_to_pick_at_ms) and int(waiting["Sim/TimeMs"]) == int(rtg.ready_to_pick_at_ms), "D-052: W4 clock and waiting_for_handoff carry the ready-to-pick time")
+	_assert(_run_until(simulator, func(): return simulator._active_commands.is_empty(), 3000), "D-052: the chain still finishes")
+	_assert(not _events_of(_results(simulator), "RTG01").has("handoff_timed_out"), "D-052: a normal TT drive is not a W4 no-show")
+	_free_simulator(simulator)
 
 
 func _new_chain_simulator(run_seed: int, tt_lat: float) -> HeadlessSimulator:
