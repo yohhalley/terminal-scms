@@ -215,9 +215,9 @@ D-005 and D-012 set the flow. The TT drives to the quay. The container *appears*
 
 **3x. Exception path: TT no-show (D-013, D-017)**
 
-If the TT hasn't arrived N s after the hold ends (N from NBIRTH `Sim/Timing/TtNoShowTimeoutS`, else `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, else 300; configurable per D-017), the QC publishes `handoff_timed_out` once. OES then:
+If the counterpart hasn't arrived within N s (N from that CHE type's NBIRTH `Sim/Timing/{Qc,Tt,Rtg}NoShowTimeoutS`, else the matching `SIMULATOR_*_NO_SHOW_TIMEOUT_S`, else 300; configurable per D-017), the waiter publishes `handoff_timed_out` once. Any waiter may report: QC or TT at H1, TT or RTG at H2. The W1 case below (QC waits for the TT) is the worked example. OES then:
 - records `Handoff.status='exception'`;
-- emits `handoff_exception` with `reason:"SIMULATOR_FAILURE"`, `detail:"no TT within <N> s"` (e.g. "no TT within 300 s" with the default), the hand-off ids and the names;
+- emits `handoff_exception` with `reason:"SIMULATOR_FAILURE"`, `detail:"no <QC|TT|RTG> within <N> s"` (e.g. W1: "no TT within 300 s" with the default), the hand-off ids and the names;
 - sends cancel DCMDs (`Command/Type=cancel`, `CancelCommandId`, `Reason=SIMULATOR_FAILURE`) for both legs.
 
 This is a **simulator failure marker, not an operational recovery** (SME review: a real terminal would send another TT). **D-038 (B11):** the container goes to a **normal block** (the process doesn't change; no separate exception area), is **marked as a simulator failure** (`SIMULATOR_FAILURE`, D-017) and is **excluded from the KPIs**. Answers Q16. **D-027 (A10):** the same logic applies to every CHE, and the time-out is a sim-init parameter. **D-043 (B16):** the MiniTOS user sees the failure reason and details; when the simulator gives no reason, OES fills in a default code. Which code is not stated (Q20); today TCL-028 uses `UNSPECIFIED` for a failed result with no reason, a team choice and not a decision.
@@ -244,7 +244,7 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
 - **AC3.6** Sim time from appear to deposit (compressed time; today's fast timings) is a whole number in [10, 30] if the TT was waiting, else the deposit happens at TT ready (D-012). Same seed, same hold sequence (D-016). See AC3.14 for the D-039 timing profiles.
 - **AC3.7** No `CommandResultReceipt` is `rejected`, and no MiniTOS `IntegrationInbox` row is `failed`.
 - **AC3.8** No-show (fields checked in the #13 code, now on `main`):
-  - **AC3.8a** OES `Handoff`: `status='exception'`, `exception_reason='SIMULATOR_FAILURE'`, `exception_detail='no TT within <N> s'`.
+  - **AC3.8a** OES `Handoff`: `status='exception'`, `exception_reason='SIMULATOR_FAILURE'`, `exception_detail='no <QC|TT|RTG> within <N> s'` (W1: `'no TT within <N> s'`). The detail names the absent CHE type.
   - **AC3.8b** OES `ExecutionOrder`: `status='complete'`, `failure_reason='SIMULATOR_FAILURE'`. Open `ExecutionOperation`s and `DispatchAssignment`s are `cancelled` with `failure_reason='SIMULATOR_FAILURE'`, and cancel DCMDs are sent.
   - **AC3.8c** MiniTOS `ContainerVisit`: `status='AtYard'` in exactly one `BLOCK01` slot, `current_che` NULL, `exception_reason='SIMULATOR_FAILURE'`, `exception_detail` = the event's `detail`. *(D-033 + D-038; not built)* Because the box never reaches a TT, the D-033 trigger never fires, so at the relocation `ContainerUnit.is_in_terminal=True` and its time-in = the relocation event's time, flagged `SIMULATOR_FAILURE`. A box in a yard slot is never counted "not in terminal". Today `is_in_terminal` is set by the drop path only (G5); the relocation path is unverified.
   - **AC3.8d** MiniTOS `Order`: `status='complete'` with the open legs `cancelled`. The MiniTOS `Order` has **no** reason field; the reason lives on the visit.

@@ -26,6 +26,7 @@ from execution.models import (
 from execution.services.dispatch import (
     COMMAND_ASSIGN_HANDOFF,
     COMMAND_CANCEL,
+    QC_EQUIPMENT_TYPE_CODES,
     TERMINAL_COMMAND_STATES,
     derived_id,
     event_time,
@@ -42,12 +43,10 @@ NO_SHOW_ORDER_STATUS = ExecutionOrder.COMPLETE
 NO_SHOW_REASON = Handoff.ExceptionReason.SIMULATOR_FAILURE
 # Godot's built-in no-show default (all three CHE types), the last fallback.
 DEFAULT_NO_SHOW_TIMEOUT_S = 300
-DEFAULT_TT_NO_SHOW_TIMEOUT_S = DEFAULT_NO_SHOW_TIMEOUT_S
 
 # Detail / env names follow the absent CHE type (TCL-011 §6.1 / §6.3).
-# STS is the QC type code on EquipmentState; the detail says "QC" to match
-# QcNoShowTimeoutS.
-_ABSENT_TYPE_LABEL = {"TT": "TT", "RTG": "RTG", "STS": "QC", "QC": "QC"}
+# QC types come from dispatch.QC_EQUIPMENT_TYPE_CODES (STS and QC).
+_ABSENT_TYPE_LABEL = {"TT": "TT", "RTG": "RTG"}
 _NO_SHOW_SESSION_FIELD = {
     "TT": "tt_no_show_timeout_s",
     "QC": "qc_no_show_timeout_s",
@@ -62,11 +61,18 @@ _NO_SHOW_ENV_KEY = {
 
 def _absent_type_label(equipment_or_code):
     if equipment_or_code is None:
+        logger.warning("Unknown equipment type code %r for no-show detail; falling back to TT.", None)
         return "TT"
     code = equipment_or_code
     if not isinstance(code, str):
         code = getattr(equipment_or_code, "equipment_type_code", "") or ""
-    return _ABSENT_TYPE_LABEL.get(str(code).strip().upper(), "TT")
+    code = str(code).strip().upper()
+    if code in QC_EQUIPMENT_TYPE_CODES:
+        return "QC"
+    if code in _ABSENT_TYPE_LABEL:
+        return _ABSENT_TYPE_LABEL[code]
+    logger.warning("Unknown equipment type code %r for no-show detail; falling back to TT.", code)
+    return "TT"
 
 
 def no_show_timeout_s(session=None, absent_type="TT"):
@@ -88,11 +94,6 @@ def no_show_timeout_s(session=None, absent_type="TT"):
     except ValueError:
         return DEFAULT_NO_SHOW_TIMEOUT_S
     return seconds if seconds > 0 else DEFAULT_NO_SHOW_TIMEOUT_S
-
-
-def tt_no_show_timeout_s(session=None):
-    """Backward-compatible alias: the TT no-show timeout of this session."""
-    return no_show_timeout_s(session, absent_type="TT")
 
 
 def no_show_detail(session=None, absent_type="TT"):
@@ -281,14 +282,66 @@ def _cancel_operation(operation, *, reason, event_ms, anchor_sim_ms):
     return False
 
 
+def _timeout_reporter_role(handoff):
+    """Role of the waiter that raised the exception, from ``exception_detail``."""
+    detail = (handoff.exception_detail or "").strip()
+    parts = detail.split()
+    if len(parts) < 2 or parts[0] != "no":
+        return None
+    absent = parts[1]
+    if absent == _absent_type_label(handoff.receiver_equipment):
+        return Handoff.GIVER
+    if absent == _absent_type_label(handoff.giver_equipment):
+        return Handoff.RECEIVER
+    return None
+
+
+def _late_handoff_timed_out(handoff, role):
+    """N3 / S-1: a timed-out report on a hand-off that is no longer pending."""
+    if handoff.status == Handoff.TRANSFERRED:
+        raise ResultRejected(
+            "handoff_not_pending",
+            f"{role} handoff_timed_out after transfer",
+            conflict=_flag_conflict(handoff, f"{role} handoff_timed_out after transfer"),
+        )
+    if handoff.status == Handoff.EXCEPTION:
+        first = _timeout_reporter_role(handoff)
+        if first and first != role:
+            logger.warning(
+                "S1 same-tick rule did not hold at source: %s "
+                "handoff_timed_out on exception hand-off %s (first report was %s).",
+                role, handoff.handoff_id, first,
+            )
+        else:
+            logger.info(
+                "Idempotent no-op: late or duplicate handoff_timed_out for %s "
+                "hand-off %s (role %s).",
+                handoff.status, handoff.handoff_id, role,
+            )
+        return False
+    logger.info(
+        "Idempotent no-op: late or duplicate handoff_timed_out for %s "
+        "hand-off %s (role %s).",
+        handoff.status, handoff.handoff_id, role,
+    )
+    return False
+
+
 def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
     """TCL-011 §6.3: accept ``handoff_timed_out`` from either side; raise once.
 
     The first report on a PENDING hand-off wins and raises the exception. The
     reporter is the waiter; the absent CHE is its counterpart, and ``detail``
-    quotes that type and the session's N. A duplicate or late report (the
-    hand-off is already ``exception``, ``transferred`` or ``cancelled``) is
-    an idempotent no-op and is logged.
+    quotes that type and the session's N.
+
+    A late report on a hand-off that is no longer pending changes nothing
+    (N3 / S-1): ``exception`` or ``cancelled`` is an expected race and is a
+    logged INFORMATIONAL no-op. A report from the *other* role on an
+    ``exception`` hand-off means the S1 same-tick rule did not hold at the
+    source, and is logged at WARNING. A report after ``transferred`` is a
+    Godot contradiction: it is rejected (``handoff_not_pending``), logged at
+    WARNING, and flagged on the hand-off (``conflict_count`` /
+    ``last_conflict``). The transfer is not undone.
 
     Godot publishes at most one report per HandoffId and, on a same-tick
     tie, the giver's (S1 / rev 9.4). OES applies reports in arrival order
@@ -299,14 +352,9 @@ def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
     """
     handoff = _load_handoff(command, metrics)
     role = _role_for(handoff, command, metrics)
-    if handoff.status != Handoff.PENDING:
-        logger.info(
-            "Idempotent no-op: late or duplicate handoff_timed_out for %s "
-            "hand-off %s (role %s).",
-            handoff.status, handoff.handoff_id, role,
-        )
-        return False
     _check_container(handoff, metrics)
+    if handoff.status != Handoff.PENDING:
+        return _late_handoff_timed_out(handoff, role)
     reason = NO_SHOW_REASON.value
     absent = (
         handoff.receiver_equipment if role == Handoff.GIVER else handoff.giver_equipment
