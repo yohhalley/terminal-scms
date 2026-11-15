@@ -84,7 +84,7 @@ const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 ## NBIRTH Contract/Version (TCL-002 §3.1, S2): "tcl-002.<minor>". OES refuses an
 ## unsupported major version. tcl-002.2 (TCL-034): Sim/Timing/Profile,
 ## Qc/RtgNoShowTimeoutS, LegStallTimeoutS added, RtgNoShowTimeoutEnabled removed
-## (contract rev 9.4, assumed; names pending BE confirmation).
+## (contract rev 9.4 assumed; names confirmed by BE on 15 Nov 2026).
 const CONTRACT_VERSION := "tcl-002.2"
 
 var _bootstrap := OESBootstrapClient.new()
