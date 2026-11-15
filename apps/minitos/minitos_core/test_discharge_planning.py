@@ -146,7 +146,10 @@ class CreatesOrdersTests(DischargePlanningTestBase):
 
     def test_rng_is_injectable_and_draws_from_the_free_slots(self):
         free = list(discharge_planning.free_yard_slots(block_slots().first().pile.storage_grid))
-        expected = yard_planning.choose_slots(free, self.containers, random.Random(42))
+        expected = yard_planning.choose_slots(
+            free, self.containers, random.Random(42),
+            containers=list(discharge_planning.discharge_container_visits(self.visit)),
+        )
 
         planned = plan_visit_discharge(self.visit, rng=random.Random(42))
 

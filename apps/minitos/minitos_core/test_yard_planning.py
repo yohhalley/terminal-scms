@@ -18,6 +18,7 @@ from minitos_core.models import (
     ContainerOwner,
     ContainerUnit,
     ContainerVisit,
+    ISOType,
     Order,
     Position,
     ScenarioSeed,
@@ -28,6 +29,7 @@ from minitos_core.services import yard_planning
 from minitos_core.services.discharge_planning import (
     CODE_NO_FREE_SLOT,
     DischargePlanningError,
+    discharge_container_visits,
     plan_visit_discharge,
 )
 
@@ -92,6 +94,7 @@ class SeededSlotTests(TestCase):
         free = list(yard_planning.free_yard_slots(ground_slots().first().pile.storage_grid))
         expected = yard_planning.choose_slots(
             free, CONTAINERS, random.Random(f'TCL-012:7:{visit.pk}'),
+            containers=list(discharge_container_visits(visit)),
         )
 
         planned = plan_visit_discharge(visit)
@@ -142,7 +145,8 @@ class FreeSlotTests(TestCase):
 
     def test_never_picks_an_occupied_reserved_or_already_targeted_slot(self):
         drop_seeded_orders()
-        slots = list(ground_slots())
+        # import_v1's containers are 20' (22G1): only odd bays fit them (bay rule).
+        slots = [slot for slot in ground_slots() if slot.pile.bay % 2 == 1]
         # One slot of each kind that is not free, then exactly enough free ones.
         Position.objects.filter(pk=slots[0].pk).update(container_visit=self.dwell_container(654321), is_occupied=True)
         Position.objects.filter(pk=slots[1].pk).update(is_occupied=True)
@@ -330,7 +334,8 @@ class UnreachableSlotTests(TestCase):
         self.visit = CarrierVisit.objects.get()
 
     def make_gappy_block(self):
-        keep = list(ground_slots()[:self.containers])
+        # Odd bays only: import_v1's 20' containers fit there (bay rule).
+        keep = [slot for slot in ground_slots() if slot.pile.bay % 2 == 1][:self.containers]
         all_block_slots().exclude(pk__in=[slot.pk for slot in keep]).update(is_reserved=True)
         # A corrupt tier (below ground) is still "free" but never reachable by
         # the tier walk, so len(free) == needed while only needed-1 are reachable.
@@ -376,6 +381,78 @@ class UnreachableSlotTests(TestCase):
         with self.assertRaises(DischargePlanningError) as caught:
             check_discharge_plannable(self.visit)
         self.assertEqual(caught.exception.planning_code, CODE_NO_FREE_SLOT)
+
+
+class BayLengthTests(TestCase):
+    """TL + BE (15 Nov): planning must not reserve a slot the RTG drop refuses
+    ("20' containers are not allowed in this bay"). Same rule as the drop:
+    ``Pile.can_accept_container`` (20' odd bays, 40'/45' even bays)."""
+
+    containers = 5
+
+    def setUp(self):
+        reset_scenario('import_v1', containers=self.containers)
+        drop_seeded_orders()
+        self.visit = CarrierVisit.objects.get()
+        self.grid = ground_slots().first().pile.storage_grid
+
+    def make_mixed(self):
+        """Containers 2 and 4 become 40' (42G1); the rest stay 20' (22G1)."""
+        forty = ISOType.objects.create(iso_type='42G1', length=ISOType.L40, height=ISOType.HNC)
+        visits = list(discharge_container_visits(self.visit))
+        for container_visit in visits[1::2]:
+            ContainerUnit.objects.filter(pk=container_visit.container_number_id).update(iso_type=forty)
+        return list(discharge_container_visits(self.visit))
+
+    def test_mixed_20_40_seed_plans_every_container_in_a_bay_that_fits(self):
+        visits = self.make_mixed()
+        lengths = sorted(cv.container_number.iso_type.length for cv in visits)
+        self.assertEqual(lengths, [ISOType.L20] * 3 + [ISOType.L40] * 2)
+
+        planned = plan_visit_discharge(self.visit)
+
+        self.assertEqual(len(planned), self.containers)
+        for item in planned:
+            container_visit = ContainerVisit.objects.select_related(
+                'container_number__iso_type',
+            ).get(pk=item.container_visit.pk)
+            slot = Order.objects.get(pk=item.order.pk).to_position.stack_position
+            ok, reason = slot.pile.can_accept_container(container_visit)
+            self.assertTrue(ok, f'{container_visit} -> {slot}: {reason}')
+            expected_parity = 1 if container_visit.container_number.iso_type.length == ISOType.L20 else 0
+            self.assertEqual(slot.pile.bay % 2, expected_parity, str(slot))
+
+    def test_the_drop_accepts_every_planned_slot(self):
+        """Assigning the container to its planned slot runs the drop's checks."""
+        self.make_mixed()
+        for item in plan_visit_discharge(self.visit):
+            slot = Order.objects.get(pk=item.order.pk).to_position.stack_position
+            slot.container_visit = ContainerVisit.objects.get(pk=item.container_visit.pk)
+            slot.save()  # raises ValidationError if the bay refuses the length
+
+    def test_same_seed_gives_the_same_mixed_plan(self):
+        self.make_mixed()
+        first = [item.order.to_position_id for item in plan_visit_discharge(self.visit, rng=random.Random(3))]
+        Order.objects.all().delete()
+        Position.objects.filter(is_reserved=True).update(is_reserved=False)
+        second = [item.order.to_position_id for item in plan_visit_discharge(self.visit, rng=random.Random(3))]
+        self.assertEqual(first, second)
+
+    def test_no_compatible_free_slot_is_discharge_no_free_slot(self):
+        # Every odd (20') bay slot is held; plenty of even (40') bay slots are free.
+        hold_slots([slot for slot in all_block_slots() if slot.pile.bay % 2 == 1])
+        free = list(yard_planning.free_yard_slots(self.grid))
+        self.assertGreaterEqual(len(free), self.containers)
+        self.visit.status = CarrierVisit.IN_OPERATION
+
+        with self.assertRaises(DischargePlanningError) as caught:
+            self.visit.save()
+
+        self.assertEqual(caught.exception.planning_code, CODE_NO_FREE_SLOT)
+        self.assertIn('fit the container sizes', caught.exception.planning_message)
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
+        self.assertFalse(Order.objects.filter(order_type=Order.MOVE_IN).exists())
 
 
 class ImportBlockTests(TestCase):

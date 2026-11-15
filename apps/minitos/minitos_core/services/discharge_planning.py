@@ -87,7 +87,7 @@ def default_rng(visit):
 def discharge_container_visits(visit):
     return ContainerVisit.objects.filter(
         ib_carrier=visit, category__in=DISCHARGE_CATEGORIES, status__in=ON_VESSEL_STATUSES,
-    ).select_related('container_number').order_by('pk')
+    ).select_related('container_number__iso_type').order_by('pk')
 
 
 def existing_discharge_order(container_visit):
@@ -279,7 +279,7 @@ def check_discharge_plannable(visit):
         _no_free_slot(visit, grid, len(pending), len(free))
     # Same reachability rule as the real draw (TL N1 / BE S-1 on #38); the
     # RNG does not change how many slots are reachable, only which.
-    _choose_slots(visit, grid, free, len(pending), random.Random(0))
+    _choose_slots(visit, grid, free, pending, random.Random(0))
 
 
 def _no_free_slot(visit, grid, needed, free, detail=''):
@@ -289,18 +289,24 @@ def _no_free_slot(visit, grid, needed, free, detail=''):
     )
 
 
-def _choose_slots(visit, grid, free, needed, rng):
-    """``yard_planning.choose_slots``, with a shortage (e.g. a gappy grid where
-    stacking leaves fewer slots reachable than are free) mapped to
-    ``discharge_no_free_slot`` instead of leaking a ValueError (500)."""
+def _choose_slots(visit, grid, free, pending, rng):
+    """``yard_planning.choose_slots`` for the ``pending`` container visits (each
+    slot fits its container's length by the bay rule), with a shortage (e.g. a
+    gappy grid where stacking leaves fewer slots reachable than are free, or no
+    free slot of a compatible bay) mapped to ``discharge_no_free_slot`` instead
+    of leaking a ValueError (500)."""
+    needed = len(pending)
     try:
-        return yard_planning.choose_slots(free, needed, rng)
+        return yard_planning.choose_slots(free, needed, rng, containers=pending)
     except ValueError as exc:
         available = getattr(exc, 'available', 0)
-        _no_free_slot(
-            visit, grid, needed, available,
-            detail=' reachable without a floating stack' if available < len(free) else '',
-        )
+        if getattr(exc, 'size_mismatch', False):
+            detail = f' that fit the container sizes ({exc})'
+        elif available < len(free):
+            detail = ' reachable without a floating stack'
+        else:
+            detail = ''
+        _no_free_slot(visit, grid, needed, available, detail=detail)
 
 
 @transaction.atomic
@@ -336,7 +342,7 @@ def plan_visit_discharge(visit, rng=None):
     if len(free) < len(pending):
         _no_free_slot(visit, grid, len(pending), len(free))
     rng = rng or default_rng(visit)
-    slots = _choose_slots(visit, grid, free, len(pending), rng)
+    slots = _choose_slots(visit, grid, free, pending, rng)
     road = _road_edges(visit, layout, qc_position, tl_position)
 
     next_priority = FIRST_PRIORITY + Order.objects.filter(
