@@ -104,7 +104,7 @@ func _initialize():
 	_test_chain_rtg_cancel()
 	_test_chain_determinism()
 	_test_chain_wrong_handoff_id()
-	_test_rtg_no_show_always_on()
+	_test_no_show_switch_default_on()
 	_test_rtg_rules_and_config()
 	# TCL-034: timing profiles, W2/W3 no-shows, leg stall clock, margins.
 	_test_hold_derived_from_cycle()
@@ -128,6 +128,12 @@ func _initialize():
 	_test_stall_paused_in_no_show_waits()
 	_test_stall_closes_pending_handoff()
 	_test_retired_rtg_key_only_warns()
+	# TCL-034e (D-053): one global no-show switch, one clock per waiting period.
+	_test_no_show_switch_parsing()
+	_test_no_show_switch_off_all_waits()
+	_test_no_show_clock_restarts_per_period()
+	_test_no_rearm_after_timeout()
+	_test_margins_skip_no_show_when_off()
 	_cleanup_state_file()
 	if not _failed:
 		print("Headless simulation checks passed")
@@ -948,6 +954,8 @@ func _test_node_birth_metrics():
 		by_name[str(metric.name)] = metric
 	_assert(by_name.has("Contract/Version") and str(by_name["Contract/Version"].value) == HeadlessSimulator.CONTRACT_VERSION, "NBIRTH has Contract/Version")
 	_assert(str(by_name["Contract/Version"].value).begins_with("tcl-002."), "Contract/Version is tcl-002.<minor>")
+	_assert(HeadlessSimulator.CONTRACT_VERSION == "tcl-002.3", "TCL-034e: Contract/Version is tcl-002.3 (NoShowTimeoutEnabled added)")
+	_assert(by_name.has("Sim/Timing/NoShowTimeoutEnabled") and str(by_name["Sim/Timing/NoShowTimeoutEnabled"].type) == "Boolean" and by_name["Sim/Timing/NoShowTimeoutEnabled"].value == true, "NBIRTH has Sim/Timing/NoShowTimeoutEnabled (Boolean, default true)")
 	_assert(by_name.has("Sim/ScenarioId") and str(by_name["Sim/ScenarioId"].value) == "import-discharge-ci" and str(by_name["Sim/ScenarioId"].type) == "String", "NBIRTH has Sim/ScenarioId")
 	_assert(str(by_name["Sim/StartEpochMs"].type) == "Int64" and int(by_name["Sim/StartEpochMs"].value) == 1764583200000, "Sim/StartEpochMs is Int64 epoch ms")
 	for name in ["Session/Id", "Sim/Seed", "Sim/TimeScale", "Sim/Timing/TtNoShowTimeoutS"]:
@@ -1368,10 +1376,12 @@ func _test_chain_wrong_handoff_id():
 	_free_simulator(simulator)
 
 
-## TCL-034: the RTG no-show (W4) is always on with Sim/Timing/TtNoShowTimeoutS;
-## the retired switch is gone from NBIRTH. RtgStack keeps "0 = never" internally.
-func _test_rtg_no_show_always_on():
+## TCL-034e (D-053): the global no-show switch is on by default, W4 uses
+## Sim/Timing/TtNoShowTimeoutS; the retired W4-only switch stays gone from
+## NBIRTH. RtgStack keeps "0 = never" internally.
+func _test_no_show_switch_default_on():
 	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator._no_show_timeout_enabled == true and _birth_metric(simulator, "Sim/Timing/NoShowTimeoutEnabled") == true, "D-053: the no-show switch defaults to on")
 	_assert(simulator.rtg_no_show_timeout_ms() == 300000, "W4 uses Sim/Timing/TtNoShowTimeoutS (300 s)")
 	_assert(simulator.configure_tt_no_show_timeout("120") and simulator.rtg_no_show_timeout_ms() == 120000, "W4 follows TtNoShowTimeoutS")
 	_assert(_birth_metric(simulator, "Sim/Timing/RtgNoShowTimeoutEnabled") == null, "NBIRTH no longer has RtgNoShowTimeoutEnabled")
@@ -1424,7 +1434,7 @@ const TIMING_ENV_KEYS := [
 	"SIMULATOR_QC_HOLD_WAIT_MIN_S", "SIMULATOR_QC_HOLD_WAIT_MAX_S", "SIMULATOR_RTG_WAIT_MIN_S",
 	"SIMULATOR_RTG_WAIT_MAX_S", "SIMULATOR_RTG_HOLD_WAIT_MIN_S", "SIMULATOR_RTG_HOLD_WAIT_MAX_S",
 	"SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "SIMULATOR_QC_NO_SHOW_TIMEOUT_S", "SIMULATOR_RTG_NO_SHOW_TIMEOUT_S",
-	"SIMULATOR_LEG_STALL_TIMEOUT_S",
+	"SIMULATOR_LEG_STALL_TIMEOUT_S", "SIMULATOR_NO_SHOW_TIMEOUT_ENABLED",
 ]
 
 
@@ -1993,7 +2003,110 @@ func _test_retired_rtg_key_only_warns():
 	var simulator = _new_chain_simulator(42, QC_LAT)
 	simulator._configure_timing()
 	_assert(simulator.rtg_no_show_timeout_ms() == simulator._tt_no_show_timeout_s * 1000, "Retired key =false is ignored: W4 stays on")
+	_assert(simulator._no_show_timeout_enabled and _birth_metric(simulator, "Sim/Timing/NoShowTimeoutEnabled") == true, "Retired key =false does not turn the D-053 switch off")
+	_assert(not HeadlessSimulator.RETIRED_ENV_KEYS.has("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED"), "The new switch is not a retired key")
 	OS.unset_environment("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED")
+	_free_simulator(simulator)
+
+
+## D-053: SIMULATOR_NO_SHOW_TIMEOUT_ENABLED parsing, env path and NBIRTH.
+func _test_no_show_switch_parsing():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	for text in ["false", "0", "no", "off", " OFF "]:
+		_assert(simulator.configure_no_show_timeout_enabled(text) and not simulator._no_show_timeout_enabled, "D-053: '%s' turns the switch off" % text)
+	for text in ["true", "1", "yes", "on", "True"]:
+		simulator._no_show_timeout_enabled = false
+		_assert(simulator.configure_no_show_timeout_enabled(text) and simulator._no_show_timeout_enabled, "D-053: '%s' turns the switch on" % text)
+	_assert(not simulator.configure_no_show_timeout_enabled("maybe") and simulator._no_show_timeout_enabled, "D-053: an invalid value keeps the current value")
+	_clear_timing_env()
+	OS.set_environment("SIMULATOR_TIMING_PROFILE", _saved_profile)
+	OS.set_environment("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED", "off")
+	simulator._configure_timing()
+	_assert(not simulator._no_show_timeout_enabled and _birth_metric(simulator, "Sim/Timing/NoShowTimeoutEnabled") == false, "D-053: env off reaches NBIRTH")
+	OS.unset_environment("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED")
+	simulator._configure_timing()
+	_assert(simulator._no_show_timeout_enabled and _birth_metric(simulator, "Sim/Timing/NoShowTimeoutEnabled") == true, "D-053: no env -> default on")
+	_clear_timing_env()
+	OS.set_environment("SIMULATOR_TIMING_PROFILE", _saved_profile)
+	_free_simulator(simulator)
+
+
+## D-053 off: W1 to W4 run for 10 x their time-out with no handoff_timed_out;
+## the waits are still reported and the stall clock stays paused (no backstop).
+func _test_no_show_switch_off_all_waits():
+	for harness in ["h1", "h2"]:
+		var simulator = _waiting_h1_simulator() if harness == "h1" else _waiting_h2_simulator()
+		_assert(simulator.configure_no_show_timeout_enabled("false"), "D-053 off (%s)" % harness)
+		_assert(simulator.configure_leg_stall_timeout("60"), "Short stall clock (%s)" % harness)
+		var start_ms = int(simulator._clock.now_ms)
+		_run_until(simulator, func(): return int(simulator._clock.now_ms) >= start_ms + 10 * 30000, 4000)
+		var results = _results(simulator)
+		var giver = "QC01" if harness == "h1" else "TT01"
+		var receiver = "TT01" if harness == "h1" else "RTG01"
+		_assert(_timeout_results(results).is_empty(), "D-053 off (%s): no handoff_timed_out after 10 x the time-out" % harness)
+		_assert(_events_of(results, giver).has("waiting_for_handoff") and _events_of(results, receiver).has("waiting_for_handoff"), "D-053 off (%s): the waits are still reported" % harness)
+		_assert(not _events_of(results, giver).has("failed") and not _events_of(results, receiver).has("failed"), "D-053 off (%s): the stall clock is not a backstop in waits" % harness)
+		_assert(simulator._active_commands.size() == 2, "D-053 off (%s): both waiters still hold their legs" % harness)
+		_free_simulator(simulator)
+
+
+## D-053: every waiting period starts its own clock. W2 ends at H1; the
+## manual-dispatch gap at the block is not a wait; W3 counts from the H2
+## assign. A second QC leg starts W1 from its own hold end.
+func _test_no_show_clock_restarts_per_period():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator.configure_qc_no_show_timeout("30") and simulator.configure_rtg_no_show_timeout("30"), "Short test-only W2 and W3 time-outs")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 2000), "Periods: W2 ends with H1")
+	_assert(not simulator._active_commands[TT_ID].has("handoff_wait_since_ms"), "Periods: the W2 clock is cleared at H1")
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 2000), "Periods: TT at the block without H2")
+	var gap_start = int(simulator._clock.now_ms)
+	_run_until(simulator, func(): return int(simulator._clock.now_ms) >= gap_start + 60000, 1000)
+	_assert(_timeout_results(_results(simulator)).is_empty(), "Periods: the manual-dispatch gap (2 x W3) raises nothing")
+	var assign = _command(TT_ID, _assign_metrics())
+	var assign_ms = int(simulator._clock.now_ms)
+	_send(simulator, TT_ID, assign)
+	_assert(int(simulator._active_commands[TT_ID].handoff_wait_since_ms) == assign_ms, "Periods: W3 starts at the assign")
+	_assert(_run_until(simulator, func(): return not _timeout_results(_results(simulator)).is_empty(), 1000), "Periods: W3 fires")
+	var timed_out = _timeout_results(_results(simulator))[0]
+	_assert(timed_out.device == "TT01" and int(timed_out.m["Sim/TimeMs"]) == assign_ms + 30000, "Periods: W3 fires 30 s after the assign, not after the arrival or W2 (%s)" % timed_out.m["Sim/TimeMs"])
+	_free_simulator(simulator)
+	var first = _qc_command()
+	QcDischarge.start(first, 0, 5000, 30000)
+	QcDischarge.step(first, 5000, 0)
+	_assert(int(first.waiting_since_ms) == 5000, "Periods: W1 starts at the hold end")
+	QcDischarge.step(first, 20000, TT_ID)
+	var second = _qc_command()
+	QcDischarge.start(second, 100000, 5000, 30000)
+	_assert(int(second.waiting_since_ms) == 0, "Periods: a new QC leg starts with no clock")
+	QcDischarge.step(second, 105000, 0)
+	_assert(QcDischarge.step(second, 134999, 0).is_empty(), "Periods: second W1 not due before its own hold end + 30 s")
+	_assert(_names(QcDischarge.step(second, 135000, 0)) == ["handoff_timed_out"], "Periods: second W1 times out 30 s after its own hold end")
+
+
+## D-053 / TCL-011 S1: after one handoff_timed_out the waiter stays put
+## (until OES cancels) and never reports again for that HandoffId.
+func _test_no_rearm_after_timeout():
+	for harness in ["h1", "h2"]:
+		var simulator = _waiting_h1_simulator() if harness == "h1" else _waiting_h2_simulator()
+		var start_ms = int(simulator._clock.now_ms)
+		_assert(_run_until(simulator, func(): return not _timeout_results(_results(simulator)).is_empty(), 2000), "No re-arm (%s): the first report" % harness)
+		_run_until(simulator, func(): return int(simulator._clock.now_ms) >= start_ms + 6 * 30000, 3000)
+		_assert(_timeout_results(_results(simulator)).size() == 1, "No re-arm (%s): one report per hand-off after 5 more time-outs" % harness)
+		_free_simulator(simulator)
+
+
+## D-053 off: no no-show can cut a wait short, so only the stall row is checked.
+func _test_margins_skip_no_show_when_off():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	simulator.configure_timing_profile("realistic")
+	simulator.configure_qc_no_show_timeout("1")
+	_assert(simulator.timing_margin_violations().size() == 1, "On: a 1 s W2 time-out breaks the margin")
+	simulator.configure_no_show_timeout_enabled("false")
+	_assert(simulator.timing_margin_violations().is_empty(), "Off: no-show margins are skipped (%s)" % [simulator.timing_margin_violations()])
+	simulator.configure_leg_stall_timeout("1")
+	_assert(simulator.timing_margin_violations().size() == 1, "Off: the stall margin is still checked")
 	_free_simulator(simulator)
 
 

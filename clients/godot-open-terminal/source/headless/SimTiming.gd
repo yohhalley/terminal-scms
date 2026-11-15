@@ -104,14 +104,18 @@ static func longest_motion_or_work_s(qc_hold: Array, rtg_hold: Array, speed_mps:
 ## and leg_stall seconds. TCL-011 rev 2 (B1, N2): the stall clock only runs in
 ## motion/work states and is paused in every wait, so it must clear the longest
 ## single motion/work phase (a crane hold or the TT drive), not a no-show wait.
-static func margin_violations(qc_hold: Array, rtg_hold: Array, speed_mps: float, timeouts: Dictionary) -> Array:
+## D-053: with the no-show switch off there is no no-show to cut a wait short,
+## so only the stall row is checked.
+static func margin_violations(qc_hold: Array, rtg_hold: Array, speed_mps: float, timeouts: Dictionary, no_show_enabled := true) -> Array:
 	var waits = worst_normal_waits_s(qc_hold, rtg_hold, speed_mps)
-	var checks = [
-		["TtNoShowTimeoutS", int(timeouts.tt), "W1", waits.W1],
-		["QcNoShowTimeoutS", int(timeouts.qc), "W2", waits.W2],
-		["RtgNoShowTimeoutS", int(timeouts.rtg), "W3", waits.W3],
-		["TtNoShowTimeoutS", int(timeouts.tt), "W4", waits.W4],
-	]
+	var checks = []
+	if no_show_enabled:
+		checks = [
+			["TtNoShowTimeoutS", int(timeouts.tt), "W1", waits.W1],
+			["QcNoShowTimeoutS", int(timeouts.qc), "W2", waits.W2],
+			["RtgNoShowTimeoutS", int(timeouts.rtg), "W3", waits.W3],
+			["TtNoShowTimeoutS", int(timeouts.tt), "W4", waits.W4],
+		]
 	checks.append([
 		"LegStallTimeoutS", int(timeouts.leg_stall), "longest motion/work phase",
 		longest_motion_or_work_s(qc_hold, rtg_hold, speed_mps),
