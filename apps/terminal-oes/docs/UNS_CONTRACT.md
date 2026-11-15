@@ -145,6 +145,13 @@ file preserves active commands and recent CHE state across process restart.
   missing reason (`reason_required`) or an unknown one (`reason_unknown`).
   `detail` is optional free text. A rejected result is stored with a reason
   and logged, never rolled back into the DDATA.
+- **No-show switch (TCL-034e, D-053, `Contract/Version` `tcl-002.3`).** NBIRTH
+  `Sim/Timing/NoShowTimeoutEnabled` (Boolean, env
+  `SIMULATOR_NO_SHOW_TIMEOUT_ENABLED`, default true) is one switch for every
+  no-show clock (W1 to W4). When it is false Godot never sends
+  `handoff_timed_out`; waits are still reported (`waiting_for_handoff`). The
+  leg stall clock is not affected. Each waiting period starts its own clock,
+  and there is at most one `handoff_timed_out` per `HandoffId`.
 - **Aborted hand-offs.** A failed or cancelled leg cancels its pending
   hand-off and the counterpart leg (cancel DCMD). Stopping, a runner
   stop/failure, NDEATH after stop, or NBIRTH of a new session closes the

@@ -1,5 +1,12 @@
 # TCL-034: simulation timing parameters, no-show time-outs and leg stall clock
 
+> **TCL-034e update (D-051 to D-053):** see `NOTES-TCL-034e.md`. The realistic
+> profile is now a 60 s QC and RTG cycle (hold = cycle - simulated motion). W4
+> starts at ready-to-pick. A global no-show switch
+> `SIMULATOR_NO_SHOW_TIMEOUT_ENABLED` / `Sim/Timing/NoShowTimeoutEnabled`
+> (default true) is back. `ContractVersion` is `tcl-002.3`. The values below
+> that say otherwise are historical.
+
 Implements the Godot side of the TCL-011 hand-off design (§6.1 to §6.3) and D-027
 (every CHE has the same failure logic; the time-out is a user parameter at
 simulation initialisation).
