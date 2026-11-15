@@ -30,6 +30,7 @@ from minitos_core.models import (
     ContainerVisit,
     EquipmentType,
     IntegrationInbox,
+    IntegrationOutbox,
     ISOType,
     Order,
     OrderLeg,
@@ -39,6 +40,7 @@ from minitos_core.models import (
     WorkQueue,
 )
 from minitos_core.services import apply_execution_message, sync_yard_grid
+from minitos_core.services.reset_epoch import set_epoch
 from minitos_core.test_yard_grid import LayoutTestCase
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -194,4 +196,63 @@ class GoldenExecutionEventConsumerTests(LayoutTestCase):
                 source='terminal-oes', status=IntegrationInbox.PROCESSED,
             ).count(),
             len(golden),
+        )
+
+    def test_golden_leg_with_current_reset_epoch_applies_under_a_fence(self):
+        """QA M2: the optional reset_epoch key is accepted when it is the current run's."""
+        set_epoch('20261102T090000Z-0000bbbb')
+        golden = load_golden()
+        for name, document in golden:
+            document = json.loads(json.dumps(document))
+            document['payload']['reset_epoch'] = '20261102T090000Z-0000bbbb'
+            topic, raw = self.rebind(document)
+            self.assertIsNotNone(apply_execution_message(topic, raw), name)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.COMPLETE)
+
+    def test_golden_leg_without_reset_epoch_is_ignored_under_a_fence(self):
+        """QA M2: after a fenced reset an unstamped (previous-run) event changes nothing."""
+        set_epoch('20261102T090000Z-0000bbbb')
+        name, document = load_golden()[0]
+        topic, raw = self.rebind(document)
+        self.order.refresh_from_db()
+        before = self.order.status
+        with self.assertLogs('minitos_core.services.reset_epoch', 'INFO'):
+            self.assertIsNone(apply_execution_message(topic, raw), name)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, before)
+        self.assertFalse(IntegrationInbox.objects.filter(source='terminal-oes').exists())
+
+    def test_golden_leg_publishes_container_visit_status_events(self):
+        """TCL-003b: container_picked_up and container_dropped each write their
+        container-visit status-changed event in the consumer's own transaction,
+        so the row is in the outbox when apply_execution_message returns."""
+        golden = dict(load_golden())
+        seen = []
+        for name, document in sorted(golden.items()):
+            topic, raw = self.rebind(document)
+            apply_execution_message(topic, raw)
+            rows = IntegrationOutbox.objects.filter(
+                schema='scms.visit.status_changed.v1',
+                topic__endswith=f'/container-visits/{self.visit.pk}/status-changed',
+            ).order_by('created_at', 'pk')
+            seen.append((name, [
+                (row.payload['data']['from_status'], row.payload['data']['to_status'])
+                for row in rows
+            ]))
+        after = dict(seen)
+        self.assertEqual(after['02_leg_started.json'], [])
+        self.assertEqual(after['03_container_picked_up.json'], [('AtYard', 'OnEquipment')])
+        self.assertEqual(
+            after['04_container_dropped.json'],
+            [('AtYard', 'OnEquipment'), ('OnEquipment', 'AtYard')],
+        )
+        dropped = IntegrationOutbox.objects.filter(
+            schema='scms.visit.status_changed.v1',
+            topic__endswith=f'/container-visits/{self.visit.pk}/status-changed',
+        ).order_by('created_at', 'pk').last()
+        self.assertEqual(dropped.payload['data']['source'], 'oes.execution')
+        self.assertEqual(
+            dropped.payload['causation_id'],
+            golden['04_container_dropped.json']['payload']['event_id'],
         )

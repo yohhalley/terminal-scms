@@ -22,6 +22,13 @@ class Command(BaseCommand):
             help="Reset even if a simulation session is still active.",
         )
         parser.add_argument(
+            "--reset-epoch", default=None,
+            help=(
+                "QA M2: run marker shared with MiniTOS (make scenario-reset generates one). "
+                "MiniTOS envelopes from another epoch are ignored. Omit for no fence."
+            ),
+        )
+        parser.add_argument(
             "--seed", type=int, default=None,
             help=(
                 "Expected simulator seed (make scenario-reset SEED=n). Fails before wiping "
@@ -44,10 +51,15 @@ class Command(BaseCommand):
             if answer.strip().lower() != "yes":
                 raise CommandError("Reset cancelled.")
         try:
-            tables = reset_execution_tables(force=options["force"])
+            tables = reset_execution_tables(
+                force=options["force"], reset_epoch=options["reset_epoch"],
+                scenario=options["scenario"],
+            )
         except ValidationError as exc:
             raise CommandError("; ".join(exc.messages)) from exc
         self.stdout.write(self.style.SUCCESS(
             f"{options['scenario']}: wiped {tables} terminal-oes tables; "
-            f"simulator seed {configured_seed or 'unset'}; waiting for MiniTOS to publish the Site."
+            f"simulator seed {configured_seed or 'unset'}; "
+            f"reset epoch {options['reset_epoch'] or 'none (no stale-message fence)'}; "
+            "waiting for MiniTOS to publish the Site."
         ))

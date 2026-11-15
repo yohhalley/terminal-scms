@@ -4,7 +4,8 @@ from django.db.models import Sum
 from django.db.models.signals import post_delete, post_migrate, post_save, pre_save
 from django.dispatch import receiver
 
-from .models import CarrierVisit, Che, EquipmentType, VisitCargoRoute, ServiceCargoRoute
+from .models import CarrierVisit, Che, ContainerVisit, EquipmentType, VisitCargoRoute, ServiceCargoRoute
+from .services import status_events
 
 
 def _recalculate_service_moves(service_ids):
@@ -94,3 +95,15 @@ def ensure_che_signal_catalog(sender, app_config, **kwargs):
 
     component_types = ensure_component_catalog()
     ensure_signal_catalog(component_types)
+
+
+# TCL-003b: status-changed milestone events (D-024, D-026), queued after commit.
+for _status_model in (CarrierVisit, ContainerVisit):
+    pre_save.connect(
+        status_events.remember_stored_status, sender=_status_model,
+        dispatch_uid=f'tcl003b-status-pre-{_status_model.__name__}',
+    )
+    post_save.connect(
+        status_events.queue_status_changed, sender=_status_model,
+        dispatch_uid=f'tcl003b-status-post-{_status_model.__name__}',
+    )
