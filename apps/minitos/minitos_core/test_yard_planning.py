@@ -318,6 +318,66 @@ class StackingTests(TestCase):
         self.assertEqual(set(tiers), {2})
 
 
+class UnreachableSlotTests(TestCase):
+    """TL N1 / BE S-1 on #38: enough free slots, fewer reachable (gappy grid)
+    must be ``discharge_no_free_slot``, never a bare ValueError (a 500)."""
+
+    containers = 3
+
+    def setUp(self):
+        reset_scenario('import_v1', containers=self.containers)
+        drop_seeded_orders()
+        self.visit = CarrierVisit.objects.get()
+
+    def make_gappy_block(self):
+        keep = list(ground_slots()[:self.containers])
+        all_block_slots().exclude(pk__in=[slot.pk for slot in keep]).update(is_reserved=True)
+        # A corrupt tier (below ground) is still "free" but never reachable by
+        # the tier walk, so len(free) == needed while only needed-1 are reachable.
+        Position.objects.filter(pk=keep[0].pk).update(tier=0)
+        self.assertEqual(len(yard_planning.free_yard_slots(keep[0].pile.storage_grid)), self.containers)
+
+    def test_choose_slots_shortage_is_a_value_error_with_counts(self):
+        free = [
+            SimpleNamespace(pk=1, pile_id=1, tier=1),
+            SimpleNamespace(pk=2, pile_id=2, tier=0),
+        ]
+        with self.assertRaises(ValueError) as caught:
+            yard_planning.choose_slots(free, 2, random.Random(1))
+        self.assertIsInstance(caught.exception, yard_planning.SlotShortageError)
+        self.assertEqual((caught.exception.needed, caught.exception.available), (2, 1))
+
+    def test_plan_maps_unreachable_slots_to_no_free_slot(self):
+        self.make_gappy_block()
+
+        with self.assertRaises(DischargePlanningError) as caught:
+            plan_visit_discharge(self.visit)
+
+        self.assertEqual(caught.exception.planning_code, CODE_NO_FREE_SLOT)
+        self.assertIn('BLOCK01 has 2 free slot(s) reachable', caught.exception.planning_message)
+        self.assertFalse(Order.objects.filter(order_type=Order.MOVE_IN).exists())
+
+    def test_in_operation_save_refuses_unreachable_slots_and_stays_arrived(self):
+        self.make_gappy_block()
+        self.visit.status = CarrierVisit.IN_OPERATION
+
+        with self.assertRaises(DischargePlanningError) as caught:
+            self.visit.save()
+
+        self.assertEqual(caught.exception.planning_code, CODE_NO_FREE_SLOT)
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
+        self.assertFalse(Order.objects.filter(order_type=Order.MOVE_IN).exists())
+
+    def test_check_discharge_plannable_uses_the_same_reachability(self):
+        from minitos_core.services.discharge_planning import check_discharge_plannable
+
+        self.make_gappy_block()
+        with self.assertRaises(DischargePlanningError) as caught:
+            check_discharge_plannable(self.visit)
+        self.assertEqual(caught.exception.planning_code, CODE_NO_FREE_SLOT)
+
+
 class ImportBlockTests(TestCase):
     @staticmethod
     def lane(name):

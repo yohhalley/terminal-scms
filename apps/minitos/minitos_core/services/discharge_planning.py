@@ -29,6 +29,7 @@ their own ``rng``.
 
 import itertools
 import logging
+import random
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -272,16 +273,34 @@ def check_discharge_plannable(visit):
     block_interface, _ = _block_lane(visit, layout)
     _equipment_types(visit)
     _work_queue(visit)
-    free = free_yard_slots(block_interface.storage_grid).count()
-    if free < len(pending):
-        _no_free_slot(visit, block_interface.storage_grid, len(pending), free)
+    grid = block_interface.storage_grid
+    free = list(free_yard_slots(grid))
+    if len(free) < len(pending):
+        _no_free_slot(visit, grid, len(pending), len(free))
+    # Same reachability rule as the real draw (TL N1 / BE S-1 on #38); the
+    # RNG does not change how many slots are reachable, only which.
+    _choose_slots(visit, grid, free, len(pending), random.Random(0))
 
 
-def _no_free_slot(visit, grid, needed, free):
+def _no_free_slot(visit, grid, needed, free, detail=''):
     _fail(
         visit, CODE_NO_FREE_SLOT,
-        f'{needed} container(s) need a yard slot but block {grid.name} has {free} free slot(s)',
+        f'{needed} container(s) need a yard slot but block {grid.name} has {free} free slot(s){detail}',
     )
+
+
+def _choose_slots(visit, grid, free, needed, rng):
+    """``yard_planning.choose_slots``, with a shortage (e.g. a gappy grid where
+    stacking leaves fewer slots reachable than are free) mapped to
+    ``discharge_no_free_slot`` instead of leaking a ValueError (500)."""
+    try:
+        return yard_planning.choose_slots(free, needed, rng)
+    except ValueError as exc:
+        available = getattr(exc, 'available', 0)
+        _no_free_slot(
+            visit, grid, needed, available,
+            detail=' reachable without a floating stack' if available < len(free) else '',
+        )
 
 
 @transaction.atomic
@@ -317,7 +336,7 @@ def plan_visit_discharge(visit, rng=None):
     if len(free) < len(pending):
         _no_free_slot(visit, grid, len(pending), len(free))
     rng = rng or default_rng(visit)
-    slots = yard_planning.choose_slots(free, len(pending), rng)
+    slots = _choose_slots(visit, grid, free, len(pending), rng)
     road = _road_edges(visit, layout, qc_position, tl_position)
 
     next_priority = FIRST_PRIORITY + Order.objects.filter(
