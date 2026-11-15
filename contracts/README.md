@@ -82,7 +82,10 @@ TCL-003a hand-off events, written from the real OES producer driven through
 TCL-003a's own scenario (`execution/test_handoffs.py`): `container_transferred`
 QC->TT and TT->RTG (T-006) and `handoff_exception` with reason
 `SIMULATOR_FAILURE` and `detail` "no TT within 300 s" (T-007/D-013, D-017; D-017
-supersedes `NO_TT_TIMEOUT`). `data.handoff_id` is also ignored when comparing (derived from the
+supersedes `NO_TT_TIMEOUT`). That golden is a W1 (QC waits for the TT). Any waiter
+may report `handoff_timed_out` (QC or TT at H1, TT or RTG at H2); the `detail`
+names the absent type (`no <QC|TT|RTG> within <N> s`) and N is that type's
+session timeout. `data.handoff_id` is also ignored when comparing (derived from the
 session pk). Producer test `execution/test_contract_handoff_events.py`, consumer
 test `minitos_core/test_contract_handoff_events.py`; both skip until TCL-003a is
 merged. The schema requires `handoff_id`, `from_che_id`, `to_che_id` (and the

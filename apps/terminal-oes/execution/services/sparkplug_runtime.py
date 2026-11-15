@@ -344,6 +344,13 @@ def _handle_nbirth(session, document, metrics):
     session.rtg_no_show_timeout_s = _optional_positive_int(metrics, "Sim/Timing/RtgNoShowTimeoutS")
     session.leg_stall_timeout_s = _optional_positive_int(metrics, "Sim/Timing/LegStallTimeoutS")
     profile = str(metrics.get("Sim/Timing/Profile") or "").strip()
+    # models.SimulationSession.timing_profile max_length=32; Postgres enforces it.
+    limit = SimulationSession._meta.get_field("timing_profile").max_length
+    if len(profile) > limit:
+        logger.warning(
+            "Sim/Timing/Profile %r exceeds %s characters; truncated.", profile, limit,
+        )
+        profile = profile[:limit]
     session.timing_profile = profile or None
     session.save()
     # TL review B-2: hand-offs left pending by an abandoned earlier session of
