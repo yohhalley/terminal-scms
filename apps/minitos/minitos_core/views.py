@@ -2,8 +2,10 @@ import django_filters
 
 from django.db import models, transaction
 from django.template import loader
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib import messages as django_messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.http import JsonResponse
@@ -32,7 +34,7 @@ from .models import (
     ProcessHierarchy, ProcessVersion, RouteEdge, RouteNode, ServiceCargoRoute, Site,
     SiteConfigurationSnapshot,
     SignalBinding, SignalDefinition, StorageGrid, TransferInterface,
-    VisitCargoRoute, WorkQueue, validate_iana_timezone,
+    VisitCargoRoute, VisitStatusTransitionError, WorkQueue, validate_iana_timezone,
 )
 from .serializers import (
     AccessPolicySerializer, BerthSegmentSerializer, BulkContainerVisitSerializer,
@@ -54,6 +56,7 @@ from .serializers import (
     TransferInterfaceSerializer, UserSerializer, VisitCargoRouteSerializer,
     WorkQueueSerializer,
 )
+from .services.discharge_planning import DischargePlanningError
 from .permissions import IsMESService, IsOESServiceOrAuthenticated
 from .services import (
     EXECUTION_EVENTS, accessible_terminals, apply_execution_event, create_site,
@@ -177,6 +180,124 @@ def berth_plan_view(request, location_id):
         'iso_types_data': list(ISOType.objects.order_by('iso_type').values('id', 'iso_type', 'length', 'height')),
         'equipment_types_data': equipment_type_data,
     })
+
+
+# TCL-009 (#4): vessel-visit admin panel.
+# The panel lists a terminal's vessel visits and offers one button per status
+# that D-025 allows next (CarrierVisit.allowed_next_statuses). The POST checks
+# D-025 again on the locked row (CarrierVisit.status_transition_error) and then
+# saves through CarrierVisit.save(), the same path as the transition API and
+# the Django admin, so model-level hooks on a status change (TCL-010 discharge
+# planning on InOperation) run here too. Any ValidationError from save() rolls
+# the status change back and is shown as the refusal message.
+VESSEL_VISIT_PANEL_TYPES = (CarrierVisit.VESSEL,)
+
+
+def _visit_error_message(error):
+    for attribute in ('transition_message', 'planning_message'):
+        message = getattr(error, attribute, None)
+        if message:
+            return message
+    return '; '.join(error.messages)
+
+
+def _vessel_visit_rows(location):
+    visits = CarrierVisit.objects.filter(
+        location=location, visit_type__in=VESSEL_VISIT_PANEL_TYPES,
+    ).select_related('carrier_service', 'planned_berth').annotate(
+        inbound_container_count=models.Count('ib_carrier', distinct=True),
+        discharge_order_count=models.Count(
+            'ib_carrier__container_visit',
+            filter=models.Q(ib_carrier__container_visit__order_type=Order.MOVE_IN),
+            distinct=True,
+        ),
+    ).order_by('eta', 'name')
+    labels = dict(CarrierVisit.STATUS_CHOICES)
+    rows = []
+    for visit in visits:
+        rows.append({
+            'visit': visit,
+            'next_statuses': [
+                {'value': value, 'label': labels.get(value, value)}
+                for value in CarrierVisit.allowed_next_statuses(visit.status)
+            ],
+        })
+    return rows
+
+
+def _render_vessel_visit_panel(request, location, *, error=None, status_code=200):
+    return render(request, 'vessel_visit_panel.html', {
+        'location': location,
+        'timezone_name': location.timezone or 'UTC',
+        'rows': _vessel_visit_rows(location),
+        'status_order': [
+            dict(CarrierVisit.STATUS_CHOICES).get(value, value) for value in CarrierVisit.STATUS_ORDER
+        ],
+        'panel_error': error,
+    }, status=status_code)
+
+
+def _panel_location(request, location_id):
+    location = get_object_or_404(Location, pk=location_id, location_type__in=['TL', 'ID'])
+    if not terminal_capabilities(request.user, location)['can_manage_berth_plan']:
+        raise PermissionDenied
+    return location
+
+
+@login_required(login_url='admin:login')
+def vessel_visit_panel_view(request, location_id):
+    """TCL-009: list vessel visits with status, ata/atd and the allowed next statuses."""
+    location = _panel_location(request, location_id)
+    return _render_vessel_visit_panel(request, location)
+
+
+@login_required(login_url='admin:login')
+@require_POST
+def vessel_visit_transition_view(request, location_id, visit_id):
+    """TCL-009: move one vessel visit to the posted status (CSRF-protected form POST).
+
+    - 302 back to the panel: changed (or already at that status, no-op).
+    - 400 panel with a message: missing or unknown status.
+    - 409 panel with a message: refused by D-025 (backward or skipped) or by a
+      save hook (e.g. TCL-010 discharge planning); nothing is saved.
+    - 404: unknown visit, or not a vessel visit of this terminal.
+    """
+    location = _panel_location(request, location_id)
+    new_status = request.POST.get('status', '')
+    valid_statuses = dict(CarrierVisit.STATUS_CHOICES)
+    if new_status not in valid_statuses:
+        get_object_or_404(
+            CarrierVisit, pk=visit_id, location=location, visit_type__in=VESSEL_VISIT_PANEL_TYPES,
+        )
+        return _render_vessel_visit_panel(
+            request, location,
+            error=f'{new_status!r} is not a vessel-visit status.' if new_status else 'No status was chosen.',
+            status_code=400,
+        )
+    try:
+        with transaction.atomic():
+            visit = get_object_or_404(
+                CarrierVisit.objects.select_for_update(),
+                pk=visit_id, location=location, visit_type__in=VESSEL_VISIT_PANEL_TYPES,
+            )
+            old_status = visit.status
+            if new_status == old_status:
+                django_messages.info(request, f'Visit {visit.name} is already {valid_statuses[old_status]}; no change.')
+                return redirect('vessel_visit_panel', location_id=location.pk)
+            refusal = CarrierVisit.status_transition_error(visit.name, old_status, new_status)
+            if refusal is not None:
+                raise refusal
+            visit.status = new_status
+            visit.save()
+    except DjangoValidationError as error:
+        return _render_vessel_visit_panel(
+            request, location, error=_visit_error_message(error), status_code=409,
+        )
+    django_messages.success(
+        request,
+        f'Visit {visit.name} status changed from {valid_statuses[old_status]} to {valid_statuses[new_status]}.',
+    )
+    return redirect('vessel_visit_panel', location_id=location.pk)
 
 
 def _location_time_data(location):
@@ -672,7 +793,35 @@ class CarrierVisitViewSet(viewsets.ModelViewSet):
         location_pk = self.kwargs.get('location_pk')
         if location_pk:
             queryset = queryset.filter(location=location_pk)
+        if self.request is not None and self.request.method in ('PUT', 'PATCH'):
+            # D-025: lock the visit row so the serializer checks the status
+            # transition against the stored status. select_for_update() only
+            # holds the lock inside a transaction: this relies on update()
+            # wrapping super().update() (and so get_object()) in
+            # transaction.atomic(). Outside one, Django raises
+            # TransactionManagementError on PostgreSQL (SQLite ignores the
+            # lock), so don't call get_object() for
+            # PUT/PATCH from anywhere else without an atomic block.
+            queryset = queryset.select_for_update(of=('self',))
         return queryset
+
+    def update(self, request, *args, **kwargs):
+        """PUT/PATCH under a row lock. A D-025 refusal is always a 400 on
+        ``status`` with the transition code, never a 500, even if the model's
+        own check in save() is the one that refuses (e.g. a concurrent writer
+        on a database without row locks)."""
+        try:
+            with transaction.atomic():
+                return super().update(request, *args, **kwargs)
+        except VisitStatusTransitionError as error:
+            raise DRFValidationError(
+                {'status': [error.transition_message]}, code=error.transition_code,
+            ) from error
+        except DischargePlanningError as error:
+            # TCL-010: InOperation refused because discharge planning cannot run.
+            raise DRFValidationError(
+                {'status': [error.planning_message]}, code=error.planning_code,
+            ) from error
 
 
 class CarrierServiceViewSet(viewsets.ModelViewSet):
@@ -1371,37 +1520,66 @@ def bulk_create_container_visits(request):
 def transition_visit_status(request, visit_id):
     """
     API endpoint for transitioning visit status.
+
+    D-025: the status only moves forward, one step at a time
+    (Created -> Announced -> Arrived -> InOperation -> Complete -> Departed).
+    - 200: changed, or same status (no-op, nothing saved).
+    - 400: missing status, or a value that is not a visit status.
+    - 404: unknown visit.
+    - 409 {success: false, code, message, from_status, to_status, allowed_next}:
+      code ``visit_status_backward`` or ``visit_status_skipped``.
     """
-    try:
-        visit = CarrierVisit.objects.get(id=visit_id)
-    except CarrierVisit.DoesNotExist:
-        return Response({'error': 'Visit not found'}, status=status.HTTP_404_NOT_FOUND)
-
     new_status = request.data.get('status')
-    if not new_status:
-        return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
+    with transaction.atomic():
+        try:
+            visit = CarrierVisit.objects.select_for_update().get(id=visit_id)
+        except CarrierVisit.DoesNotExist:
+            return Response({'error': 'Visit not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    # TCL-032: the legacy VisitStateManager/VisitSerializer never existed in this
-    # codebase. Use the same rules as the CarrierVisit API (CarrierVisitSerializer:
-    # status must be one of CarrierVisit.STATUS_CHOICES); no transition graph is
-    # enforced because none is defined yet (open question for the PO).
-    # A same-status request is a 200 no-op: nothing is saved, so save() does not
-    # recompute etd or bump last_updated.
-    old_status = visit.status
-    if new_status == old_status:
-        return Response({
-            'success': True,
-            'message': f'Visit {visit.name} is already {old_status}; no change.',
-            'visit': CarrierVisitSerializer(visit).data,
-        })
-    serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
-    if not serializer.is_valid():
-        return Response({
-            'success': False,
-            'message': f'Invalid status {new_status!r} for visit {visit.name}.',
-            'errors': serializer.errors,
-        }, status=status.HTTP_400_BAD_REQUEST)
-    serializer.save()
+        if not new_status:
+            return Response({'error': 'New status is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # TCL-032: validate through CarrierVisitSerializer (status choices).
+        # A same-status request is a 200 no-op: nothing is saved, so save() does not
+        # recompute etd or bump last_updated.
+        old_status = visit.status
+        if new_status == old_status:
+            return Response({
+                'success': True,
+                'message': f'Visit {visit.name} is already {old_status}; no change.',
+                'visit': CarrierVisitSerializer(visit).data,
+            })
+        refusal = CarrierVisit.status_transition_error(visit.name, old_status, new_status)
+        if refusal is not None:
+            return Response({
+                'success': False,
+                'code': refusal.transition_code,
+                'message': refusal.transition_message,
+                'from_status': refusal.from_status,
+                'to_status': refusal.to_status,
+                'allowed_next': refusal.allowed_next,
+            }, status=status.HTTP_409_CONFLICT)
+        serializer = CarrierVisitSerializer(visit, data={'status': new_status}, partial=True)
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'code': 'visit_status_unknown',
+                'message': f'Invalid status {new_status!r} for visit {visit.name}.',
+                'errors': serializer.errors,
+            }, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            with transaction.atomic():
+                serializer.save()
+        except DischargePlanningError as error:
+            # TCL-010: moving to InOperation plans the discharge; if it cannot,
+            # the visit keeps its status.
+            return Response({
+                'success': False,
+                'code': error.planning_code,
+                'message': error.planning_message,
+                'from_status': old_status,
+                'to_status': new_status,
+            }, status=status.HTTP_409_CONFLICT)
     return Response({
         'success': True,
         'message': f'Visit {visit.name} status changed from {old_status} to {visit.status}.',

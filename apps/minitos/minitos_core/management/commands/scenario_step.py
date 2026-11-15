@@ -5,7 +5,7 @@ from minitos_core.scenarios import SCENARIOS, run_step
 
 
 class Command(BaseCommand):
-    help = 'TCL-006: run one scripted scenario step (e.g. import_v1 release-discharge).'
+    help = 'TCL-006: run one scripted scenario step (e.g. import_v1 visit-in-operation, release-discharge).'
 
     def add_arguments(self, parser):
         parser.add_argument('scenario', choices=sorted(SCENARIOS))
@@ -18,6 +18,10 @@ class Command(BaseCommand):
         except (LookupError, ValidationError) as exc:
             message = '; '.join(exc.messages) if isinstance(exc, ValidationError) else str(exc)
             raise CommandError(message) from exc
+        if hasattr(order, 'summary'):
+            # TCL-010: visit-in-operation reports the visit and its orders.
+            self.stdout.write(self.style.SUCCESS(f'{options["step"]}: {order.summary()}'))
+            return
         self.stdout.write(self.style.SUCCESS(
             f'{options["step"]}: order {order.pk} is {order.status}; '
             'scms.order.released.v1 queued in the outbox.'

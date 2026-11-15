@@ -29,6 +29,24 @@ simulation is active (unless `--force`); wait-ready success and timeout; and the
 PR #24 review (14 tests), `scenario_reset --seed n` refuses before wiping when
 OES's `SIMULATOR_SEED` (the seed it forwards to the simulator) is not n (K7).
 
+QA M2 (2026-11-02) adds `execution/test_scenario_reset_isolation.py` (12 tests),
+driven through `process_message` with raw JSON bytes: after a fenced reset the
+previous run's `order.released` (PR #24 O2) is ignored (no order, no inbox row,
+checksum unchanged), also while OES is wiped but MiniTOS has not published yet;
+a previous run's higher-revision `configuration.published` is ignored without a
+snapshot fetch, so the new revision 1 still projects READY; unstamped envelopes
+are ignored under a fence; the current run's order is accepted; an unfenced
+reset keeps the old behaviour; execution events carry `reset_epoch` only when an
+epoch is set and the stamped envelope validates against the contract schema; the
+epoch is masked in the canonical dump; invalid epochs are refused before wiping;
+and `scenario_reset --reset-epoch` stores the epoch.
+QA M1 (2026-11-02) adds `test_scenario_reset.CanonicalDumpBusinessTimesTests`
+(5 tests): only the explicit volatile allow-list is masked; a project + release
+three days later in wall-clock time gives the same dump; shifting a business time
+(`ExecutionOperation.planned_start`) by +3 days changes the checksum and the value
+appears literally; masked values still compare set versus unset; the allow-list
+names real fields only.
+
 Additional cross-process checks:
 
 - `apps/simulator-runner/test_runner.py` verifies no process starts without a

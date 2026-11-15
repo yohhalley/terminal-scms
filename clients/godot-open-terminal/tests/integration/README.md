@@ -71,12 +71,16 @@ Environment: `SIMULATOR_SEED`, `SIMULATOR_RUN_ID`, `SIMULATOR_FIXED_STEP_MS`,
 `SIMULATOR_TIME_SCALE`, `SIMULATOR_START_EPOCH_MS`,
 `SIMULATOR_DEVICE_ID_MODE` (`name`, the default, uses MiniTOS `Che.name` such as
 `QC01`; `legacy` uses `CHE_{id}`), and
-`SIMULATOR_QC_WAIT_MIN_S` / `SIMULATOR_QC_WAIT_MAX_S`. `SIMULATOR_QC_HOLD_WAIT_MIN_S`
-/ `_MAX_S` override the general wait range. `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`
-sets the no-show time-out (default 300). The RTG side is off unless
-`SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED=true`, which applies the same value (O7).
-`SIMULATOR_RTG_WAIT_MIN_S` / `SIMULATOR_RTG_WAIT_MAX_S` (default 10..30) and
-`SIMULATOR_RTG_HOLD_WAIT_MIN_S` / `_MAX_S` set the RTG hold. Each variable also
+`SIMULATOR_TIMING_PROFILE` (`realistic`, the default: QC 90..120 s, RTG
+60..120 s; `fast`: QC/RTG hold 2..5 s, set by `run-godot-test.sh` and CI; see
+`NOTES-TCL-034.md`), then
+`SIMULATOR_QC_WAIT_MIN_S` / `SIMULATOR_QC_WAIT_MAX_S`, overridden by
+`SIMULATOR_QC_HOLD_WAIT_MIN_S` / `_MAX_S` (same for `SIMULATOR_RTG_*`); explicit
+keys win over the profile. No-show time-outs per absent CHE (default 300 s,
+always on): `SIMULATOR_TT_NO_SHOW_TIMEOUT_S` (QC and RTG wait for a TT),
+`SIMULATOR_QC_NO_SHOW_TIMEOUT_S` (TT waits for its QC),
+`SIMULATOR_RTG_NO_SHOW_TIMEOUT_S` (TT waits for its RTG);
+`SIMULATOR_LEG_STALL_TIMEOUT_S` (default 600 s) fails a leg without progress. Each variable also
 accepts a `SIM_*` alias. See `NOTES-TCL-014a.md` and `NOTES-TCL-014b.md` for open
 points.
 

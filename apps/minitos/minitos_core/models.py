@@ -217,6 +217,10 @@ class ContainerVisit(models.Model):
         choices=STATUS_CHOICES,
         default=PREADVISED,
     )
+    # TCL-003b: aggregate revision of the visit's status history; +1 per published
+    # scms.visit.status_changed.v1 event (1 = the first status at creation).
+    # Maintained by services/status_events.py; not edited by hand.
+    status_revision = models.PositiveIntegerField(default=0, editable=False)
     current_che = models.ForeignKey(
         'Che', related_name='carried_container_visits',
         on_delete=models.RESTRICT, blank=True, null=True,
@@ -1581,6 +1585,24 @@ class IntegrationOutbox(models.Model):
         ordering = ['created_at']
 
 
+
+class ScenarioResetEpoch(models.Model):
+    """QA M2: the reset epoch (generation marker) of the current scenario run.
+
+    ``make scenario-reset`` writes one row with the same opaque value into both
+    services. Every MiniTOS outbox envelope carries it as ``reset_epoch`` and the
+    OES execution-event consumer ignores envelopes from any other epoch, so a
+    message queued or in flight from the previous run cannot change the new one.
+    No row (normal operation, or a reset without ``--reset-epoch``) means no fence.
+    """
+
+    epoch = models.CharField(max_length=64)
+    scenario = models.CharField(max_length=40, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.scenario or "scenario"} reset epoch {self.epoch}'
+
 ###################################
 class OrderRoutePlan(models.Model):
     DRAFT = 'draft'
@@ -2554,6 +2576,22 @@ class CarrierServiceEquipmentRequirement(models.Model):
 
 
 ###################################
+class VisitStatusTransitionError(ValidationError):
+    """D-025: a refused vessel-visit status change (backward or skipped).
+
+    A ``ValidationError`` keyed on ``status`` so the Django admin form shows it
+    next to the field; ``code`` is one of ``CarrierVisit.STATUS_TRANSITION_CODES``.
+    """
+
+    def __init__(self, message, code, from_status, to_status, allowed_next):
+        self.transition_code = code
+        self.transition_message = message
+        self.from_status = from_status
+        self.to_status = to_status
+        self.allowed_next = list(allowed_next)
+        super().__init__({'status': ValidationError(message, code=code)})
+
+
 class CarrierVisit(models.Model):
     PLANNED = 'Created'
     ANNOUNCED = 'Announced'
@@ -2594,6 +2632,10 @@ class CarrierVisit(models.Model):
         choices=STATUS_CHOICES,
         default=PLANNED,
     )
+    # TCL-003b: aggregate revision of the visit's status history; +1 per published
+    # scms.visit.status_changed.v1 event (1 = the first status at creation).
+    # Maintained by services/status_events.py; not edited by hand.
+    status_revision = models.PositiveIntegerField(default=0, editable=False)
     location = models.ForeignKey(
         'Location',
         on_delete=models.RESTRICT,
@@ -2676,11 +2718,136 @@ class CarrierVisit(models.Model):
     def calculated_duration_display(self):
         return format_duration_minutes(self.calculated_duration_minutes)
 
+    # D-025 (Yael, 2 Nov 2026): in the MVP the visit status only moves forward,
+    # one step at a time. A backward or skipped change is refused; setting the
+    # current status again is a no-op. The initial status of a new visit is not
+    # a transition (the import_v1 seed creates the visit as Arrived, D-018).
+    # Backward moves with a tracked reason are post-MVP (backlog).
+    # D-025 order. The rule is enforced in clean()/save() (and the API/serializer
+    # call status_transition_error()). QuerySet.update(status=...) and
+    # bulk_update() bypass it: don't use them to change a visit's status.
+    STATUS_ORDER = (PLANNED, ANNOUNCED, ARRIVED, IN_OPERATION, COMPLETE, DEPARTED)
+    STATUS_BACKWARD = 'visit_status_backward'
+    STATUS_SKIPPED = 'visit_status_skipped'
+    STATUS_TRANSITION_CODES = (STATUS_BACKWARD, STATUS_SKIPPED)
+    # Backward refusal is D-025 (Yael). Skip refusal is the Sprint 2 acceptance
+    # criterion, pending Yael's answer to E4 / spec Q23. If E4 allows forward
+    # skips, set this to False: every later status becomes allowed, backward
+    # stays refused.
+    REFUSE_SKIPPED_STEPS = True
+
+    @classmethod
+    def next_status(cls, current):
+        """The status after ``current`` in STATUS_ORDER, or None at the end."""
+        if current not in cls.STATUS_ORDER:
+            return None
+        index = cls.STATUS_ORDER.index(current)
+        return cls.STATUS_ORDER[index + 1] if index + 1 < len(cls.STATUS_ORDER) else None
+
+    @classmethod
+    def allowed_next_statuses(cls, current):
+        """Statuses a visit in ``current`` may move to (same status excluded)."""
+        if current not in cls.STATUS_ORDER:
+            return []
+        later = list(cls.STATUS_ORDER[cls.STATUS_ORDER.index(current) + 1:])
+        return later[:1] if cls.REFUSE_SKIPPED_STEPS else later
+
+    @classmethod
+    def _allowed_text(cls, from_status, allowed):
+        if not allowed:
+            return f'{from_status} is the final status.'
+        if len(allowed) == 1:
+            return f'The only allowed next status is {allowed[0]}.'
+        return f'Allowed next statuses: {", ".join(allowed)}.'
+
+    @classmethod
+    def status_transition_error(cls, name, from_status, to_status):
+        """Return a VisitStatusTransitionError if ``from_status -> to_status`` is
+        refused (backward: D-025; skipped: only while REFUSE_SKIPPED_STEPS), else
+        None. Same status and unknown statuses return None (unknown values are
+        left to the field's choices validation)."""
+        if from_status == to_status:
+            return None
+        if from_status not in cls.STATUS_ORDER or to_status not in cls.STATUS_ORDER:
+            return None
+        old_i = cls.STATUS_ORDER.index(from_status)
+        new_i = cls.STATUS_ORDER.index(to_status)
+        if new_i > old_i and (new_i == old_i + 1 or not cls.REFUSE_SKIPPED_STEPS):
+            return None
+        allowed = cls.allowed_next_statuses(from_status)
+        allowed_text = cls._allowed_text(from_status, allowed)
+        if new_i < old_i:
+            code = cls.STATUS_BACKWARD
+            message = (
+                f'Visit {name} cannot go back from {from_status} to {to_status}: '
+                f'vessel-visit status only moves forward (D-025). {allowed_text}'
+            )
+        else:
+            code = cls.STATUS_SKIPPED
+            message = (
+                f'Visit {name} cannot skip from {from_status} to {to_status}: '
+                f'vessel-visit status moves one step at a time '
+                f'({", ".join(cls.STATUS_ORDER)}; D-025). {allowed_text}'
+            )
+        return VisitStatusTransitionError(message, code, from_status, to_status, allowed)
+
+    def _stored_status(self):
+        """The status currently in the database, or None for a new visit."""
+        if self._state.adding or self.pk is None:
+            return None
+        return type(self).objects.filter(pk=self.pk).values_list('status', flat=True).first()
+
+    def validate_status_transition(self):
+        """Raise VisitStatusTransitionError if saving would break D-025."""
+        stored = self._stored_status()
+        if stored is None:
+            return
+        error = self.status_transition_error(self.name, stored, self.status)
+        if error is not None:
+            raise error
+
+    def clean(self):
+        # Called by ModelForm validation, so the Django admin refuses the change
+        # with the message shown on the status field.
+        super().clean()
+        self.validate_status_transition()
+        if self._enters_operation(self._stored_status()):
+            # TCL-010: refuse InOperation in the form (field error on status)
+            # if discharge planning could not run, instead of failing in save().
+            from minitos_core.services import discharge_planning
+            discharge_planning.check_discharge_plannable(self)
+
+    def _enters_operation(self, stored_status):
+        """TCL-010: True if this save moves a stored vessel visit into InOperation."""
+        return (
+            stored_status is not None
+            and stored_status != self.IN_OPERATION
+            and self.status == self.IN_OPERATION
+            and self.visit_type == self.VESSEL
+        )
+
     def save(self, *args, **kwargs):
+        # Enforced on every save, not only in forms/serializers, so no code path
+        # (API, admin, shell, services) can move a visit backward or skip.
+        update_fields = kwargs.get('update_fields')
+        status_saved = update_fields is None or 'status' in update_fields
+        if status_saved:
+            self.validate_status_transition()
+        enters_operation = status_saved and self._enters_operation(self._stored_status())
         duration_minutes = self.calculated_duration_minutes
         if self.eta and duration_minutes is not None:
             self.etd = self.eta + timedelta(minutes=duration_minutes)
-        super().save(*args, **kwargs)
+        if not enters_operation:
+            super().save(*args, **kwargs)
+            return
+        # TCL-010: the status change and the discharge orders commit together.
+        # A planning error (DischargePlanningError) rolls the status back too.
+        from django.db import transaction
+
+        from minitos_core.services import discharge_planning
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            discharge_planning.plan_visit_discharge(self)
 
 
 class CarrierVisitEquipmentRequirement(models.Model):
