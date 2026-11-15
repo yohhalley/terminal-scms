@@ -32,6 +32,14 @@ What "free" means (``free_yard_slots``)
     never places a floating container. ``discharge_no_free_slot`` is raised
     only when every tier is full.
 
+Releasing a reservation (D-047, ``release_reserved_slot``)
+    Yael (5 Nov 2026): cancelling an order, or completing it by exception,
+    frees its reserved yard slot immediately, in the same transaction, if the
+    container has not yet been dropped there. An already-dropped container
+    keeps the slot as occupied. The helper is idempotent (a second cancel is
+    a no-op) and locks the ``Position`` with ``select_for_update``, the same
+    way discharge planning locks the free list.
+
 How seeding works (``slot_rng``)
     The draw uses its own ``random.Random`` (never the global ``random``
     state), seeded with the string ``TCL-012:<scenario seed>:<visit id>``.
@@ -43,11 +51,14 @@ How seeding works (``slot_rng``)
     reset, so it would make two resets differ.
 """
 
+import logging
 import random
 
 from django.db.models import Exists, OuterRef, Q
 
-from minitos_core.models import Order, OrderLeg, Position, ScenarioSeed
+from minitos_core.models import Order, OrderLeg, OrderRoutePlan, Position, ScenarioSeed
+
+logger = logging.getLogger(__name__)
 
 IMPORT_BLOCK_NAME = 'BLOCK01'
 DEFAULT_PLANNING_SEED = 1
@@ -164,3 +175,63 @@ def prefer_import_block(lanes):
     lanes = list(lanes)
     import_lanes = [lane for lane in lanes if lane.storage_grid.name == IMPORT_BLOCK_NAME]
     return import_lanes or lanes
+
+
+def reserved_slot_for_order(order):
+    """The inventory slot this order reserved, or None.
+
+    Prefers ``order.to_position.stack_position`` (discharge planning writes
+    the yard slot there). Falls back to the last active-plan leg that ends
+    on a stack position, so a slot only held via the leg is still released.
+    """
+    to_position = order.to_position
+    if to_position is not None and to_position.stack_position_id:
+        return to_position.stack_position
+    leg = (
+        order.order_legs.filter(
+            route_plan__status=OrderRoutePlan.ACTIVE,
+            end_position__stack_position__isnull=False,
+        )
+        .select_related('end_position__stack_position')
+        .order_by('-sequence')
+        .first()
+    )
+    if leg is not None:
+        return leg.end_position.stack_position
+    return None
+
+
+def release_reserved_slot(order):
+    """Clear ``is_reserved`` on the order's planned yard slot, if not dropped.
+
+    Idempotent. Locks the ``Position`` with ``select_for_update(of=('self',))``
+    so a concurrent planning run cannot draw the slot until this transaction
+    commits (or rolls back). No-op when the order has no yard destination,
+    the slot is already unreserved, or the slot already holds a container
+    (the drop has happened; the slot stays occupied). Logs at INFO with the
+    order id and the slot code only when the flag actually changes.
+    """
+    slot = reserved_slot_for_order(order)
+    if slot is None:
+        return None
+    locked = (
+        Position.objects.select_for_update(of=('self',))
+        .select_related('operational_position', 'pile', 'pile__storage_grid')
+        .filter(pk=slot.pk)
+        .first()
+    )
+    if locked is None:
+        return None
+    if locked.container_visit_id is not None or locked.is_occupied:
+        return locked
+    if not locked.is_reserved:
+        return locked
+    locked.is_reserved = False
+    locked.save(update_fields=['is_reserved'])
+    op = locked.operational_position if hasattr(locked, 'operational_position') else None
+    code = op.code if op is not None else str(locked)
+    logger.info(
+        'D-047 released reserved yard slot %s for order %s',
+        code, order.pk,
+    )
+    return locked

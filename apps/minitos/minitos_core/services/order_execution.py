@@ -18,6 +18,7 @@ from minitos_core.models import (
 )
 from minitos_core.services.layout import resolved_interface_point
 from minitos_core.services.site_sync import ensure_site_for_location
+from minitos_core.services.yard_planning import release_reserved_slot
 
 
 EXECUTION_EVENTS = {
@@ -557,6 +558,12 @@ def apply_execution_event(
         _active_legs(order).exclude(status=OrderLeg.COMPLETE).update(status=OrderLeg.CANCELLED)
         if che:
             _set_che_execution_state(che, dispatched=False, working=False, available=True)
+
+    # D-047: free the planned yard slot in this transaction when the order
+    # ends before the drop. handoff_exception may already have occupied the
+    # same slot (relocate ran above); release_reserved_slot is then a no-op.
+    if event in {'order_cancelled', 'handoff_exception', 'order_failed', 'leg_failed'}:
+        release_reserved_slot(order)
 
     order.refresh_from_db()
     return order
