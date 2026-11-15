@@ -746,8 +746,8 @@ def parse_args(argv=None):
     p.add_argument("--compose", default=os.environ.get("COMPOSE", "docker compose"))
     p.add_argument("--step-limit", type=float, default=float(os.environ.get("E2E_STEP_LIMIT_S", "5")),
                    help="D-037: per-step limit in seconds (do not raise to hide flakiness; open a ticket)")
-    p.add_argument("--time-scale", type=float, default=float(os.environ.get("E2E_TIME_SCALE", "1")),
-                   help="Simulation session time_scale (CI uses the TCL-034 fast profile at x1)")
+    p.add_argument("--time-scale", type=float, default=float(os.environ.get("E2E_TIME_SCALE", "10")),
+                   help="Simulation session time_scale (CI: 10, so fast-profile 2..5 sim-s holds fit the 5 s wall-clock limit; Q24 open)")
     p.add_argument("--setup-timeout", type=float, default=180.0)
     p.add_argument("--quiet-period", type=float, default=1.0,
                    help="seconds to wait for stray events after the last step")
