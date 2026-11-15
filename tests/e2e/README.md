@@ -12,20 +12,23 @@ execution) are recorded in `uns_messages.jsonl` but are neither matched nor "ext
 
 ## What the job does
 
-1. Build the images (`--profile simulation`) and bring the core stack up with `--wait`.
-   The `godot-simulator` service is **not** started with `up`. Each session needs its own
-   environment (session id, token, seed, time scale), so the host-side runner
-   (`apps/simulator-runner/runner.py`) claims the session and launches the image with
-   `docker run` on the `terminal-scms` network, just as `make run-simulator-runner` does.
+1. Build the core images and the `simulator-runner` image (`--profile simulation`).
+   The official Godot import (#29, #35) runs at image build as the `godot` user
+   (`.github/scripts/godot-import.sh`). The standalone `godot-simulator` service is
+   not built or started. Bring the core stack up with `--wait`, then start the
+   `simulator-runner` compose service, which claims the OES session and runs
+   headless Godot as a child process (no Docker socket, no host-side runner).
 2. Reset to the seeded state with `make scenario-reset SCENARIO=import_v1`. Then move the
    visit to InOperation with `make scenario-step SCENARIO=import_v1 STEP=visit-in-operation`,
-   which creates the discharge orders (TCL-010, #34). This step is untimed setup. Until #34
-   is on main it fails as an unknown step.
+   which creates (or adopts) the discharge orders (TCL-010). This step is untimed setup.
 3. Run `python tests/e2e/s1_slice.py`. It does an untimed setup (health, Site ready,
    start-simulation, session `running`, QC01/TT01/TT02/RTG01 connected and available),
    then runs steps 3a, 3b, 3c, 3d and 4, then the end-state checks, then stops the session.
-4. Always upload `e2e-report/` (`s1_slice.md`, `s1_slice.json`, `uns_messages.jsonl`).
-   On failure, also upload the container, runner and simulator logs. Then tear down with `down --volumes`.
+4. Reset again, repeat visit-in-operation, and rerun the slice with `--compare-with`
+   (D-016). M2 is on main, so this pass is on (`E2E_RERUN=1`).
+5. Always upload `e2e-report/` (`s1_slice.md`, `s1_slice.json`, `uns_messages.jsonl`,
+   and the rerun copies). On failure, also upload the container logs. Then tear down
+   with `down --volumes`.
 
 The exit code is 0 only when every step passes.
 
@@ -44,24 +47,24 @@ The exit code is 0 only when every step passes.
 - A flaky or slow run gets a ticket, with the uploaded report and logs attached.
   **Never raise the limit to make a run green.**
 
-## Fast timings (interim)
+## Fast timings (TCL-034)
 
-There is no simulator timing-profile parameter yet (S2 "Sim params").
-Until there is one, two things stand in for it:
-
-- the session `time_scale` (`E2E_TIME_SCALE`, default 10);
-- `tests/e2e/compose.e2e.yaml`, which sets `SIMULATOR_QC_WAIT_MIN_S=1` and `SIMULATOR_QC_WAIT_MAX_S=2` on terminal-oes.
-
-`SIMULATOR_RTG_*` waits are not forwarded by OES today, so the RTG hold keeps its default.
+CI and this job set `SIMULATOR_TIMING_PROFILE=fast` in `.env` so OES forwards it on
+the session claim (D-039). The fast profile's crane holds are 2..5 sim seconds (an
+assumption, Q22). The session `time_scale` is 1 (`E2E_TIME_SCALE`); the live demo
+is also ×1 (D-040). CI speed is still open (Q24). There is no `compose.e2e.yaml`
+override; the interim QC-wait knobs were replaced by this profile.
 
 ## Local use
 
 ```sh
 pip install -r tests/e2e/requirements.txt
 python -m unittest discover -s tests/e2e -p 'test_*.py'      # self-test, no stack needed
-export COMPOSE_FILE=compose.yaml:tests/e2e/compose.e2e.yaml
-make scenario-reset SCENARIO=import_v1                       # stack up + runner running
-make scenario-step SCENARIO=import_v1 STEP=visit-in-operation # TCL-010: creates the orders
+# .env: SIMULATOR_TIMING_PROFILE=fast
+docker compose up --detach --wait
+docker compose --profile simulation up --detach --wait simulator-runner
+make scenario-reset SCENARIO=import_v1
+make scenario-step SCENARIO=import_v1 STEP=visit-in-operation # TCL-010: creates/adopts the orders
 OES_API_TOKEN=... python tests/e2e/s1_slice.py --report-dir e2e-report
 ```
 
@@ -77,14 +80,3 @@ Tokens come only from the environment. The runner never reads `.env`.
 
 The job is not a required check. It stays allowed to fail until it has been green on
 main 3 runs in a row.
-
-## Known blockers
-
-- **M2 reset fix (FE).** After a reset, a stale message from the previous run can still be
-  accepted. The rerun pass (`E2E_RERUN=1`, reset, run, compare) stays off until M2 merges.
-- **TCL-010 (#34, stacked on #27).** `visit-in-operation` exists only once #34 lands.
-- **TCL-034 (sim params).** A real timing profile, and OES forwarding `SIMULATOR_RTG_*`.
-- **CHEs never become available after a reset.** OES `site_sync` imports every CHE with
-  `powered_on=False` and `is_available=False`, even though MiniTOS seeds them powered on.
-  The simulator bootstrap then applies that OES state. Setup times out at "connected and
-  available" until this is fixed (bug, Archer).

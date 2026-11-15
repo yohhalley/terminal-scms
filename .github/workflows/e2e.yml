@@ -1,8 +1,10 @@
 name: SCMS e2e (S1 slice)
 
-# TCL-007 (T-001, D-021): full compose stack + headless Godot (fast timings),
-# reset to import_v1, run the S1 slice and assert the UNS business events with
-# a <= 5 s limit per step (D-037). Flaky runs get a ticket, never a looser limit.
+# TCL-007 (T-001, D-021): full compose stack + compose simulator-runner (Godot
+# imported in the runner image at build, #29/#35) with the TCL-034 fast timing
+# profile, reset to import_v1, visit-in-operation, run the S1 slice and assert
+# the UNS business events with a <= 5 s limit per step (D-037). Flaky runs get
+# a ticket, never a looser limit.
 # Not a required check: allowed to fail until it has been green on main 3 runs in a row.
 
 on:
@@ -25,14 +27,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      COMPOSE_FILE: compose.yaml:tests/e2e/compose.e2e.yaml
       COMPOSE_PROJECT_NAME: terminal-scms
       E2E_STEP_LIMIT_S: "5"        # D-037. Do not raise; open a flaky-run ticket instead.
-      E2E_TIME_SCALE: "10"         # simulation session time_scale (fast profile stand-in)
+      E2E_TIME_SCALE: "1"          # session time_scale; CI timing comes from the fast profile
+      SIMULATOR_TIMING_PROFILE: fast
       E2E_REPORT_DIR: e2e-report
-      # D-016 rerun pass (reset again, same sequence). Blocked on the M2 reset fix (FE): reset must
-      # not accept stale messages from the previous run. Set to "1" once M2 is merged.
-      E2E_RERUN: "0"
+      E2E_RERUN: "1"               # D-016 rerun pass (M2 is on main)
+      RUNNER_IDENTITY: ci-e2e
+      RUNNER_POLL_INTERVAL: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -57,45 +59,40 @@ jobs:
           echo "::add-mask::$oes_token"
           sed -i \
             -e "s/^SIMULATOR_RUNNER_TOKEN=.*/SIMULATOR_RUNNER_TOKEN=$runner_token/" \
-            -e "s/^OES_API_TOKEN=.*/OES_API_TOKEN=$oes_token/" .env
+            -e "s/^OES_API_TOKEN=.*/OES_API_TOKEN=$oes_token/" \
+            -e "s/^SIMULATOR_TIMING_PROFILE=.*/SIMULATOR_TIMING_PROFILE=fast/" \
+            -e "s/^RUNNER_IDENTITY=.*/RUNNER_IDENTITY=ci-e2e/" \
+            -e "s/^RUNNER_POLL_INTERVAL=.*/RUNNER_POLL_INTERVAL=1/" .env
           {
             echo "SIMULATOR_RUNNER_TOKEN=$runner_token"
             echo "OES_API_TOKEN=$oes_token"
           } >> "$GITHUB_ENV"
           docker compose config --quiet
 
-      - name: Build images (incl. the simulation profile's Godot image)
-        run: docker compose --profile simulation build
+      # Official import (#29/#35): the simulator-runner image runs
+      # .github/scripts/godot-import.sh at build as the godot user. The
+      # standalone godot-simulator image is not built or started.
+      - name: Build images (incl. the simulator-runner Godot import)
+        run: |
+          docker compose build
+          docker compose --profile simulation build simulator-runner
 
-      # The godot-simulator service is not started as a long-lived service: it
-      # needs a per-session environment, so the host runner below launches it
-      # (as on the testing server). Only the core services are brought up here.
       - name: Start the stack and wait for health
         run: docker compose up --detach --wait --wait-timeout 300
 
-      - name: Start the simulator host runner
-        run: |
-          mkdir -p "$E2E_REPORT_DIR"
-          OES_URL=http://127.0.0.1:8010 \
-          RUNNER_IDENTITY=ci-e2e \
-          RUNNER_POLL_INTERVAL=1 \
-          SIMULATOR_IMAGE=terminal-scms/godot-simulator:local \
-          SIMULATOR_DOCKER_NETWORK=terminal-scms \
-            nohup python3 apps/simulator-runner/runner.py > "$E2E_REPORT_DIR/simulator-runner.log" 2>&1 &
-          echo $! > "$E2E_REPORT_DIR/simulator-runner.pid"
+      - name: Start the simulator-runner service
+        run: docker compose --profile simulation up --detach --wait --wait-timeout 300 simulator-runner
 
       - name: Reset to import_v1
         run: make scenario-reset SCENARIO=import_v1
 
-      # TCL-010 (#34): discharge orders are created when the visit goes InOperation.
-      # Until #34 is on main this step fails (unknown step); that is expected.
       - name: Visit InOperation (creates the discharge orders)
         run: make scenario-step SCENARIO=import_v1 STEP=visit-in-operation
 
       - name: Run the S1 slice
         run: python tests/e2e/s1_slice.py --report-dir "$E2E_REPORT_DIR"
 
-      - name: Reset and rerun (D-016) — blocked on the M2 reset fix (FE)
+      - name: Reset and rerun (D-016)
         if: env.E2E_RERUN == '1'
         run: |
           make scenario-reset SCENARIO=import_v1
@@ -107,14 +104,8 @@ jobs:
         if: always()
         run: |
           mkdir -p "$E2E_REPORT_DIR/logs"
-          docker compose ps --all > "$E2E_REPORT_DIR/logs/compose-ps.txt" 2>&1 || true
-          docker compose logs --timestamps --no-color > "$E2E_REPORT_DIR/logs/compose.log" 2>&1 || true
-          for name in $(docker ps -a --filter label=scms.simulation-session --format '{{.Names}}'); do
-            docker logs --timestamps "$name" > "$E2E_REPORT_DIR/logs/$name.log" 2>&1 || true
-          done
-          if [ -f "$E2E_REPORT_DIR/simulator-runner.pid" ]; then
-            kill "$(cat "$E2E_REPORT_DIR/simulator-runner.pid")" 2>/dev/null || true
-          fi
+          docker compose --profile simulation ps --all > "$E2E_REPORT_DIR/logs/compose-ps.txt" 2>&1 || true
+          docker compose --profile simulation logs --timestamps --no-color > "$E2E_REPORT_DIR/logs/compose.log" 2>&1 || true
           rm -f .env
 
       - name: Upload the e2e report
@@ -134,9 +125,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-s1-logs
-          path: |
-            ${{ env.E2E_REPORT_DIR }}/logs/
-            ${{ env.E2E_REPORT_DIR }}/simulator-runner.log
+          path: ${{ env.E2E_REPORT_DIR }}/logs/
           if-no-files-found: warn
 
       - name: Tear down
