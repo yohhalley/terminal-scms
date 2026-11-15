@@ -289,11 +289,26 @@ class ImportV1SeedContentTests(TestCase):
         number = container.container_number_id
         self.assertEqual(number, 'MSCU1234566')
         self.assertEqual(int(number[-1]), iso6346_check_digit(number[:10]))
+        # The K6 / step 3 planned-order precondition is asserted after InOperation
+        # (test_k6_planned_discharge_order_exists_after_inoperation; D-048, TCL-010).
 
+    def test_seed_still_precreates_the_planned_order_until_tcl010b(self):
+        # G7 residual: the seed still pre-creates the planned discharge order.
+        # TCL-010b will stop this; visit-in-operation currently adopts it.
+        order = Order.objects.get()
+        self.assertEqual((order.order_type, order.status), (Order.MOVE_IN, Order.PLANNED))
+
+    def test_k6_planned_discharge_order_exists_after_inoperation(self):
+        # #25's K6 precondition, aligned with D-048 / TCL-010: the 3-leg planned
+        # discharge order is the step 3 precondition after InOperation, not at seed.
+        result = run_step('import_v1', 'visit-in-operation')
+        self.assertEqual(result.visit.status, CarrierVisit.IN_OPERATION)
         order = Order.objects.get()
         self.assertEqual((order.order_type, order.status), (Order.MOVE_IN, Order.PLANNED))
         self.assertEqual(order.from_position.logical_address['stow'], '0340682')
         self.assertEqual(order.to_position.stack_position.pile.storage_grid.name, 'BLOCK01')
+        self.assertTrue(result.planned)
+        self.assertTrue(any(not item.created for item in result.planned))
 
     def test_block_has_room_for_five_imports(self):
         free = Position.objects.filter(
@@ -302,6 +317,7 @@ class ImportV1SeedContentTests(TestCase):
         self.assertGreaterEqual(free, 5)
 
     def test_order_legs_follow_the_handoff_chain(self):
+        run_step('import_v1', 'visit-in-operation')
         legs = list(OrderLeg.objects.order_by('sequence').select_related('equipment_type'))
         self.assertEqual(
             [(leg.leg_kind, leg.equipment_type.equipment_type) for leg in legs],
@@ -337,7 +353,9 @@ class ImportV1SeedContentTests(TestCase):
 
 class ImportV1ReleaseStepTests(TestCase):
     def setUp(self):
+        # D-048 / TCL-010: release is the step after the visit is InOperation.
         reset_scenario('import_v1')
+        run_step('import_v1', 'visit-in-operation')
 
     def test_release_discharge_emits_order_released_with_handoff_legs(self):
         out = io.StringIO()
