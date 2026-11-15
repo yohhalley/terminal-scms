@@ -135,16 +135,24 @@ file preserves active commands and recent CHE state across process restart.
   `Event/TimeMs` and `Sim/EventSeq`. `arrived_at_source`,
   `arrived_at_destination` and `waiting_for_handoff` are informational. One
   `handoff_completed` per side; the first emits `container_transferred`.
-  `handoff_timed_out` (QC giver) raises `handoff_exception` with
-  `reason` `SIMULATOR_FAILURE` and `detail` `"no TT within <N> s"` (N = this
-  session's NBIRTH `Sim/Timing/TtNoShowTimeoutS`, else OES
-  `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, else 300), and cancels the remaining
-  legs (cancel `Command/Reason` = the same code); the order ends complete by
-  exception (D-017). `reason` is an extensible enum (OES
-  `HandoffExceptionReason`, MiniTOS `ExceptionReason`); MiniTOS rejects a
-  missing reason (`reason_required`) or an unknown one (`reason_unknown`).
-  `detail` is optional free text. A rejected result is stored with a reason
-  and logged, never rolled back into the DDATA.
+  `handoff_timed_out` from either side raises `handoff_exception` with
+  `reason` `SIMULATOR_FAILURE` and `detail` `"no <ABSENT_TYPE> within <N> s"`
+  (N = the absent CHE's session timeout). A Godot `failed` result with
+  `Command/Result/Reason` `SIMULATOR_FAILURE` is a stall (TCL-011 §8 d): it
+  arrives on the live leg command id, even while the TT holds an H2
+  `assign_handoff`. The stalled leg is marked failed. A pending hand-off is
+  closed as `handoff_exception`; otherwise OES emits `leg_exception`. Both
+  complete the order by exception and cancel remaining live legs. The stall
+  `detail` is `"no progress on <CHE> within <N> s"` (N = this session's
+  NBIRTH `Sim/Timing/LegStallTimeoutS`, else OES
+  `SIMULATOR_LEG_STALL_TIMEOUT_S`, else 600). Godot does not follow a stall
+  with `handoff_timed_out`; a late one is an idempotent no-op. `reason` is
+  an extensible enum (OES `HandoffExceptionReason`, MiniTOS
+  `ExceptionReason`); MiniTOS rejects a missing reason (`reason_required`)
+  or an unknown one (`reason_unknown`). `detail` is optional free text for
+  the consumer (the schema requires it on both exception events). A rejected
+  result is stored with a reason and logged, never rolled back into the
+  DDATA.
 - **Aborted hand-offs.** A failed or cancelled leg cancels its pending
   hand-off and the counterpart leg (cancel DCMD). Stopping, a runner
   stop/failure, NDEATH after stop, or NBIRTH of a new session closes the
