@@ -84,6 +84,7 @@ A waiting period is one continuous stay of one waiting CHE in a wait state, for 
 * `_test_no_show_clock_restarts_per_period`
 * `_test_no_rearm_after_timeout`
 * `_test_margins_skip_no_show_when_off`
+* `_test_import_spec_cycle_matches_constants`: a drift check. Every "`SimTiming.REALISTIC_{QC,RTG}_CYCLE_S` …, currently N s" figure in `docs/scenarios/import_v1.md` must equal the constants. It is skipped, with a note, when the docs folder is not next to the project.
 
 `fast`-profile traces are byte-identical before and after this change. The seeds checked were 1, 7, 42 and 2024, across the single-leg, chain and profile traces.
 

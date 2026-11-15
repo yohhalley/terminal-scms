@@ -108,6 +108,7 @@ func _initialize():
 	_test_rtg_rules_and_config()
 	# TCL-034: timing profiles, W2/W3 no-shows, leg stall clock, margins.
 	_test_hold_derived_from_cycle()
+	_test_import_spec_cycle_matches_constants()
 	_test_timing_profiles_and_precedence()
 	_test_timing_env_precedence()
 	_test_fast_profile_steps_capped()
@@ -1459,6 +1460,32 @@ func _test_hold_derived_from_cycle():
 	_assert(SimTiming.hold_from_cycle([60, 70], 15) == [45, 55], "Simulated motion shrinks the hold")
 	_assert(SimTiming.hold_from_cycle([60, 70], 65) == [0, 5], "The hold never goes below 0")
 	_assert(SimTiming.hold_range("fast", "qc") == [2, 5] and SimTiming.hold_range("fast", "rtg") == [2, 5], "fast keeps its 2..5 s holds as is")
+
+
+## TCL-034e drift check: docs/scenarios/import_v1.md states the realistic
+## cycle as "`SimTiming.REALISTIC_{QC,RTG}_CYCLE_S` ..., currently N s" (or
+## "N–M s"); every such figure must equal the constant. Skipped (with a note)
+## when the repo docs are not next to the project (e.g. the Docker image).
+func _test_import_spec_cycle_matches_constants():
+	var path = ProjectSettings.globalize_path("res://").path_join("../../docs/scenarios/import_v1.md").simplify_path()
+	if not FileAccess.file_exists(path):
+		print("SKIP import_v1.md drift check: %s not found" % path)
+		return
+	var text = FileAccess.get_file_as_string(path)
+	var pattern = RegEx.new()
+	pattern.compile("currently (\\d+)(?:\\D(\\d+))? s")
+	var checked := {"QC": 0, "RTG": 0}
+	for found in pattern.search_all(text):
+		var window = text.substr(maxi(0, found.get_start() - 160), mini(160, found.get_start()))
+		var low = int(found.get_string(1))
+		var high = int(found.get_string(2)) if not found.get_string(2).is_empty() else low
+		for kind in ["QC", "RTG"]:
+			if not window.contains("REALISTIC_%s_CYCLE_S" % kind):
+				continue
+			var cycle: Array = SimTiming.REALISTIC_QC_CYCLE_S if kind == "QC" else SimTiming.REALISTIC_RTG_CYCLE_S
+			_assert([low, high] == [int(cycle[0]), int(cycle[1])], "import_v1.md says the realistic %s cycle is %s..%s s but SimTiming has %s" % [kind, low, high, cycle])
+			checked[kind] += 1
+	_assert(checked.QC >= 1 and checked.RTG >= 1, "import_v1.md names both realistic cycle constants with their figure (%s)" % [checked])
 
 
 func _test_timing_profiles_and_precedence():
