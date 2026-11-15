@@ -19,7 +19,7 @@ from minitos_core.models import (
 from minitos_core.services.layout import resolved_interface_point
 from minitos_core.services.reset_epoch import stamp as stamp_reset_epoch
 from minitos_core.services.site_sync import ensure_site_for_location
-from minitos_core.services.yard_planning import release_reserved_slot
+from minitos_core.services.yard_planning import release_reserved_slot, reserved_slot_for_order
 
 
 EXECUTION_EVENTS = {
@@ -46,6 +46,11 @@ EXCEPTION_BLOCK_NAME = 'BLOCK01'
 # exception*; the visit carries the exception reason (ExceptionReason) and detail.
 NO_SHOW_ORDER_STATUS = Order.COMPLETE
 
+# D-049 (Yael, 2026-11-15): once the box is on a truck, a cancel is refused and
+# the order completes as planned. D-047's release on cancel applies only
+# before the TT pickup.
+CANCEL_REFUSED_IN_TRANSIT = 'cancel_refused_in_transit'
+
 
 def _check_container_identity(order, details):
     """QA/TL: an event naming a different container than the order is rejected."""
@@ -68,6 +73,40 @@ def _check_container_identity(order, details):
             f'container_number_mismatch: event container_number {number} '
             f'does not match order container {expected_number}.',
             code='container_number_mismatch',
+        )
+
+
+def _check_cancel_allowed(order):
+    """D-049: refuse ``order_cancelled`` once the box has left the quay crane.
+
+    Refused while the container is carried by a CHE other than a quay crane
+    (on the TT, or later on the RTG), and once it already sits in the order's
+    planned yard slot. Still allowed before the TT pickup (on the vessel or on
+    the QC); D-047 then frees the reserved slot. A repeated cancel of an
+    already cancelled order stays an idempotent no-op.
+    """
+    if order.status == Order.CANCELLED or not order.container_number_id:
+        return
+    visit = (
+        ContainerVisit.objects.select_related('current_che__equipment_type')
+        .filter(pk=order.container_number_id)
+        .first()
+    )
+    if visit is None:
+        return
+    che = visit.current_che
+    if visit.status == ContainerVisit.ON_EQUIPMENT and che is not None and not _is_quay_crane(che):
+        raise ValidationError(
+            f'{CANCEL_REFUSED_IN_TRANSIT}: the container is on {che.name}; '
+            'after the TT pickup the order completes as planned (D-049).',
+            code=CANCEL_REFUSED_IN_TRANSIT,
+        )
+    slot = reserved_slot_for_order(order)
+    if slot is not None and slot.container_visit_id == visit.pk:
+        raise ValidationError(
+            f'{CANCEL_REFUSED_IN_TRANSIT}: the container is already in its planned '
+            'yard slot; the order completes as planned (D-049).',
+            code=CANCEL_REFUSED_IN_TRANSIT,
         )
 
 
@@ -555,6 +594,7 @@ def apply_execution_event(
         order.completed_at = occurred_at
         order.save(update_fields=['status', 'completed_at'])
     elif event == 'order_cancelled':
+        _check_cancel_allowed(order)
         order.status = Order.CANCELLED
         order.completed_at = occurred_at
         order.save(update_fields=['status', 'completed_at'])
@@ -565,6 +605,9 @@ def apply_execution_event(
     # D-047: free the planned yard slot in this transaction when the order
     # ends before the drop. handoff_exception may already have occupied the
     # same slot (relocate ran above); release_reserved_slot is then a no-op.
+    # D-049: a cancel only gets here before the TT pickup (see
+    # _check_cancel_allowed); leg_failed / order_failed / handoff_exception
+    # still release at any point before the drop (TL decision).
     if event in {'order_cancelled', 'handoff_exception', 'order_failed', 'leg_failed'}:
         release_reserved_slot(order)
 

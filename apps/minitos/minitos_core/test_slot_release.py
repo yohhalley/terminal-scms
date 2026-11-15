@@ -1,15 +1,29 @@
 """D-047: cancelling or excepting a discharge order frees its reserved yard slot.
 
+D-049: a cancel is refused once the box is on a truck (after the TT pickup);
+the release on cancel then only applies before the pickup. leg_failed,
+order_failed and handoff_exception still release.
+
 Stacked on TCL-012 (#38): the reservation lives on ``Position.is_reserved``.
 A release happens only while the container has not been dropped in that slot.
 """
 
 import threading
 
+from django.core.exceptions import ValidationError
 from django.db import connection, connections
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
+from django.urls import reverse
+from rest_framework.test import APIClient
 
-from minitos_core.models import CarrierVisit, Che, Order, Position
+from minitos_core.models import (
+    CarrierVisit,
+    Che,
+    Order,
+    OrderLeg,
+    OrderRoutePlan,
+    Position,
+)
 from minitos_core.scenarios import reset_scenario
 from minitos_core.services import yard_planning
 from minitos_core.services.discharge_planning import (
@@ -17,7 +31,10 @@ from minitos_core.services.discharge_planning import (
     DischargePlanningError,
     plan_visit_discharge,
 )
-from minitos_core.services.order_execution import apply_execution_event
+from minitos_core.services.order_execution import (
+    CANCEL_REFUSED_IN_TRANSIT,
+    apply_execution_event,
+)
 from minitos_core.test_discharge_planning import (
     DischargePlanningTestBase,
     block_slots,
@@ -123,7 +140,8 @@ class SlotReleaseTests(DischargePlanningTestBase):
             captured.output,
         )
 
-    def test_cancel_after_the_drop_does_not_free_the_slot(self):
+    def test_cancel_after_the_drop_is_refused_and_keeps_the_slot(self):
+        """D-049: once the box is in its planned slot a cancel is refused."""
         order, slot = self.order_on_20ft_slot()
         qc = Che.objects.get(name='QC01')
         apply_execution_event(
@@ -136,12 +154,15 @@ class SlotReleaseTests(DischargePlanningTestBase):
         slot.refresh_from_db()
         self.assertEqual(slot.container_visit_id, order.container_number_id)
         self.assertTrue(slot.is_occupied)
+        status_before = Order.objects.get(pk=order.pk).status
 
-        self.cancel(order)
+        with self.assertRaises(ValidationError) as caught:
+            self.cancel(order)
+        self.assertEqual(caught.exception.code, CANCEL_REFUSED_IN_TRANSIT)
 
         slot.refresh_from_db()
         order.refresh_from_db()
-        self.assertEqual(order.status, Order.CANCELLED)
+        self.assertEqual(order.status, status_before)
         self.assertTrue(slot.is_occupied)
         self.assertEqual(slot.container_visit_id, order.container_number_id)
         self.assertTrue(slot.is_reserved)
@@ -222,33 +243,139 @@ class SlotReleaseTests(DischargePlanningTestBase):
         self.assertFalse(slot.is_reserved)
         self.assertIn(slot.pk, self.free_pks(slot))
 
-    def test_cancel_after_tt_pickup_frees_the_slot(self):
-        """The reserved slot is freed even after the container has left the vessel.
-
-        Mid-leg exception after TT pickup is the same rule: if the container
-        was not dropped in the planned slot, the reservation is released
-        (the exception path may occupy a different BLOCK01 slot).
-        """
+    def test_order_failed_also_frees_the_slot(self):
         order = self.orders[0]
         slot = self.slot_for(order)
+        apply_execution_event(order.pk, 'order_failed')
+        slot.refresh_from_db()
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.FAILED)
+        self.assertFalse(slot.is_reserved)
+        self.assertIn(slot.pk, self.free_pks(slot))
+
+    def pick_on_qc(self, order):
         qc = Che.objects.get(name='QC01')
-        tt = Che.objects.get(name='TT01')
         apply_execution_event(
             order.pk, 'container_picked_up', che_id=qc.pk,
             details={'source': 'VESSEL'},
         )
+        return qc
+
+    def transfer_to_tt(self, order):
+        qc = self.pick_on_qc(order)
+        tt = Che.objects.get(name='TT01')
         apply_execution_event(
             order.pk, 'container_transferred',
             details={'from_che_id': qc.pk, 'to_che_id': tt.pk},
         )
+        return tt
+
+    def test_cancel_on_the_qc_before_tt_pickup_still_frees_the_slot(self):
+        """D-049: before the TT pickup, D-047's release on cancel still applies."""
+        order = self.orders[0]
+        slot = self.slot_for(order)
+        self.pick_on_qc(order)
         self.cancel(order)
+        slot.refresh_from_db()
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.CANCELLED)
+        self.assertFalse(slot.is_reserved)
+        self.assertIn(slot.pk, self.free_pks(slot))
+
+    def test_cancel_after_tt_pickup_is_refused_and_the_order_completes(self):
+        """D-049: the box is on a truck, so the cancel is refused.
+
+        The slot stays reserved, nothing is rolled back, and the order then
+        completes as planned (drop into the planned slot, legs complete).
+        """
+        order, slot = self.order_on_20ft_slot()
+        tt = self.transfer_to_tt(order)
+        status_before = Order.objects.get(pk=order.pk).status
+
+        with self.assertRaises(ValidationError) as caught:
+            self.cancel(order)
+        self.assertEqual(caught.exception.code, CANCEL_REFUSED_IN_TRANSIT)
+        self.assertIn('TT01', caught.exception.messages[0])
 
         slot.refresh_from_db()
+        order.refresh_from_db()
         order.container_number.refresh_from_db()
-        self.assertFalse(slot.is_reserved)
+        self.assertEqual(order.status, status_before)
+        self.assertNotEqual(order.status, Order.CANCELLED)
+        self.assertTrue(slot.is_reserved)
         self.assertIsNone(slot.container_visit_id)
-        self.assertIn(slot.pk, self.free_pks(slot))
+        self.assertNotIn(slot.pk, self.free_pks(slot))
         self.assertEqual(order.container_number.current_che_id, tt.pk)
+        self.assertFalse(order.order_legs.filter(status=OrderLeg.CANCELLED).exists())
+
+        # The order proceeds as planned.
+        apply_execution_event(
+            order.pk, 'container_dropped', che_id=tt.pk, position_id=slot.pk,
+        )
+        for leg in order.order_legs.filter(
+            route_plan__status=OrderRoutePlan.ACTIVE,
+        ).order_by('sequence'):
+            apply_execution_event(order.pk, 'leg_completed', leg_id=leg.pk)
+        slot.refresh_from_db()
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.COMPLETE)
+        self.assertEqual(slot.container_visit_id, order.container_number_id)
+        self.assertTrue(slot.is_reserved)
+
+    def test_cancel_refused_on_the_mes_rest_callback_too(self):
+        """The MES execution-callback REST path goes through the same guard (400)."""
+        order = self.orders[0]
+        self.transfer_to_tt(order)
+        url = reverse(
+            'minitos_core:order-execution-callback',
+            args=[order.work_queue.location_id, order.work_queue_id, order.pk],
+        )
+        with override_settings(MES_API_TOKEN='test-mes-token'):
+            response = APIClient().post(
+                url, {'event': 'order_cancelled'}, format='json',
+                HTTP_X_MES_TOKEN='test-mes-token',
+            )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn(CANCEL_REFUSED_IN_TRANSIT, response.data['execution'][0])
+        order.refresh_from_db()
+        self.assertNotEqual(order.status, Order.CANCELLED)
+
+    def test_failures_after_tt_pickup_still_free_the_slot(self):
+        """TL decision: leg_failed / order_failed still release after the TT pickup."""
+        for order, event in ((self.orders[0], 'leg_failed'), (self.orders[1], 'order_failed')):
+            with self.subTest(event=event):
+                slot = self.slot_for(order)
+                self.transfer_to_tt(order)
+                kwargs = {}
+                if event == 'leg_failed':
+                    kwargs['leg_id'] = order.order_legs.order_by('sequence').first().pk
+                apply_execution_event(order.pk, event, **kwargs)
+                slot.refresh_from_db()
+                order.refresh_from_db()
+                self.assertEqual(order.status, Order.FAILED)
+                self.assertFalse(slot.is_reserved)
+                self.assertIn(slot.pk, self.free_pks(slot))
+
+    def test_handoff_exception_after_tt_pickup_still_releases(self):
+        """D-049 only changes cancel; an exception elsewhere frees the planned slot."""
+        order = self.orders[0]
+        reserved = self.slot_for(order)
+        self.transfer_to_tt(order)
+        elsewhere = (
+            block_slots()
+            .exclude(pk=reserved.pk)
+            .filter(is_reserved=False, container_visit__isnull=True, pile__allows_20=True)
+            .first()
+        )
+        apply_execution_event(
+            order.pk, 'handoff_exception',
+            details={'reason': 'SIMULATOR_FAILURE', 'destination_position_id': elsewhere.pk},
+        )
+        reserved.refresh_from_db()
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.COMPLETE)
+        self.assertFalse(reserved.is_reserved)
+        self.assertIn(reserved.pk, self.free_pks(reserved))
 
 
 class SlotReleasePostgresRaceTests(TransactionTestCase):
