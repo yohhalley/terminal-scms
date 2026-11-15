@@ -850,7 +850,9 @@ func _rtg_slot(che: Dictionary, command: Dictionary, command_key: String) -> Dic
 ## TT never holds two active hand-offs (Q18 / T-006).
 ## Success publishes nothing on the assign id (OES expects no ack there); the
 ## TT's H2 handoff_completed (giver) is later reported on the assign id, and
-## completed on the leg id. Failures are reported on the assign id.
+## completed on the leg id. A rejected assign_handoff is reported on the
+## assign id. A later leg stall's failed/SIMULATOR_FAILURE is reported on
+## the live leg command id, not the assign id.
 func _handle_assign_handoff(che_id: int, assign_id: String, metrics: Dictionary):
 	var reason: Array = _assign_handoff_rejection(che_id, metrics)
 	if not reason.is_empty():
@@ -1311,9 +1313,9 @@ func _publish_handoff_timeout(che_id: int):
 	# As for the QC (D-013): handoff_timed_out once, the TT keeps its state
 	# (and the box at H2), the HandoffId no longer pairs, and the TT waits for
 	# OES to cancel. The waiter reports; OES accepting a TT-side report is BE
-	# work (TCL-011 §6.3). H1 reports on the leg command id (receiver); H2 on
-	# the assign_handoff id (giver), like the H2 handoff_completed. Assumption,
-	# pending BE confirmation.
+	# work (TCL-011 §6.3). BE confirmed: H1 reports on the leg command id
+	# (receiver); H2 on the assign_handoff id (giver), like the H2
+	# handoff_completed.
 	var side = _handoff_side(command)
 	command["handoff_timed_out_id"] = handoff_id
 	_active_commands[che_id] = command
