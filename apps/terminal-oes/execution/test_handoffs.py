@@ -741,6 +741,7 @@ class ClaimEnvironmentTests(HandoffTestBase):
             "SIMULATOR_RTG_WAIT_MIN_S", "SIMULATOR_RTG_WAIT_MAX_S", "SIMULATOR_RTG_HOLD_WAIT_MIN_S",
             "SIMULATOR_RTG_HOLD_WAIT_MAX_S", "SIMULATOR_TIMING_PROFILE", "SIMULATOR_QC_NO_SHOW_TIMEOUT_S",
             "SIMULATOR_RTG_NO_SHOW_TIMEOUT_S", "SIMULATOR_LEG_STALL_TIMEOUT_S",
+            "SIMULATOR_NO_SHOW_TIMEOUT_ENABLED",  # TCL-034e (D-053)
         ):
             self.assertIn(key, names)
         self.assertNotIn("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", names | allowed | godot_keys)
