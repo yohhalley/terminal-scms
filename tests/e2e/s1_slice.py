@@ -44,12 +44,19 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_SCHEMA_PATH = REPO_ROOT / "contracts/schemas/scms.execution.event.v1.schema.json"
 FAILURE_EVENTS = {"handoff_exception", "leg_failed", "order_cancelled"}
+# Execution events whose data.occurred_at is the simulator clock (import_v1
+# epoch), not OES wall time. Dispatch and release are stamped with wall time.
+SIM_CLOCK_EVENTS = {
+    "leg_started", "container_picked_up", "container_transferred",
+    "container_dropped", "leg_completed",
+}
 
 
 # --------------------------------------------------------------------------
@@ -161,6 +168,10 @@ class StepResult:
     # expected event (time.monotonic(), unrounded; the next step chains on it).
     clock_from: str = ""
     last_received_at: float | None = None
+    # Simulator-clock occurred_at of the first/last matched sim event (S2).
+    first_sim_at: datetime | None = None
+    last_sim_at: datetime | None = None
+    sim_elapsed_s: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -169,6 +180,7 @@ class StepResult:
             "passed": self.passed, "elapsed_s": self.elapsed_s,
             "trigger_s": self.trigger_s, "limit_s": self.limit_s,
             "error": self.error, "checks": self.checks, "clock_from": self.clock_from,
+            "sim_elapsed_s": self.sim_elapsed_s,
         }
 
 
@@ -232,6 +244,95 @@ class EventStream:
             self.leg_seq[int(leg["id"])] = int(leg["sequence"])
 
 
+def message_sim_datetime(message: UnsMessage) -> datetime | None:
+    """Return data.occurred_at when it is a simulator-clock stamp, else None."""
+    if message.event not in SIM_CLOCK_EVENTS:
+        return None
+    raw = message.data.get("occurred_at")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp
+
+
+def record_sim_time(step: StepResult, message: UnsMessage) -> None:
+    stamp = message_sim_datetime(message)
+    if stamp is None:
+        return
+    if step.first_sim_at is None:
+        step.first_sim_at = stamp
+    step.last_sim_at = stamp
+
+
+def annotate_sim_elapsed(results: list[StepResult]) -> None:
+    """Fill sim_elapsed_s: last sim stamp minus the previous step's last stamp.
+
+    Simulator-driven steps chain (3c → 3d → 4). Steps with no sim-clock events
+    (release, dispatch) are skipped and do not break the chain.
+    """
+    prev_end = None
+    for step in results:
+        if step.last_sim_at is None:
+            continue
+        start = prev_end if prev_end is not None else step.first_sim_at
+        if start is not None:
+            step.sim_elapsed_s = round((step.last_sim_at - start).total_seconds(), 3)
+        prev_end = step.last_sim_at
+
+
+def worst_step_summary(results: list[StepResult]) -> str | None:
+    """Log line for the CI job summary: worst wall-clock step, plus its sim time."""
+    timed = [step for step in results if step.elapsed_s is not None]
+    if not timed:
+        return None
+    worst = max(timed, key=lambda step: step.elapsed_s)
+    sim = (
+        f"; sim time {worst.sim_elapsed_s:g} s"
+        if worst.sim_elapsed_s is not None else ""
+    )
+    return (
+        f"Worst step (wall-clock): {worst.step} {worst.title} "
+        f"{worst.elapsed_s:g} s / limit {worst.limit_s:g} s{sim}."
+    )
+
+
+def accept_start_simulation(status: int, body, requested_time_scale: float) -> dict:
+    """Accept HTTP 201, or HTTP 200 only when the reused session's scale matches."""
+    payload = body if isinstance(body, dict) else {}
+    if status == 201:
+        if payload.get("id") is None:
+            raise RuntimeError(f"start-simulation -> HTTP 201 but no session id: {body}")
+        return payload
+    if status == 200:
+        if payload.get("id") is None:
+            raise RuntimeError(f"start-simulation reused a session (HTTP 200) but no id: {body}")
+        actual = payload.get("time_scale")
+        try:
+            matches = actual is not None and float(actual) == float(requested_time_scale)
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            raise RuntimeError(
+                "start-simulation reused an existing session (HTTP 200) "
+                f"with time_scale {actual}, requested {requested_time_scale:g}"
+            )
+        return payload
+    raise RuntimeError(f"start-simulation -> HTTP {status}: {body}")
+
+
+def session_setup_note(session: dict, *, created: bool) -> str:
+    kind = "created" if created else "reused"
+    return (
+        f"Simulation session {session.get('id')} {kind} "
+        f"(time_scale {session.get('time_scale')}, seed {session.get('seed')})"
+    )
+
+
 def run_expectations(
     step: StepResult, stream: EventStream, expectations: Iterable[Expect],
     start: float, on_message: Callable[[UnsMessage], str | None] | None = None,
@@ -254,6 +355,7 @@ def run_expectations(
             step.elapsed_s = round(time.monotonic() - start, 3)
             return step
         step.observed.append(message.describe(stream.leg_seq))
+        record_sim_time(step, message)
         if message.event in FAILURE_EVENTS and message.event != expect.event:
             step.error = f"failure event on the UNS: {message.describe(stream.leg_seq)} {message.data}"
             step.elapsed_s = round(message.received_at - start, 3)
@@ -466,18 +568,24 @@ class SliceRun:
             "POST", f"/api/sites/{self.site_pk}/start-simulation/",
             {"simulator_version": "ci", "time_scale": a.time_scale},
         )
-        if status not in (200, 201):
-            raise RuntimeError(f"start-simulation -> HTTP {status}: {body}")
-        self.session_id = str(body["id"])
-        self.setup_notes.append(f"Simulation session {self.session_id} requested (time_scale {a.time_scale:g})")
+        session = accept_start_simulation(status, body, a.time_scale)
+        self.session_id = str(session["id"])
+        created = status == 201
 
         def session_running():
-            status, body = self.oes.request("GET", f"/api/simulation-sessions/{self.session_id}/")
-            if body.get("actual_state") == "failed":
-                raise SystemExit(f"simulation session failed: {body.get('failure_reason')}")
-            return status == 200 and body.get("actual_state") == "running"
+            get_status, get_body = self.oes.request(
+                "GET", f"/api/simulation-sessions/{self.session_id}/",
+            )
+            if get_body.get("actual_state") == "failed":
+                raise SystemExit(f"simulation session failed: {get_body.get('failure_reason')}")
+            return get_status == 200 and get_body.get("actual_state") == "running"
 
         wait_until(session_running, a.setup_timeout, 2, "the simulation session to be running (is the runner up?)")
+        # Seed is filled from NBIRTH once the session is running; log it then.
+        get_status, got = self.oes.request("GET", f"/api/simulation-sessions/{self.session_id}/")
+        if get_status == 200 and isinstance(got, dict):
+            session = got
+        self.setup_notes.append(session_setup_note(session, created=created))
 
         def ches_ready():
             rows = self.oes.list(f"/api/equipment/?site_id={site.get('source_id')}")
@@ -687,6 +795,7 @@ class SliceRun:
 # --------------------------------------------------------------------------
 
 def render_markdown(results: list[StepResult], notes: list[str], fatal: str = "") -> str:
+    annotate_sim_elapsed(results)
     lines = ["## TCL-007 S1 slice (import_v1)", ""]
     if fatal:
         lines += [f"**SETUP FAILED:** {fatal}", ""]
@@ -710,10 +819,14 @@ def render_markdown(results: list[StepResult], notes: list[str], fatal: str = ""
         )
     passed = bool(results) and not fatal and all(r.passed for r in results)
     lines += ["", f"**Overall: {'PASS' if passed else 'FAIL'}**", ""]
+    worst = worst_step_summary(results)
+    if worst:
+        lines += [worst, ""]
     return "\n".join(lines)
 
 
 def write_reports(args, results, notes, stream: EventStream | None, fatal="") -> bool:
+    annotate_sim_elapsed(results)
     passed = bool(results) and not fatal and all(r.passed for r in results)
     markdown = render_markdown(results, notes, fatal)
     print(markdown)
@@ -747,7 +860,7 @@ def parse_args(argv=None):
     p.add_argument("--step-limit", type=float, default=float(os.environ.get("E2E_STEP_LIMIT_S", "5")),
                    help="D-037: per-step limit in seconds (do not raise to hide flakiness; open a ticket)")
     p.add_argument("--time-scale", type=float, default=float(os.environ.get("E2E_TIME_SCALE", "10")),
-                   help="Simulation session time_scale (CI: 10, so fast-profile 2..5 sim-s holds fit the 5 s wall-clock limit; Q24 open)")
+                   help="Simulation session time_scale (CI: 10, because import_v1 TT drives are 20-32 sim-s; QC/RTG holds add <= 5 sim-s and are not the binding wait. Q24 open)")
     p.add_argument("--setup-timeout", type=float, default=180.0)
     p.add_argument("--quiet-period", type=float, default=1.0,
                    help="seconds to wait for stray events after the last step")

@@ -5,6 +5,7 @@ No broker, Docker or services needed:
 """
 import time
 import unittest
+from datetime import datetime, timezone
 
 import s1_slice as s1
 
@@ -299,6 +300,115 @@ class SchemaTests(unittest.TestCase):
             self.assertIsNone(s1.schema_check(validator, msg), path.name)
         broken = s1.UnsMessage("t", {"schema": "scms.execution.event.v1", "data": {"event": "leg_started"}}, 0.0)
         self.assertIsNotNone(s1.schema_check(validator, broken))
+
+
+
+def sim_execution(event, occurred_at, leg_id=11, che="QC01", **extra):
+    return execution(event, leg_id, che, occurred_at=occurred_at, **extra)
+
+
+class StartSimulationTests(unittest.TestCase):
+    def test_http_201_is_accepted(self):
+        body = {"id": "sess-1", "time_scale": 10, "seed": 1}
+        self.assertEqual(s1.accept_start_simulation(201, body, 10.0), body)
+
+    def test_http_200_is_accepted_when_scale_matches(self):
+        body = {"id": "sess-1", "time_scale": 10.0, "seed": 1}
+        self.assertEqual(s1.accept_start_simulation(200, body, 10), body)
+
+    def test_http_200_is_accepted_when_scale_matches_as_string(self):
+        body = {"id": "sess-1", "time_scale": "10"}
+        self.assertEqual(s1.accept_start_simulation(200, body, 10.0), body)
+
+    def test_http_200_with_mismatched_scale_is_rejected(self):
+        body = {"id": "sess-1", "time_scale": 1.0, "seed": 1}
+        with self.assertRaises(RuntimeError) as cm:
+            s1.accept_start_simulation(200, body, 10.0)
+        self.assertIn("HTTP 200", str(cm.exception))
+        self.assertIn("time_scale 1.0", str(cm.exception))
+        self.assertIn("requested 10", str(cm.exception))
+
+    def test_http_200_without_time_scale_is_rejected(self):
+        with self.assertRaises(RuntimeError) as cm:
+            s1.accept_start_simulation(200, {"id": "sess-1"}, 10.0)
+        self.assertIn("time_scale None", str(cm.exception))
+
+    def test_other_http_status_is_rejected(self):
+        with self.assertRaises(RuntimeError) as cm:
+            s1.accept_start_simulation(500, {"detail": "boom"}, 10.0)
+        self.assertIn("HTTP 500", str(cm.exception))
+
+    def test_session_note_logs_scale_and_seed(self):
+        note = s1.session_setup_note(
+            {"id": "abc", "time_scale": 10, "seed": 1}, created=True,
+        )
+        self.assertEqual(note, "Simulation session abc created (time_scale 10, seed 1)")
+        reused = s1.session_setup_note(
+            {"id": "abc", "time_scale": 10, "seed": None}, created=False,
+        )
+        self.assertEqual(reused, "Simulation session abc reused (time_scale 10, seed None)")
+
+
+class WorstStepTests(unittest.TestCase):
+    def test_sim_elapsed_chains_on_previous_step_end(self):
+        pick = "2026-10-25T00:00:25.300000+00:00"
+        transfer = "2026-10-25T00:00:54.500000+00:00"
+        drop = "2026-10-25T00:01:16.300000+00:00"
+
+        c = s1.StepResult("3c", "QC pick", "simulator", [], elapsed_s=0.51, limit_s=5)
+        s1.record_sim_time(c, sim_execution("leg_started", pick))
+        s1.record_sim_time(c, sim_execution("container_picked_up", pick))
+
+        d = s1.StepResult("3d", "H1", "simulator", [], elapsed_s=2.522, limit_s=5)
+        s1.record_sim_time(d, sim_execution("leg_started", "2026-10-25T00:00:26+00:00", 12, "TT02"))
+        s1.record_sim_time(d, sim_execution(
+            "container_transferred", transfer, 12, "TT02",
+            from_che_name="QC01", to_che_name="TT02",
+        ))
+
+        four = s1.StepResult("4", "H2", "oes-dispatch", [], elapsed_s=2.547, limit_s=5)
+        s1.record_sim_time(four, sim_execution("leg_started", "2026-10-25T00:01:01.800000+00:00", 13, "RTG01"))
+        s1.record_sim_time(four, sim_execution("container_dropped", drop, 13, "RTG01"))
+
+        # 3a/3b have wall-clock occurred_at only and must not break the chain.
+        a = s1.StepResult("3a", "Release", "cli", [], elapsed_s=1.46, limit_s=5, passed=True)
+        b = s1.StepResult("3b", "Dispatch", "http", [], elapsed_s=0.35, limit_s=5, passed=True)
+        s1.annotate_sim_elapsed([a, b, c, d, four])
+        self.assertIsNone(a.sim_elapsed_s)
+        self.assertIsNone(b.sim_elapsed_s)
+        self.assertEqual(c.sim_elapsed_s, 0.0)
+        self.assertEqual(d.sim_elapsed_s, 29.2)
+        self.assertEqual(four.sim_elapsed_s, 21.8)
+
+        line = s1.worst_step_summary([a, b, c, d, four])
+        self.assertEqual(
+            line,
+            "Worst step (wall-clock): 4 H2 2.547 s / limit 5 s; sim time 21.8 s.",
+        )
+
+    def test_dispatch_occurred_at_is_not_treated_as_sim_time(self):
+        message = execution("leg_dispatched", 11, "QC01", occurred_at="2026-11-15T07:38:24.691469+00:00")
+        self.assertIsNone(s1.message_sim_datetime(message))
+
+    def test_worst_step_without_sim_time_omits_it(self):
+        a = s1.StepResult("3a", "Release", "cli", [], elapsed_s=1.46, limit_s=5)
+        b = s1.StepResult("3b", "Dispatch", "http", [], elapsed_s=0.35, limit_s=5)
+        self.assertEqual(
+            s1.worst_step_summary([a, b]),
+            "Worst step (wall-clock): 3a Release 1.46 s / limit 5 s.",
+        )
+
+    def test_markdown_includes_the_worst_step_line(self):
+        ok = s1.StepResult("3d", "H1", "simulator", ["x"], passed=True, elapsed_s=2.522, limit_s=5)
+        s1.record_sim_time(ok, sim_execution("container_transferred", "2026-10-25T00:00:54.500000+00:00", 12, "TT02"))
+        s1.record_sim_time(ok, sim_execution("leg_started", "2026-10-25T00:00:26+00:00", 12, "TT02"))
+        # record_sim_time is called in arrival order in production; first then last.
+        # Here last_sim_at would be the later call. Re-set in chronological order:
+        ok.first_sim_at = datetime(2026, 10, 25, 0, 0, 26, tzinfo=timezone.utc)
+        ok.last_sim_at = datetime(2026, 10, 25, 0, 0, 54, 500000, tzinfo=timezone.utc)
+        md = s1.render_markdown([ok], [])
+        self.assertIn("Worst step (wall-clock): 3d H1 2.522 s / limit 5 s; sim time 28.5 s.", md)
+        self.assertIn("**Overall: PASS**", md)
 
 
 if __name__ == "__main__":

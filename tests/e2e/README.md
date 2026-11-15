@@ -52,11 +52,14 @@ The exit code is 0 only when every step passes.
 CI and this job set `SIMULATOR_TIMING_PROFILE=fast` in `.env` so OES forwards it on
 the session claim (D-039). The fast profile's crane holds are 2..5 sim seconds (an
 assumption, Q22). The live demo is ×1 (D-040). CI speed is still open (Q24). This job uses
-`E2E_TIME_SCALE=10` so the fast profile's 2..5 sim-second holds fit the 5 s
-wall-clock limit (D-037). A run at ×1 (43690094196) failed step 3d at 5.0 s:
-`leg_started(leg 2, TT02)` was seen, then `container_transferred` was not (the
-QC hold is still running). **The 5 s limit was not raised.** There is no
-`compose.e2e.yaml` override; the interim QC-wait knobs were replaced by this profile.
+`E2E_TIME_SCALE=10` because the TT drives on import_v1 are 20–32 sim seconds
+(QC/RTG holds add ≤ 5 sim seconds and are not on the 3d critical path). At ×1,
+those drives cannot fit the 5 s wall-clock limit (D-037): run 43690094196 failed
+step 3d at 5.0 s after `leg_started(leg 2, TT02)` — waiting for
+`container_transferred` (the TT drive, not the QC hold). **The 5 s limit was
+not raised.** Do not tighten holds or the timing profile to make CI green
+(Q22/Q24). There is no `compose.e2e.yaml` override; the interim QC-wait knobs
+were replaced by this profile.
 
 ## Local use
 
