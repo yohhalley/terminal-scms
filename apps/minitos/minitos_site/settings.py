@@ -196,7 +196,7 @@ LOGGING = {
             "propagate": True,
         },
         # QA M2: every message ignored as stale after scenario-reset is logged
-        # at INFO, so drops show up in consumer and CI logs.
+        # (WARNING since the S-1 follow-up), so drops show up in consumer and CI logs.
         "minitos_core.services.reset_epoch": {
             "handlers": ["console"],
             "level": "INFO",
