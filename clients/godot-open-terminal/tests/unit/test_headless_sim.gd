@@ -98,6 +98,7 @@ func _initialize():
 	_test_mqtt_packet_id_wraps()
 	_test_rtg_state_machine()
 	_test_w4_starts_at_ready_to_pick()
+	_test_rtg_positioning_before_w4_d058()
 	_test_chain_happy_path_d016()
 	_test_rtg_commanded_slot()
 	_test_chain_late_tt_at_rtg()
@@ -955,7 +956,7 @@ func _test_node_birth_metrics():
 		by_name[str(metric.name)] = metric
 	_assert(by_name.has("Contract/Version") and str(by_name["Contract/Version"].value) == HeadlessSimulator.CONTRACT_VERSION, "NBIRTH has Contract/Version")
 	_assert(str(by_name["Contract/Version"].value).begins_with("tcl-002."), "Contract/Version is tcl-002.<minor>")
-	_assert(HeadlessSimulator.CONTRACT_VERSION == "tcl-002.3", "TCL-034e: Contract/Version is tcl-002.3 (NoShowTimeoutEnabled added)")
+	_assert(HeadlessSimulator.CONTRACT_VERSION == "tcl-002.4", "TCL-034e: Contract/Version is tcl-002.4 (RtgPositioningS added, D-058)")
 	_assert(by_name.has("Sim/Timing/NoShowTimeoutEnabled") and str(by_name["Sim/Timing/NoShowTimeoutEnabled"].type) == "Boolean" and by_name["Sim/Timing/NoShowTimeoutEnabled"].value == true, "NBIRTH has Sim/Timing/NoShowTimeoutEnabled (Boolean, default true)")
 	_assert(by_name.has("Sim/ScenarioId") and str(by_name["Sim/ScenarioId"].value) == "import-discharge-ci" and str(by_name["Sim/ScenarioId"].type) == "String", "NBIRTH has Sim/ScenarioId")
 	_assert(str(by_name["Sim/StartEpochMs"].type) == "Int64" and int(by_name["Sim/StartEpochMs"].value) == 1764583200000, "Sim/StartEpochMs is Int64 epoch ms")
@@ -1068,6 +1069,43 @@ func _test_rtg_state_machine():
 	_assert(_names(RtgStack.step(command, 300000, 0)) == ["handoff_timed_out"], "RTG times out after 300 s")
 	_assert(RtgStack.step(command, 300100, TT_ID).is_empty(), "A TT after the time-out gets no transfer")
 	_assert(_names(RtgStack.cancel(command)) == ["cancelled"] and str(command.work_state) == "idle", "Cancel clears the RTG")
+
+
+## TCL-034e (D-058): the RTG positions for RtgPositioningS (realistic 30 s)
+## from its command before it is ready to pick; it cannot pick meanwhile, and
+## the W4 no-show clock starts only when positioning ends (D-052 moment).
+func _test_rtg_positioning_before_w4_d058():
+	var slot = {"position_id": 0, "position_code": "BLOCK01-DUMMY-01"}
+	var command = _rtg_command()
+	RtgStack.start(command, 30000, slot, 300000, 30000, 1000)
+	_assert(int(command.positioned_at_ms) == 31000, "D-058: positioned at command + 30 s")
+	_assert(RtgStack.step(command, 30999, TT_ID).is_empty() and str(command.work_state) == "gantry_to_bay", "D-058: no pick while positioning, even with the TT at the lane")
+	_assert(int(command.ready_to_pick_at_ms) == -1 and int(command.waiting_since_ms) == 0, "D-058: no W4 clock while positioning")
+	_assert(_names(RtgStack.step(command, 31000, 0)) == ["waiting_for_handoff"] and int(command.waiting_since_ms) == 31000, "D-058: W4 starts when positioning ends")
+	_assert(RtgStack.step(command, 330999, 0).is_empty(), "D-058: no W4 time-out before positioned + 300 s")
+	_assert(_names(RtgStack.step(command, 331000, 0)) == ["handoff_timed_out"], "D-058: W4 times out at positioned + 300 s")
+	command = _rtg_command()
+	RtgStack.start(command, 30000, slot, 300000, 30000, 1000)
+	_assert(_names(RtgStack.step(command, 31000, TT_ID)) == ["handoff_completed"] and int(command.wait_until_ms) == 61000, "D-058: TT waiting -> pick when positioned; cycle 30 + 30 = 60 s")
+	# Simulator, realistic: the RTG's ready-to-pick is 30 s after its command.
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	simulator.configure_timing_profile("realistic")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000), "D-058 setup: H1 completes")
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	var commanded_ms = int(simulator._clock.now_ms)
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	_assert(_run_until(simulator, func(): return int(simulator._active_commands.get(RTG_ID, {}).get("ready_to_pick_at_ms", -1)) >= 0, 1000), "D-058: the RTG becomes ready to pick")
+	var ready_ms = int(simulator._active_commands[RTG_ID].ready_to_pick_at_ms)
+	_assert(ready_ms >= commanded_ms + 30000 and ready_ms < commanded_ms + 30000 + 1000, "D-058: ready to pick 30 s after the command (%s -> %s)" % [commanded_ms, ready_ms])
+	_assert(_run_until(simulator, func(): return simulator._active_commands.is_empty(), 6000), "D-058: realistic chain finishes")
+	var results = _results(simulator)
+	var picked = _find(results, "RTG01", "handoff_completed")
+	var dropped = _find(results, "RTG01", "container_dropped")
+	_assert(int(dropped["Sim/TimeMs"]) - int(picked["Sim/TimeMs"]) == 30000, "D-058: RTG hold after the pick is 30 s")
+	_assert(not _events_of(results, "RTG01").has("handoff_timed_out"), "D-058: positioning is not a no-show")
+	_free_simulator(simulator)
 
 
 ## TCL-034e (D-052): W4 starts when the RTG leaves gantry_to_bay (at the bay,
@@ -1453,10 +1491,11 @@ func _realistic_hold(che_kind: String) -> Array:
 ## TCL-034e (D-051): realistic is a full cycle; hold = max(0, cycle - motion).
 func _test_hold_derived_from_cycle():
 	_assert(SimTiming.PROFILES.realistic.has("qc_cycle") and SimTiming.PROFILES.realistic.has("rtg_cycle"), "realistic stores the crane cycle (D-051)")
-	_assert(SimTiming.QC_SIMULATED_MOTION_S == 0 and SimTiming.RTG_SIMULATED_MOTION_S == 0, "No crane motion is simulated today")
+	_assert(SimTiming.QC_SIMULATED_MOTION_S == 0, "No QC motion is simulated today")
+	_assert(SimTiming.RTG_SIMULATED_MOTION_S == SimTiming.REALISTIC_RTG_POSITIONING_S and SimTiming.REALISTIC_RTG_POSITIONING_S == 30, "D-058: the RTG's simulated motion is its ~30 s positioning")
 	_assert(SimTiming.hold_range("realistic", "qc") == SimTiming.hold_from_cycle(SimTiming.REALISTIC_QC_CYCLE_S, SimTiming.QC_SIMULATED_MOTION_S), "QC hold = cycle - motion")
 	_assert(SimTiming.hold_range("realistic", "rtg") == SimTiming.hold_from_cycle(SimTiming.REALISTIC_RTG_CYCLE_S, SimTiming.RTG_SIMULATED_MOTION_S), "RTG hold = cycle - motion")
-	_assert(SimTiming.REALISTIC_QC_CYCLE_S == [60, 60] and SimTiming.REALISTIC_RTG_CYCLE_S == [60, 60], "Default realistic cycle is 60 s (Y1 pending)")
+	_assert(SimTiming.REALISTIC_QC_CYCLE_S == [60, 60] and SimTiming.REALISTIC_RTG_CYCLE_S == [60, 60], "Realistic cycle is 60 s for QC and RTG (D-054)")
 	_assert(SimTiming.hold_from_cycle([60, 70], 15) == [45, 55], "Simulated motion shrinks the hold")
 	_assert(SimTiming.hold_from_cycle([60, 70], 65) == [0, 5], "The hold never goes below 0")
 	_assert(SimTiming.hold_range("fast", "qc") == [2, 5] and SimTiming.hold_range("fast", "rtg") == [2, 5], "fast keeps its 2..5 s holds as is")
@@ -1502,10 +1541,13 @@ func _test_timing_profiles_and_precedence():
 	_assert(_birth_metric(simulator, "Sim/Timing/LegStallTimeoutS") == 600, "NBIRTH LegStallTimeoutS defaults to 600")
 	_assert(simulator.configure_timing_profile("REALISTIC"), "realistic profile applies (case-insensitive)")
 	_assert(simulator._qc_wait_s.hold == _realistic_hold("qc") and simulator._rtg_wait_s.hold == _realistic_hold("rtg"), "realistic: QC and RTG hold = cycle - simulated motion (D-051)")
-	_assert(simulator._qc_wait_s.hold == [60, 60] and simulator._rtg_wait_s.hold == [60, 60], "realistic default: 60 s cycle, 0 s motion -> 60 s hold (TCL-034e default, Y1 pending)")
+	_assert(simulator._qc_wait_s.hold == [60, 60], "realistic: QC 60 s cycle, 0 s motion -> 60 s hold (D-054)")
+	_assert(simulator._rtg_wait_s.hold == [30, 30] and simulator._rtg_positioning_s == 30, "realistic: RTG 60 s cycle = 30 s positioning + 30 s hold (D-054, D-058)")
+	_assert(_birth_metric(simulator, "Sim/Timing/RtgPositioningS") == 30, "NBIRTH reports Sim/Timing/RtgPositioningS (realistic 30)")
 	_assert(_birth_metric(simulator, "Sim/Timing/QcHoldMinS") == _realistic_hold("qc")[0] and _birth_metric(simulator, "Sim/Timing/RtgHoldMaxS") == _realistic_hold("rtg")[1], "NBIRTH reports the actual (effective) hold values")
 	_assert(not simulator.configure_timing_profile("turbo") and simulator._timing_profile == "realistic", "Unknown profile keeps the current one")
 	_assert(simulator.configure_timing_profile("fast") and simulator._qc_wait_s.hold == [2, 5], "fast: hold 2..5 s")
+	_assert(simulator._rtg_positioning_s == 0 and _birth_metric(simulator, "Sim/Timing/RtgPositioningS") == 0, "fast: no RTG positioning (D-058)")
 	_assert(not simulator.configure_qc_no_show_timeout("0") and not simulator.configure_rtg_no_show_timeout("x") and not simulator.configure_leg_stall_timeout("-5"), "Invalid time-outs are refused")
 	_assert(simulator._qc_no_show_timeout_s == 300 and simulator._rtg_no_show_timeout_s == 300 and simulator._leg_stall_timeout_s == 600, "Refused values keep the defaults")
 	_free_simulator(simulator)
@@ -1617,11 +1659,11 @@ func _test_timing_margins_both_profiles():
 		_assert(simulator.configure_timing_profile(profile), "%s applies" % profile)
 		var violations = simulator.timing_margin_violations()
 		_assert(violations.is_empty(), "%s: time-outs >= 2 x worst normal wait (%s)" % [profile, violations])
-		var waits = SimTiming.worst_normal_waits_s(simulator._qc_wait_s.hold, simulator._rtg_wait_s.hold, simulator._default_speed_mps)
+		var waits = SimTiming.worst_normal_waits_s(simulator._qc_wait_s.hold, simulator._rtg_wait_s.hold, simulator._default_speed_mps, simulator._rtg_positioning_s)
 		for key in waits:
 			var timeout = simulator._tt_no_show_timeout_s if key in ["W1", "W4"] else (simulator._qc_no_show_timeout_s if key == "W2" else simulator._rtg_no_show_timeout_s)
 			_assert(timeout >= 2 * int(waits[key]), "%s %s: %s s >= 2 x %s s" % [profile, key, timeout, waits[key]])
-		var phase_s = SimTiming.longest_motion_or_work_s(simulator._qc_wait_s.hold, simulator._rtg_wait_s.hold, simulator._default_speed_mps)
+		var phase_s = SimTiming.longest_motion_or_work_s(simulator._qc_wait_s.hold, simulator._rtg_wait_s.hold, simulator._default_speed_mps, simulator._rtg_positioning_s)
 		_assert(simulator._leg_stall_timeout_s >= 2 * phase_s, "%s: stall %s s >= 2 x longest motion/work phase %s s (N2)" % [profile, simulator._leg_stall_timeout_s, phase_s])
 		_free_simulator(simulator)
 	var tight = _new_chain_simulator(42, QC_LAT)

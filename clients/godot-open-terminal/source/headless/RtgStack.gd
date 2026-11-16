@@ -11,13 +11,16 @@ extends RefCounted
 ## Contract rev 9.1 §3.4 canonical RTG states:
 ## idle -> gantry_to_bay -> [waiting_for_tt] -> picking_from_tt -> holding
 ##      -> depositing_to_stack -> idle
-## - On command receipt: acknowledged + started (gantry_to_bay). No gantry
-##   travel is modelled, so gantry_to_bay takes zero sim time.
+## - On command receipt: acknowledged + started (gantry_to_bay). D-058: the
+##   RTG positions at the bay for `positioning_ms` of sim time from the command
+##   (realistic ~30 s, SimTiming.REALISTIC_RTG_POSITIONING_S; fast 0 s). It
+##   cannot pick while positioning, even if the TT is already at the lane.
 ## - D-052 (closes E22): the RTG is "at the bay and ready to pick" when it
 ##   leaves gantry_to_bay (_enter_ready_to_pick, `ready_to_pick_at_ms`). That
 ##   is the only W4 start: not the command, not the TT's arrival, not the H2
-##   assign. With 0 s gantry travel it is the first step after the command; if
-##   gantry travel is ever modelled, only the moment this is called moves.
+##   assign. With 0 s positioning (fast) it is the first step after the
+##   command; with D-058 positioning it is the first step at or after
+##   command time + positioning_ms. Only that moment moves; W4 still starts here.
 ## - The pick from the TT happens at the first step the TT is ready. If the TT
 ##   is not ready yet, the RTG enters waiting_for_tt (waiting_for_handoff)
 ##   and the W4 clock starts at ready_to_pick_at_ms.
@@ -49,9 +52,13 @@ static func start(
 	command: Dictionary,
 	hold_wait_ms: int,
 	slot: Dictionary,
-	tt_no_show_timeout_ms: int = DEFAULT_TT_NO_SHOW_TIMEOUT_MS
+	tt_no_show_timeout_ms: int = DEFAULT_TT_NO_SHOW_TIMEOUT_MS,
+	positioning_ms: int = 0,
+	now_ms: int = 0
 ) -> Array:
 	command["work_state"] = GANTRY_TO_BAY
+	# D-058: ready to pick no earlier than this sim time.
+	command["positioned_at_ms"] = now_ms + maxi(0, positioning_ms)
 	command["rtg_finished"] = false
 	command["hold_wait_ms"] = hold_wait_ms
 	command["tt_no_show_timeout_ms"] = tt_no_show_timeout_ms
@@ -79,6 +86,9 @@ static func step(command: Dictionary, now_ms: int, ready_counterpart_id: int, em
 	for _guard in range(4):
 		var state = str(command.get("work_state", IDLE))
 		if state == GANTRY_TO_BAY:
+			if now_ms < int(command.get("positioned_at_ms", 0)):
+				# D-058: still positioning; no W4, no pick yet.
+				break
 			_enter_ready_to_pick(command, now_ms)
 			if ready_counterpart_id > 0:
 				# The TT is already at the lane: pick at once, no W4 opens.

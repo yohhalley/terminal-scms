@@ -88,7 +88,8 @@ const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 ## Qc/RtgNoShowTimeoutS, LegStallTimeoutS added, RtgNoShowTimeoutEnabled removed
 ## (contract rev 9.4 assumed; names confirmed by BE on 15 Nov 2026).
 ## tcl-002.3 (TCL-034e, D-053): Sim/Timing/NoShowTimeoutEnabled (Boolean) added.
-const CONTRACT_VERSION := "tcl-002.3"
+## tcl-002.4 (TCL-034e, D-058): Sim/Timing/RtgPositioningS (Int64) added.
+const CONTRACT_VERSION := "tcl-002.4"
 
 var _bootstrap := OESBootstrapClient.new()
 var _mqtt := MQTTNodeClient.new()
@@ -135,6 +136,9 @@ var _qc_wait_s := {
 var _rtg_wait_s := {
 	"hold": SimTiming.hold_range(SimTiming.DEFAULT_PROFILE, "rtg"),
 }
+## D-058: whole seconds an RTG positions (gantry_to_bay) before it is ready to
+## pick; from the profile (realistic 30 s, fast 0 s). Sim/Timing/RtgPositioningS.
+var _rtg_positioning_s := SimTiming.rtg_positioning_s(SimTiming.DEFAULT_PROFILE)
 ## Whole seconds of sim time before handoff_timed_out, per ABSENT CHE type:
 ## TT absent: QC at H1 (W1) and RTG at H2 (W4); QC absent: TT at H1 (W2);
 ## RTG absent: TT at H2 (W3).
@@ -249,6 +253,7 @@ func configure_timing_profile(text: String) -> bool:
 	_timing_profile = name
 	_qc_wait_s["hold"] = SimTiming.hold_range(name, "qc")
 	_rtg_wait_s["hold"] = SimTiming.hold_range(name, "rtg")
+	_rtg_positioning_s = SimTiming.rtg_positioning_s(name)
 	return true
 
 
@@ -257,7 +262,7 @@ func timing_margin_violations() -> Array:
 	return SimTiming.margin_violations(_qc_wait_s.hold, _rtg_wait_s.hold, _default_speed_mps, {
 		"tt": _tt_no_show_timeout_s, "qc": _qc_no_show_timeout_s,
 		"rtg": _rtg_no_show_timeout_s, "leg_stall": _leg_stall_timeout_s,
-	}, _no_show_timeout_enabled)
+	}, _no_show_timeout_enabled, _rtg_positioning_s)
 
 
 static func _positive_s(text: String) -> int:
@@ -491,6 +496,7 @@ func node_birth_metrics() -> Array:
 		{"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": int(_qc_wait_s.hold[1])},
 		{"name": "Sim/Timing/RtgHoldMinS", "type": "Int64", "value": int(_rtg_wait_s.hold[0])},
 		{"name": "Sim/Timing/RtgHoldMaxS", "type": "Int64", "value": int(_rtg_wait_s.hold[1])},
+		{"name": "Sim/Timing/RtgPositioningS", "type": "Int64", "value": _rtg_positioning_s},
 		{"name": "Sim/Timing/Profile", "type": "String", "value": _timing_profile},
 		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
 		{"name": "Sim/Timing/QcNoShowTimeoutS", "type": "Int64", "value": _qc_no_show_timeout_s},
@@ -676,7 +682,7 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	elif rtg_leg:
 		var rtg_key = _command_seed_key(command)
 		var rtg_hold_s = _draw_rtg_wait_s(che, rtg_key, 0, "hold")
-		var rtg_events = RtgStack.start(command, rtg_hold_s * 1000, _rtg_slot(che, command, rtg_key), rtg_no_show_timeout_ms())
+		var rtg_events = RtgStack.start(command, rtg_hold_s * 1000, _rtg_slot(che, command, rtg_key), rtg_no_show_timeout_ms(), _rtg_positioning_s * 1000, _clock.now_ms)
 		_active_commands[che_id] = command
 		_save_runtime_state()
 		_publish_events(che_id, command, rtg_events)
