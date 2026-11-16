@@ -59,8 +59,9 @@ class SlotReleaseTests(DischargePlanningTestBase):
     def order_on_20ft_slot(self):
         """A planned order whose reserved bay accepts the import_v1 22G1 (20').
 
-        Discharge planning does not filter by bay size, so a reserved slot may
-        be an even (40') bay that Position.save will reject on drop.
+        Since #38, discharge planning only reserves slots whose bay fits the
+        container's length, so every 20' order should land here; the check
+        stays as a guard in case the seed's ISO types change.
         """
         for order in self.orders:
             slot = self.slot_for(order)
