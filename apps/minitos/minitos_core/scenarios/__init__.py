@@ -27,6 +27,9 @@ def reset_scenario(name, *, seed=None, containers=1, reset_epoch=None):
     MQTT is not touched here; the outbox rows are published by the normal
     ``publish_uns_outbox`` worker.
 
+    TCL-012: ``seed`` is stored (``ScenarioSeed``) so planning that runs later,
+    e.g. the yard slot draw at InOperation, uses the same seed (D-016).
+
     QA M2: ``reset_epoch`` (``make scenario-reset`` passes the same value to
     terminal-oes) is stored before seeding, so the seeded outbox envelopes carry
     it and OES execution events from any other run are ignored. ``None`` stores
@@ -37,6 +40,7 @@ def reset_scenario(name, *, seed=None, containers=1, reset_epoch=None):
     from django.db import transaction
 
     from ..services.che_components import ensure_component_catalog, ensure_signal_catalog
+    from ..services.yard_planning import set_scenario_seed
     from ..services.reset_epoch import set_epoch, validate_epoch
     from ..services.status_events import SOURCE_SCENARIO, status_event_source
     from .base import wipe_minitos_tables
@@ -47,6 +51,7 @@ def reset_scenario(name, *, seed=None, containers=1, reset_epoch=None):
         reset_epoch = validate_epoch(reset_epoch)
     with status_event_source(SOURCE_SCENARIO), transaction.atomic():
         tables = wipe_minitos_tables()
+        set_scenario_seed(name, seed)
         set_epoch(reset_epoch, scenario=name)
         ensure_signal_catalog(ensure_component_catalog())
         result = scenario.seed(random.Random(seed), containers=containers)
