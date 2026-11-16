@@ -597,16 +597,31 @@ def record_sim_time(step: StepResult, message: UnsMessage) -> None:
 
 
 def annotate_sim_elapsed(results: list[StepResult]) -> None:
-    """Fill sim_elapsed_s: last sim stamp minus the previous step's last stamp.
+    """Fill sim_elapsed_s from envelope stamps for the step's physical work.
 
-    Simulator-driven steps chain (3c → 3d → 4). Steps with no sim-clock events
-    (release, dispatch) are skipped and do not break the chain.
+    Step 3d is measured from this step's first sim stamp (TT ``leg_started``,
+    when the drive begins) to its last stamp. A short gap after the QC pick,
+    while the TT DCMD is still in flight, is not layout work and is not
+    counted (CI run 43977160552: pick at 26.900 s, TT start at 27.500 s,
+    transfer at 56.000 s → drive 28.5 s, not 29.1 s).
+
+    Step 4 is measured from the previous step's last stamp (H1 complete),
+    because the remaining TT drive starts then, often before RTG
+    ``leg_started``. Other simulator steps (3c) use first-to-last, or chain
+    from the previous sim end when they have no earlier start. Steps with no
+    sim-clock events (release, dispatch) are skipped and do not break the
+    chain used by step 4.
     """
     prev_end = None
     for step in results:
         if step.last_sim_at is None:
             continue
-        start = prev_end if prev_end is not None else step.first_sim_at
+        if step.step == "3d" and step.first_sim_at is not None:
+            start = step.first_sim_at
+        elif prev_end is not None:
+            start = prev_end
+        else:
+            start = step.first_sim_at
         if start is not None:
             step.sim_elapsed_s = round((step.last_sim_at - start).total_seconds(), 3)
         prev_end = step.last_sim_at
@@ -1230,7 +1245,7 @@ def render_markdown(results: list[StepResult], notes: list[str], fatal: str = ""
     ]
     for r in results:
         verdict = "PASS" if r.passed else ("SKIP" if r.error.startswith("skipped") else "FAIL")
-        detail = "; ".join([*r.checks, r.error] if r.error else r.checks).replace("|", "\|")
+        detail = "; ".join([*r.checks, r.error] if r.error else r.checks).replace("|", "\\|")
         sim = "" if r.sim_elapsed_s is None else r.sim_elapsed_s
         bound = "" if r.sim_bound_s is None else r.sim_bound_s
         lines.append(

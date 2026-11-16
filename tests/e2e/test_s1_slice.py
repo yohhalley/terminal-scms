@@ -419,7 +419,9 @@ class WorstStepTests(unittest.TestCase):
         self.assertIsNone(a.sim_elapsed_s)
         self.assertIsNone(b.sim_elapsed_s)
         self.assertEqual(c.sim_elapsed_s, 0.0)
-        self.assertEqual(d.sim_elapsed_s, 29.2)
+        # 3d is the TT drive, from TT leg_started (00:00:26) to transfer
+        # (00:00:54.500) = 28.5 s, not from the QC pick 0.7 s earlier.
+        self.assertEqual(d.sim_elapsed_s, 28.5)
         self.assertEqual(four.sim_elapsed_s, 21.8)
 
         line = s1.worst_step_summary([a, b, c, d, four])
@@ -451,10 +453,6 @@ class WorstStepTests(unittest.TestCase):
         md = s1.render_markdown([ok], [])
         self.assertIn("Worst step (wall-clock): 3d H1 2.522 s / limit 5 s; sim time 28.5 s.", md)
         self.assertIn("**Overall: PASS**", md)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class D050BoundsTests(unittest.TestCase):
@@ -515,7 +513,30 @@ class D050BoundsTests(unittest.TestCase):
         self.assertEqual(faster.speed_mps, 8.0)
         self.assertAlmostEqual(faster.bound_3d_s("TT02"), 28.50438562747845 / 2 + 0.2, places=5)
 
+    def test_step_3d_excludes_the_command_start_gap(self):
+        """CI run 43977160552: pick 26.900, TT start 27.500, transfer 56.000.
+
+        Chaining from the QC pick would be 29.1 s and fail the 28.704 s
+        drive bound. The layout bound is the drive, from TT leg_started.
+        """
+        c = s1.StepResult("3c", "QC pick", "simulator", [], passed=True)
+        s1.record_sim_time(c, sim_execution(
+            "container_picked_up", "2026-10-25T00:00:26.900000+00:00",
+        ))
+        d = s1.StepResult("3d", "H1", "simulator", [], passed=True, wall_asserted=False)
+        s1.record_sim_time(d, sim_execution(
+            "leg_started", "2026-10-25T00:00:27.500000+00:00", 12, "TT02",
+        ))
+        s1.record_sim_time(d, sim_execution(
+            "leg_completed", "2026-10-25T00:00:56+00:00", 11, "QC01",
+        ))
+        s1.apply_sim_time_assertions([c, d], self.bounds, tt_name="TT02")
+        self.assertTrue(d.passed, d.error)
+        self.assertAlmostEqual(d.sim_elapsed_s, 28.5, places=3)
+        self.assertLessEqual(d.sim_elapsed_s, d.sim_bound_s)
+
     def test_sim_time_within_bound_passes(self):
+
         c = s1.StepResult("3c", "QC pick", "simulator", [], elapsed_s=0.51, limit_s=5, passed=True)
         s1.record_sim_time(c, sim_execution("container_picked_up", "2026-10-25T00:00:00+00:00"))
         d = s1.StepResult(
@@ -577,3 +598,7 @@ class D050BoundsTests(unittest.TestCase):
             md,
         )
         self.assertIn("Physical steps (D-050, sim time vs layout bound): 3d 28.5 / 28.704 s.", md)
+
+
+if __name__ == "__main__":
+    unittest.main()

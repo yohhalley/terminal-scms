@@ -51,9 +51,12 @@ The exit code is 0 only when every step passes.
   `leg_started` / `container_picked_up` events are published on command receipt;
   the QC hold and TT drive happen in step 3d.
 - **Physical-work steps** (TT drive, crane cycle): 3d and 4. These are asserted in
-  **sim time** (D-050, option (a) of the GD review of #32). The span is the last
-  `occurred_at` of the step minus the previous step's last sim stamp, checked
-  against a bound derived at runtime from:
+  **sim time** (D-050, option (a) of the GD review of #32). The measured span
+  is: for 3d, from this step's first envelope stamp (TT `leg_started`, when
+  the drive begins) to its last stamp; for step 4, from the previous step's
+  last stamp (H1 complete, when the remaining drive begins) to this step's
+  last stamp. A short command-start gap after the QC pick is not counted as
+  drive time. The span is checked against a bound derived at runtime from:
   - TT start points and transfer-lane positions in the `import_v1` seed
     (`apps/minitos/minitos_core/scenarios/import_v1.py`), with interface
     positions at `(index-0.5)/count` along the lane, matching
