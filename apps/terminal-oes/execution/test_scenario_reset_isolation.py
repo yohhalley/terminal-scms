@@ -116,8 +116,9 @@ class StaleMiniTOSMessageAfterResetTests(TestCase):
         self.assertIn(f"reset_epoch seen=none stored={RUN_2}", logs.output[0])
         self.assertFalse(ExecutionOrder.objects.exists())
 
-    def test_ignored_messages_are_logged_at_info_and_counted(self):
-        """TL 2026-11-02: drops are visible (INFO log with type and epochs) and counted."""
+    def test_ignored_messages_are_logged_at_warning_and_counted(self):
+        """TL 2026-11-02: drops are visible (log with type and epochs) and counted.
+        S-1 follow-up on #28: at WARNING, with a re-run hint."""
         before = ignored_count()
         before_released = ignored_count("scms.order.released.v1")
         before_published = ignored_count("scms.site.configuration.published.v1")
@@ -126,7 +127,9 @@ class StaleMiniTOSMessageAfterResetTests(TestCase):
             deliver(**self.stale_released)
             deliver(**self.stale_published)
             deliver(**unstamped["scms.order.released.v1"])
-        self.assertEqual([record.levelname for record in logs.records], ["INFO"] * 3)
+        self.assertEqual([record.levelname for record in logs.records], ["WARNING"] * 3)
+        self.assertIn("re-run make scenario-reset", logs.output[0])
+        self.assertIn("the sender holds no reset epoch", logs.output[2])
         self.assertIn("type=scms.order.released.v1", logs.output[0])
         self.assertIn(f"reset_epoch seen={RUN_1} stored={RUN_2}", logs.output[0])
         self.assertIn("type=scms.site.configuration.published.v1", logs.output[1])

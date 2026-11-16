@@ -1,0 +1,3 @@
+# TCL-007 e2e runner (host side, not in any service image)
+paho-mqtt==2.1.0
+jsonschema==4.23.0

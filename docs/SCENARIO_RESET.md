@@ -9,7 +9,7 @@ states and order, not byte-identical messages).
 
 | What | Make | Without Make |
 | --- | --- | --- |
-| Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`, `RESET_EPOCH=` optional) | see the steps below; pass the same `--reset-epoch` to both services |
+| Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`, `RESET_EPOCH=` optional) | see the steps below; pass the same `--reset-epoch` to both services, **OES first** |
 | Release the discharge order | `make scenario-step STEP=release-discharge [ORDER=id]` | `docker compose exec -T minitos python manage.py scenario_step import_v1 release-discharge` |
 | Dispatch the next step | `make scenario-step STEP=dispatch-next [ORDER=tos-id]` | `docker compose exec -T terminal-oes python manage.py scenario_step import_v1 dispatch-next` |
 | Reset, then start the simulator | `make scenario-reset SIM=1` | `simulation_stop --wait 30` before step 1, `simulation_start` after step 4 (in `terminal-oes`) |
@@ -42,7 +42,9 @@ then runs, in this order:
    projection to become READY (needs the broker, `minitos-outbox` and
    `oes-uns-consumer` to be running). If it times out, check that
    `minitos-outbox` and `oes-uns-consumer` run, then run `make scenario-reset`
-   again. (Before QA M2 a stale higher Site revision from the previous run could
+   again. The timeout message also names the epoch OES holds
+   (`OES reset epoch: <epoch|none>`) and, under a fence, the hint for a reset-epoch
+   mismatch (see below). (Before QA M2 a stale higher Site revision from the previous run could
    make OES skip the new revision 1; with the reset epoch it is ignored.)
 
 ## Stale messages from the previous run (QA M2)
@@ -67,17 +69,26 @@ fence their cross-service messages with it:
   `execution.services.messages.process_message`) compare it with their own
   epoch. A different or missing `reset_epoch` is **ignored** (strict policy):
   no inbox row is written, nothing changes, and the message is acked.
-- Every ignored message is logged at **INFO** (loggers
+- Every ignored message is logged at **WARNING** (loggers
   `minitos_core.services.reset_epoch` and `execution.services.reset_epoch`, both
   sent to the console so drops show in container and CI logs):
-  `Ignored stale message type=<schema> event_id=<id> topic=<topic>: reset_epoch seen=<epoch|none> stored=<epoch> (previous scenario run; ignored_total=<n>).`
+  `Ignored stale message type=<schema> event_id=<id> topic=<topic>: reset_epoch seen=<epoch|none> stored=<epoch> (<hint>; ignored_total=<n>).`
+  A few drops right after a reset are the previous run's leftovers. Drops that
+  keep coming mean the two services hold different epochs: `seen=none` means the
+  sender was reset without `--reset-epoch` (or holds none); re-run
+  `make scenario-reset`. (WARNING since the QA M2 S-1 follow-up; it was INFO.)
 - Each service keeps an in-process counter of ignored messages per message type:
   `services.reset_epoch.ignored_count()` (total) or `ignored_count(<schema>)`;
   `reset_ignored_count()` clears it. It restarts at 0 with the process, and the
   running total is in every log line.
 - With no epoch stored (normal operation, tests, or a reset run by hand without
-  `--reset-epoch`) nothing is stamped and every message is accepted, exactly as
-  before. `scenario_reset` prints `reset epoch none (no stale-message fence)` then.
+  `--reset-epoch`) a service stamps nothing and accepts every message.
+  `scenario_reset` prints `reset epoch none (no stale-message fence)` then. That
+  is "exactly as before" only if **neither** service holds an epoch: resetting
+  one service alone (by hand without `--reset-epoch`, a rebuilt DB volume, or
+  `scenario_export_events` against a live DB) clears its own epoch but keeps the
+  other service fenced, so the other side drops every message it sends (each
+  one logged at WARNING with `seen=none`) until a full `make scenario-reset`.
 - Sparkplug traffic between OES and Godot is not fenced: command and simulation
   session ids are uuid4, so results for the previous run's commands are already
   rejected.
@@ -87,7 +98,12 @@ fence their cross-service messages with it:
 The field is an optional, additive v1 envelope field (see
 `contracts/schemas/scms.execution.event.v1.schema.json`); the version is unchanged.
 
-Without Make, generate one epoch and pass the same value to both services:
+Without Make, generate one epoch and pass the same value to both services,
+**OES first, then MiniTOS; the order matters**. A message with a *newer* epoch
+is dropped just like an older one, and because it is acked it is lost: if
+MiniTOS is reset first, its new `site.created` and `configuration.published`
+reach an OES that still holds the old epoch, are dropped for good, and
+`scenario_wait_ready` times out.
 
 ```bash
 EPOCH=$(date -u +%Y%m%dT%H%M%SZ)-manual
@@ -109,7 +125,7 @@ is refused before any table is wiped.
 
 Tests: `minitos_core/test_scenario_reset_isolation.py` (P5) and
 `execution/test_scenario_reset_isolation.py` (O2) replay the previous run's
-message after a reset and check the INFO log and the ignored counter;
+message after a reset and check the WARNING log and the ignored counter;
 `minitos_core/test_scenario_import_v1.py` (`ScenarioResetMakeTargetTests`) runs
 the real target against a stub `COMPOSE` and checks the failure exit and message;
 the contract tests check the stamped envelope against the

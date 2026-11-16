@@ -128,14 +128,18 @@ class StaleExecutionEventAfterResetTests(TestCase):
         self.assertEqual(new_run_state(), self.before)
         self.assertIn('no reset_epoch', stale_reason(payload))
 
-    def test_ignored_message_is_logged_at_info_and_counted(self):
-        """TL 2026-11-02: drops are visible (INFO log with type and epochs) and counted."""
+    def test_ignored_message_is_logged_at_warning_and_counted(self):
+        """TL 2026-11-02: drops are visible (log with type and epochs) and counted.
+        S-1 follow-up on #28: at WARNING, with a re-run hint."""
         schema = 'scms.execution.event.v1'
         before, before_type = ignored_count(), ignored_count(schema)
         with self.assertLogs(LOGGER, 'INFO') as logs:
             deliver(self.stale_topic, self.stale)
             deliver(*oes_leg_dispatched(None))
-        self.assertEqual([record.levelname for record in logs.records], ['INFO', 'INFO'])
+        self.assertEqual([record.levelname for record in logs.records], ['WARNING', 'WARNING'])
+        self.assertIn('re-run make scenario-reset', logs.output[0])
+        # Missing epoch under a fence: the sender holds none (one-sided reset).
+        self.assertIn('the sender holds no reset epoch', logs.output[1])
         self.assertIn(f'type={schema}', logs.output[0])
         self.assertIn(f'reset_epoch seen={RUN_1} stored={RUN_2}', logs.output[0])
         self.assertIn(f'reset_epoch seen=none stored={RUN_2}', logs.output[1])
@@ -146,6 +150,17 @@ class StaleExecutionEventAfterResetTests(TestCase):
         # Accepted messages are not counted.
         deliver(*oes_leg_dispatched(RUN_2))
         self.assertEqual(ignored_count(), before + 2)
+
+    def test_stale_malformed_event_is_ignored_not_rejected(self):
+        """BE review N-3 on #28: MiniTOS fences before field validation, like OES."""
+        before = ignored_count()
+        with self.assertLogs(LOGGER, 'WARNING'):
+            result = deliver('scms/v2/x/y/oes/orders/1/execution', {
+                'schema': 'scms.execution.event.v1', 'reset_epoch': RUN_1, 'data': {},
+            })
+        self.assertIsNone(result)
+        self.assertEqual(ignored_count(), before + 1)
+        self.assertEqual(new_run_state(), self.before)
 
     def test_the_same_event_from_the_current_run_is_applied(self):
         """Control: the fence only drops other runs; the new run keeps working."""
