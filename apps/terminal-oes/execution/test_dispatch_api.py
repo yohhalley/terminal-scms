@@ -24,6 +24,7 @@ from .models import (
     OutboxEvent,
     SimulationSession,
 )
+from .services.dispatch import dispatch_next_operation
 from .services.simulations import stop_simulation
 from .services.sparkplug_runtime import process_sparkplug_message
 from .sparkplug import encode_payload
@@ -605,3 +606,76 @@ class FailedResultContainerMismatchTests(DispatchNextApiTestBase):
             self.order.operations.get(sequence=1).status, ExecutionOperation.DISPATCHED,
         )
         self.assertFalse(OutboxEvent.objects.filter(payload__data__event="leg_failed").exists())
+
+
+class CancelAfterTtPickupTests(DispatchNextApiTestBase):
+    """D-049: once the box is on the TT, an operator cancel is refused (409)."""
+
+    def operator_cancel(self, command):
+        with self.settings(OES_API_TOKEN=TOKEN):
+            return APIClient().post(
+                reverse("equipment-command-event", args=[command.command_id]),
+                {"event": "cancelled", "reason": "operator_abort"},
+                format="json", HTTP_X_OES_TOKEN=TOKEN,
+            )
+
+    def test_cancel_after_the_qc_to_tt_transfer_is_refused(self):
+        qc_cmd, _tt, tt_cmd = self.run_h1()
+        self.transfer_h1(qc_cmd, tt_cmd)
+        dcmds_before = self.dcmd_count()
+
+        response = self.operator_cancel(tt_cmd)
+
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.data["code"], "cancel_refused_in_transit")
+        self.assertIn("D-049", response.data["detail"])
+        tt_cmd.refresh_from_db()
+        self.order.refresh_from_db()
+        self.assertNotEqual(tt_cmd.status, EquipmentCommand.CANCELLED)
+        self.assertNotEqual(self.order.status, ExecutionOrder.CANCELLED)
+        self.assertEqual(self.dcmd_count(), dcmds_before)  # no cancel DCMD to Godot
+        self.assertFalse(EquipmentCommand.objects.filter(command_type="cancel").exists())
+        self.assertNotIn("order_cancelled", self.business_events())
+
+    def test_order_still_completes_after_a_refused_cancel(self):
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        self.transfer_h1(qc_cmd, tt_cmd)
+        self.assertEqual(self.operator_cancel(tt_cmd).status_code, 409)
+        self.result(tt_cmd, "arrived_at_destination", 80_000)
+        dispatch_next_operation(self.order.pk)
+        h2_cmd = self.command_for(tt, "assign_handoff")
+        rtg_cmd = self.command_for(self.rtg)
+        self.result(rtg_cmd, "acknowledged", 80_000)
+        self.result(rtg_cmd, "started", 80_000)
+        self.result(h2_cmd, "handoff_completed", 95_000)
+        self.result(rtg_cmd, "handoff_completed", 95_000)
+        self.result(tt_cmd, "completed", 95_000)
+        # The RTG leg is also after the pickup: still refused.
+        self.assertEqual(self.operator_cancel(rtg_cmd).status_code, 409)
+        self.result(rtg_cmd, "container_dropped", 130_000, **{"Command/Result/PositionId": 112})
+        self.result(rtg_cmd, "completed", 130_000)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, ExecutionOrder.COMPLETE)
+        self.assertNotIn("order_cancelled", self.business_events())
+
+    def test_cancel_before_the_transfer_is_still_applied(self):
+        """Before the TT pickup the cancel goes through (MiniTOS frees the slot, D-047)."""
+        _qc_cmd, _tt, tt_cmd = self.run_h1()
+        response = self.operator_cancel(tt_cmd)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, ExecutionOrder.CANCELLED)
+        self.assertIn("order_cancelled", self.business_events())
+
+    def test_failed_after_the_transfer_is_not_refused(self):
+        """TL decision: a failure after the pickup still ends the leg (leg_failed)."""
+        qc_cmd, _tt, tt_cmd = self.run_h1()
+        self.transfer_h1(qc_cmd, tt_cmd)
+        with self.settings(OES_API_TOKEN=TOKEN):
+            response = APIClient().post(
+                reverse("equipment-command-event", args=[tt_cmd.command_id]),
+                {"event": "failed", "reason": "operator_abort"},
+                format="json", HTTP_X_OES_TOKEN=TOKEN,
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertIn("leg_failed", self.business_events())

@@ -34,6 +34,7 @@ from .serializers import (
     SiteProjectionSerializer,
 )
 from .services.dispatch import (
+    CANCEL_REFUSED_IN_TRANSIT,
     DISPATCH_EQUIPMENT_INVALID,
     DISPATCH_IN_FLIGHT_CODES,
     DISPATCH_INVALID_REQUEST,
@@ -400,5 +401,11 @@ class EquipmentCommandViewSet(
                 notify_che=True,
             )
         except DjangoValidationError as exc:
+            if getattr(exc, "code", None) == CANCEL_REFUSED_IN_TRANSIT:
+                # D-049: same shape as the dispatch refusals (code + detail, 409).
+                return Response(
+                    {"code": CANCEL_REFUSED_IN_TRANSIT, "detail": "; ".join(exc.messages)},
+                    status=status.HTTP_409_CONFLICT,
+                )
             raise ValidationError(_service_error(exc)) from exc
         return Response(self.get_serializer(command).data)
