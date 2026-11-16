@@ -166,12 +166,12 @@ def free_yard_slots(grid):
 
 
 def _vessel_slot(visit, layout, qc_interface, qc_position, container_visit):
-    """The container's vessel slot: one already in the layout for it (seeded or
-    from a future stowage import), else a placeholder at the crane.
+    """The container's vessel slot.
 
-    PLACEHOLDER until a stowage import exists (post-MVP): there is no real
-    bay/row/tier stow data yet, so the fallback slot sits at the QC lane
-    position with ``stow: None``.
+    Looks up the real BBBRRTT vessel slot already in the layout for this
+    container (``logical_address.container_visit_id``), as seeded by
+    import_v1 or a future stowage import. Only if none exists does it
+    fall back to a placeholder at the QC lane with ``stow: None``.
     """
     slot = OperationalPosition.objects.filter(
         layout_version=layout, position_kind=OperationalPosition.VESSEL_SLOT,

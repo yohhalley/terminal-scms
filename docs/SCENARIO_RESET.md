@@ -186,7 +186,7 @@ already drained the queue.
 What the canonical dump masks (QA M1): an explicit allow-list, `VOLATILE_FIELDS`
 and `VOLATILE_JSON_KEYS` in `minitos_core/scenarios/base.py` and
 `execution/scenarios.py`. Every other value is compared literally, including the
-seeded business times `CarrierVisit.eta`/`ata`/`etd` and `Order.etc` (before M1
+seeded business times `CarrierVisit.eta`/`ata`/`etd` (before M1
 every datetime and every ISO-looking string was blanked, so moving them by three
 days went unnoticed). A masked value still shows whether it is set: `null` stays
 `null`, anything else becomes `"<volatile>"`. Only the outbox delivery
@@ -202,7 +202,7 @@ Masked JSON keys (any depth, both services): `event_id`, `occurred_at`,
 wall-clock copies `state_updated_at`, `created_at`, `updated_at`, `released_at`
 (OES also `checksum`). Tests run a reset with the wall clock moved three days
 ahead and expect the same dump, so a new wall-clock field fails the test until it
-is added to the list with a reason; shifting `eta`, `ata`, `etd` or `etc` by three
+is added to the list with a reason; shifting `eta`, `ata` or `etd` by three
 days must change the checksum.
 
 ## Event fixture for terminal-oes
