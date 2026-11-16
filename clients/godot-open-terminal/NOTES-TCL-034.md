@@ -27,8 +27,9 @@ The `SIMULATOR_{QC,RTG}_WAIT_MIN_S/_MAX_S` and `..._HOLD_WAIT_MIN_S/_MAX_S` keys
 still apply and win over the profile. `SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED` and
 `Sim/Timing/RtgNoShowTimeoutEnabled` are retired: the RTG side is always on.
 
-The names are **pending BE confirmation**. The NBIRTH `ContractVersion` stays
-`tcl-002.2` until BE fixes the revision (rev 9.4 assumed).
+BE (Archer) confirmed these names on 15 Nov 2026; OES will persist those
+five on SimulationSession. The NBIRTH `ContractVersion` stays `tcl-002.2`
+until the contract revision is bumped.
 
 ## Profiles (values pending E3/Q22)
 
@@ -49,12 +50,14 @@ The names are **pending BE confirmation**. The NBIRTH `ContractVersion` stays
 |---|---|---|---|---|
 | W1 | QC | TT | TtNoShow | QC leg |
 | W2 | TT at the QC lane | QC | QcNoShow | TT leg |
-| W3 | TT at the block lane (H2) | RTG | RtgNoShow | TT `assign_handoff` command (assumption) |
+| W3 | TT at the block lane (H2) | RTG | RtgNoShow | TT `assign_handoff` command |
 | W4 | RTG | TT | TtNoShow (always on) | RTG leg |
 
 Each fires once per hand-off as `handoff_timed_out` (`SIMULATOR_FAILURE`), with
 `handoff_role` and the counterpart. After that, the waiting CHE no longer
-completes that HandoffId.
+completes that HandoffId. W3 is reported on the TT `assign_handoff` command
+id (confirmed by Archer, 15 Nov 2026). A later leg stall's `failed` /
+`SIMULATOR_FAILURE` is reported on the live leg command id, not the assign id.
 
 Leg stall clock (TCL-011 rev 2, B1): it measures unexplained silence only. It
 runs only while the leg is in a motion or work state (driving, gantrying,
@@ -89,9 +92,8 @@ that break the margin are logged as warnings and are not rejected.
 
 * BE: OES accepts `handoff_timed_out` from the TT (W2/W3) and the RTG (W4), and
   handles `failed` + `SIMULATOR_FAILURE` from the stall clock (§6.3). Unconfirmed.
-* BE: OES needs to persist the new NBIRTH fields (`Sim/Timing/Profile`,
-  `QcNoShowTimeoutS`, `RtgNoShowTimeoutS`, `LegStallTimeoutS`). Unconfirmed.
-* BE: the W3 report is sent on the TT `assign_handoff` command id. Unconfirmed.
+* BE: OES will persist the five confirmed NBIRTH fields on SimulationSession
+  (Archer, 15 Nov 2026); the follow-up still has to land.
 * Same-tick giver-first rule (TCL-011 rev 2, S1): if the giver and receiver
   no-show clocks expire in the same tick, Godot publishes only the giver's
   `handoff_timed_out` and closes the hand-off locally. The receiver publishes
