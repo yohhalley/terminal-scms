@@ -2101,8 +2101,11 @@ func _test_no_show_switch_parsing():
 	_free_simulator(simulator)
 
 
-## D-053 off: W1 to W4 run for 10 x their time-out with no handoff_timed_out;
-## the waits are still reported and the stall clock stays paused (no backstop).
+## D-053 off: no handoff_timed_out ever, the waits are still reported, and
+## D-060: the leg stall clock is the backstop in hand-off waits. After
+## LegStallTimeoutS (here 60 s) without progress one waiter's leg ends with
+## failed / SIMULATOR_FAILURE; that closes the hand-off, so its counterpart
+## does not fail too and waits for OES to cancel it.
 func _test_no_show_switch_off_all_waits():
 	for harness in ["h1", "h2"]:
 		var simulator = _waiting_h1_simulator() if harness == "h1" else _waiting_h2_simulator()
@@ -2115,9 +2118,32 @@ func _test_no_show_switch_off_all_waits():
 		var receiver = "TT01" if harness == "h1" else "RTG01"
 		_assert(_timeout_results(results).is_empty(), "D-053 off (%s): no handoff_timed_out after 10 x the time-out" % harness)
 		_assert(_events_of(results, giver).has("waiting_for_handoff") and _events_of(results, receiver).has("waiting_for_handoff"), "D-053 off (%s): the waits are still reported" % harness)
-		_assert(not _events_of(results, giver).has("failed") and not _events_of(results, receiver).has("failed"), "D-053 off (%s): the stall clock is not a backstop in waits" % harness)
-		_assert(simulator._active_commands.size() == 2, "D-053 off (%s): both waiters still hold their legs" % harness)
+		var failed: Array = []
+		for item in results:
+			if str(item.m["Command/Result/Event"]) == "failed":
+				failed.append(item)
+		_assert(failed.size() == 1, "D-060 (%s): the stall backstop ends exactly one waiting leg (%s)" % [harness, failed.size()])
+		if failed.size() == 1:
+			var item = failed[0]
+			_assert(str(item.m.get("Command/Result/Reason", "")) == "SIMULATOR_FAILURE", "D-060 (%s): failed with SIMULATOR_FAILURE" % harness)
+			_assert(str(item.m.get("Command/Result/Detail", "")).ends_with("within 60 s"), "D-060 (%s): detail names the stall time-out (%s)" % [harness, item.m.get("Command/Result/Detail", "")])
+			var last_ms := -1
+			for other in results:
+				if other == item:
+					break
+				if other.device == item.device:
+					last_ms = int(other.m["Sim/TimeMs"])
+			var gap_ms = int(item.m["Sim/TimeMs"]) - last_ms
+			_assert(gap_ms >= 60000 and gap_ms <= 60100, "D-060 (%s): fails 60 s (+ at most one 100 ms step) after the leg's last result (%s)" % [harness, gap_ms])
+		_assert(simulator._active_commands.size() == 1, "D-060 (%s): the counterpart keeps its leg until OES cancels it" % harness)
 		_free_simulator(simulator)
+	# Switch on: the stall clock stays paused in waits (the no-show clock owns them).
+	var on = _waiting_h1_simulator("600", "600")
+	_assert(on.configure_leg_stall_timeout("60"), "Short stall clock (on)")
+	var on_start = int(on._clock.now_ms)
+	_run_until(on, func(): return int(on._clock.now_ms) >= on_start + 5 * 60000, 4000)
+	_assert(not _events_of(_results(on), "QC01").has("failed") and not _events_of(_results(on), "TT01").has("failed"), "D-060: switch on, no stall in waits")
+	_free_simulator(on)
 
 
 ## D-053: every waiting period starts its own clock. W2 ends at H1; the

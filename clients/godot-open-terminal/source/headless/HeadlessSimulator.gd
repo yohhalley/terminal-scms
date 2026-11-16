@@ -59,6 +59,8 @@ const TT_AT_DESTINATION_WAITING := "at_destination_waiting"
 ## D-053 (TCL-034e): one global on/off switch for every no-show clock (W1 to
 ## W4), Sim/Timing/NoShowTimeoutEnabled / SIMULATOR_NO_SHOW_TIMEOUT_ENABLED,
 ## default on. It gates only the no-show clocks, never the leg stall clock.
+## D-060: with the switch off the stall clock also runs in open hand-off waits,
+## so LegStallTimeoutS (default 600 s) still ends a wait that never ends.
 ## The old W4-only SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED stays retired.
 const DEFAULT_TT_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_TT_NO_SHOW_TIMEOUT_S
 const DEFAULT_QC_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_QC_NO_SHOW_TIMEOUT_S
@@ -76,7 +78,8 @@ const RETIRED_ENV_KEYS := ["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", "SIM_RTG_NO_
 ## manual-dispatch gap before dispatch-next #2), and finished legs waiting for
 ## the next DCMD. "idle" also pauses a crane leg that never leaves idle after
 ## start. The clock runs only in motion/work states (driving, gantrying,
-## holding, picking, dropping).
+## holding, picking, dropping). D-060: with the no-show switch off, (i) does
+## not pause it (_stall_clock_paused).
 const STALL_PAUSED_STATES := [TT_AT_SOURCE_WAITING, TT_AT_DESTINATION_WAITING, "waiting_for_tt", "done", "idle"]
 ## Sim-time command TTL (seconds) applied when a DCMD carries no ExpiresAtMs.
 const DEFAULT_COMMAND_TTL_S := 600
@@ -1455,7 +1458,23 @@ func _stall_state(command: Dictionary) -> String:
 
 
 func _stall_clock_paused(command: Dictionary) -> bool:
+	if not _no_show_timeout_enabled and _in_open_handoff_wait(command):
+		# D-060: with the no-show switch off the leg stall clock is the backstop
+		# and keeps running in hand-off waits (W1 to W4), so a wait that never
+		# ends still ends the job after LegStallTimeoutS (default 600 s).
+		return false
 	return STALL_PAUSED_STATES.has(_stall_state(command))
+
+
+## D-060: the leg waits at a hand-off that is still open (W1/W4: crane in
+## waiting_for_tt; W2/W3: TT at the lane with its H1/H2 wait started). Waits on
+## OES (manual-dispatch gap, finished legs, after a close) do not count.
+func _in_open_handoff_wait(command: Dictionary) -> bool:
+	if str(command.get("handoff_id", "")).is_empty() or _command_handoff_closed(command):
+		return false
+	if _is_crane_command(command):
+		return str(command.get("work_state", "")) == QcDischarge.WAITING_FOR_TT
+	return command.has("handoff_wait_since_ms") and _tt_no_show_timeout_s_for(command) > 0
 
 
 ## TCL-011 §8(d), rev 2 (B1): per-leg stall clock on sim time. It measures
