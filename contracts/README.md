@@ -18,6 +18,14 @@ not carry the key. Producer check: `execution/test_scenario_reset_isolation.py`
 `minitos_core/test_contract_execution_events.py` (goldens with the current epoch
 apply, goldens without it are ignored under a fence).
 
+The three MiniTOS -> OES envelopes (`scms.site.created.v1`,
+`scms.site.configuration.published.v1`, `scms.order.released.v1`) have no
+schema in this folder yet, but carry the same optional top-level `reset_epoch`
+(same pattern `^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`) under the same rule. Any new
+MiniTOS <-> OES envelope that reaches the other service's consumer must be
+stamped (`services.reset_epoch.stamp()`), or it is dropped after every fenced
+`make scenario-reset` (BE review N-4/N-6 on #28).
+
 ## `schemas/scms.visit.status_changed.v1.schema.json`
 TCL-003b (S2 slice of D-026, timestamps per D-024): the MiniTOS -> UNS visit
 milestone event. One event per saved status change of a carrier visit (vessel,

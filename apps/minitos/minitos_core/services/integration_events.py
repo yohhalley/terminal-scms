@@ -27,6 +27,13 @@ def _decode(payload):
 
 def apply_execution_message(topic, raw_payload):
     payload = _decode(raw_payload)
+    # QA M2: after make scenario-reset, ids restart at 1, so an event from the
+    # previous run would match the new run's order. Ignore it before it touches
+    # the inbox or the order (logged; returns None). Checked before schema and
+    # field validation, as OES does (BE review N-3 on #28), so a stale malformed
+    # event is counted as ignored rather than raising ValidationError.
+    if ignore_if_stale(topic, payload):
+        return None
     if payload.get('schema') != 'scms.execution.event.v1':
         raise ValidationError('Unsupported execution-event schema.')
     try:
@@ -39,12 +46,6 @@ def apply_execution_message(topic, raw_payload):
         raise ValidationError(
             'Execution event requires event_id, terminal.id, order_id, and event.'
         ) from exc
-
-    # QA M2: after make scenario-reset, ids restart at 1, so an event from the
-    # previous run would match the new run's order. Ignore it before it touches
-    # the inbox or the order (logged; returns None).
-    if ignore_if_stale(topic, payload):
-        return None
 
     try:
         with transaction.atomic():

@@ -85,7 +85,7 @@ General pass rules for the run:
 | `make test-minitos` | `manage.py test --settings=minitos_site.settings_test` | custody, D-015, release payload, visit transition (#21) |
 | `make test-oes` | `manage.py test` | dispatch, hand-offs, D-014/016/017, contracts |
 | `make test-runner` | `unittest` for `apps/simulator-runner` | session claim/runner |
-| `make test-godot` | `test_headless_sim.gd`, `test_terminal_integration.gd`, `test_che_rails.gd`, `test_cancel_regression.gd` (`requires-TCL-014a/test_acceptance_d012_d013.gd` is not wired in) | QC/TT state machine, seed replay |
+| `make test-godot` | `test_headless_sim.gd`, `test_terminal_integration.gd`, `test_che_rails.gd`, `test_cancel_regression.gd`, `requires-TCL-014a/test_acceptance_d012_d013.gd` | QC/TT state machine, seed replay, D-012/D-013 |
 | `make test` | all of the above | — |
 
 For reference, QA ran these on `main` @ `83949ef` on 27 Oct, outside Docker (SQLite, Python 3.13, Godot 4.2.1 headless); that is no substitute for compose:

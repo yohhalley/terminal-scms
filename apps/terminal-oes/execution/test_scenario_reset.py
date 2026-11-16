@@ -313,6 +313,25 @@ class ScenarioWaitReadyTests(TestCase):
         with self.assertRaises(CommandError):
             call_command("scenario_wait_ready", "--timeout", "0", stdout=io.StringIO())
 
+    def test_timeout_names_no_epoch_when_unfenced(self):
+        with self.assertRaisesMessage(TimeoutError, "OES reset epoch: none"):
+            wait_for_ready_site("test-terminal", timeout=0, sleep=lambda _: None)
+
+    def test_timeout_names_the_stored_epoch_and_the_mismatch_hint(self):
+        """QA M2 follow-up (BE review S-1 on #28): a fence mismatch shows up
+        only as this timeout, so it must point at the epoch, not just the
+        consumer."""
+        epoch = "20261102T090000Z-0000bbbb"
+        reset_execution_tables(reset_epoch=epoch, scenario="import_v1")
+        with self.assertRaises(CommandError) as caught:
+            call_command("scenario_wait_ready", "--timeout", "0", stdout=io.StringIO())
+        message = str(caught.exception)
+        self.assertIn("OES consumer", message)
+        self.assertIn(f"OES reset epoch: {epoch}", message)
+        self.assertIn("seen=none", message)
+        self.assertIn(f"--reset-epoch {epoch}", message)
+        self.assertIn("re-run make scenario-reset", message)
+
 
 class ScenarioDispatchStepTests(TestCase):
     def setUp(self):
