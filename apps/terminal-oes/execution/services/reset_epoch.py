@@ -9,7 +9,12 @@ copy and its own table; nothing is shared across databases). After
 - Epoch stored: outgoing ``scms.execution.event.v1`` envelopes carry it as the
   top-level ``reset_epoch`` key; an incoming MiniTOS envelope is accepted only
   if its ``reset_epoch`` equals it. A different or missing value is ignored
-  (logged, no inbox row, no state change).
+  (logged at WARNING, counted, no inbox row, no state change).
+
+Rule for new publishers (BE review N-6 on #28): any new MiniTOS <-> OES
+envelope that reaches the other service's consumer (MiniTOS
+``apply_execution_message``, OES ``process_message``) must call ``stamp()``,
+or it is dropped after every fenced ``make scenario-reset``.
 
 Sparkplug traffic from Godot is not fenced here: command and session ids are
 uuid4, so results for the previous run's commands are already rejected as
@@ -97,10 +102,14 @@ def reset_ignored_count():
 
 
 def ignore_if_stale(topic, payload):
-    """Log (INFO), count and return True when ``payload`` must be ignored (M2).
+    """Log (WARNING), count and return True when ``payload`` must be ignored (M2).
 
     Strict policy (Tech Lead, 2026-11-02): with an epoch stored, a different or
-    missing ``reset_epoch`` is ignored.
+    missing ``reset_epoch`` is ignored. QA M2 follow-up (BE review S-1 on #28):
+    logged at WARNING, not INFO, so a fence mismatch between the services (one
+    reset without the same ``--reset-epoch``) is visible instead of silent; a
+    missing epoch adds a hint, because under a fence it can only come from a
+    sender that holds no epoch (or a pre-fence leftover).
     """
     if not stale_reason(payload):
         return False
@@ -108,10 +117,20 @@ def ignore_if_stale(topic, payload):
     with _ignored_lock:
         _ignored[schema] += 1
         total = sum(_ignored.values())
-    logger.info(
+    seen = payload.get(ENVELOPE_KEY)
+    if seen in (None, ""):
+        hint = (
+            "the sender holds no reset epoch: if this repeats, one service was reset without "
+            "the same --reset-epoch; re-run make scenario-reset"
+        )
+    else:
+        hint = (
+            "previous scenario run, or the services were reset with different epochs; "
+            "if this repeats, re-run make scenario-reset"
+        )
+    logger.warning(
         "Ignored stale message type=%s event_id=%s topic=%s: reset_epoch seen=%s stored=%s "
-        "(previous scenario run; ignored_total=%d).",
-        schema, payload.get("event_id"), topic,
-        payload.get(ENVELOPE_KEY) or "none", current_epoch(), total,
+        "(%s; ignored_total=%d).",
+        schema, payload.get("event_id"), topic, seen or "none", current_epoch(), hint, total,
     )
     return True

@@ -9,7 +9,7 @@ states and order, not byte-identical messages).
 
 | What | Make | Without Make |
 | --- | --- | --- |
-| Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`, `RESET_EPOCH=` optional) | see the steps below; pass the same `--reset-epoch` to both services |
+| Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`, `RESET_EPOCH=` optional) | see the steps below; pass the same `--reset-epoch` to both services, **OES first** |
 | Release the discharge order | `make scenario-step STEP=release-discharge [ORDER=id]` | `docker compose exec -T minitos python manage.py scenario_step import_v1 release-discharge` |
 | Dispatch the next step | `make scenario-step STEP=dispatch-next [ORDER=tos-id]` | `docker compose exec -T terminal-oes python manage.py scenario_step import_v1 dispatch-next` |
 | Reset, then start the simulator | `make scenario-reset SIM=1` | `simulation_stop --wait 30` before step 1, `simulation_start` after step 4 (in `terminal-oes`) |
@@ -42,7 +42,9 @@ then runs, in this order:
    projection to become READY (needs the broker, `minitos-outbox` and
    `oes-uns-consumer` to be running). If it times out, check that
    `minitos-outbox` and `oes-uns-consumer` run, then run `make scenario-reset`
-   again. (Before QA M2 a stale higher Site revision from the previous run could
+   again. The timeout message also names the epoch OES holds
+   (`OES reset epoch: <epoch|none>`) and, under a fence, the hint for a reset-epoch
+   mismatch (see below). (Before QA M2 a stale higher Site revision from the previous run could
    make OES skip the new revision 1; with the reset epoch it is ignored.)
 
 ## Stale messages from the previous run (QA M2)
@@ -67,17 +69,26 @@ fence their cross-service messages with it:
   `execution.services.messages.process_message`) compare it with their own
   epoch. A different or missing `reset_epoch` is **ignored** (strict policy):
   no inbox row is written, nothing changes, and the message is acked.
-- Every ignored message is logged at **INFO** (loggers
+- Every ignored message is logged at **WARNING** (loggers
   `minitos_core.services.reset_epoch` and `execution.services.reset_epoch`, both
   sent to the console so drops show in container and CI logs):
-  `Ignored stale message type=<schema> event_id=<id> topic=<topic>: reset_epoch seen=<epoch|none> stored=<epoch> (previous scenario run; ignored_total=<n>).`
+  `Ignored stale message type=<schema> event_id=<id> topic=<topic>: reset_epoch seen=<epoch|none> stored=<epoch> (<hint>; ignored_total=<n>).`
+  A few drops right after a reset are the previous run's leftovers. Drops that
+  keep coming mean the two services hold different epochs: `seen=none` means the
+  sender was reset without `--reset-epoch` (or holds none); re-run
+  `make scenario-reset`. (WARNING since the QA M2 S-1 follow-up; it was INFO.)
 - Each service keeps an in-process counter of ignored messages per message type:
   `services.reset_epoch.ignored_count()` (total) or `ignored_count(<schema>)`;
   `reset_ignored_count()` clears it. It restarts at 0 with the process, and the
   running total is in every log line.
 - With no epoch stored (normal operation, tests, or a reset run by hand without
-  `--reset-epoch`) nothing is stamped and every message is accepted, exactly as
-  before. `scenario_reset` prints `reset epoch none (no stale-message fence)` then.
+  `--reset-epoch`) a service stamps nothing and accepts every message.
+  `scenario_reset` prints `reset epoch none (no stale-message fence)` then. That
+  is "exactly as before" only if **neither** service holds an epoch: resetting
+  one service alone (by hand without `--reset-epoch`, a rebuilt DB volume, or
+  `scenario_export_events` against a live DB) clears its own epoch but keeps the
+  other service fenced, so the other side drops every message it sends (each
+  one logged at WARNING with `seen=none`) until a full `make scenario-reset`.
 - Sparkplug traffic between OES and Godot is not fenced: command and simulation
   session ids are uuid4, so results for the previous run's commands are already
   rejected.
@@ -87,7 +98,12 @@ fence their cross-service messages with it:
 The field is an optional, additive v1 envelope field (see
 `contracts/schemas/scms.execution.event.v1.schema.json`); the version is unchanged.
 
-Without Make, generate one epoch and pass the same value to both services:
+Without Make, generate one epoch and pass the same value to both services,
+**OES first, then MiniTOS; the order matters**. A message with a *newer* epoch
+is dropped just like an older one, and because it is acked it is lost: if
+MiniTOS is reset first, its new `site.created` and `configuration.published`
+reach an OES that still holds the old epoch, are dropped for good, and
+`scenario_wait_ready` times out.
 
 ```bash
 EPOCH=$(date -u +%Y%m%dT%H%M%SZ)-manual
@@ -109,7 +125,7 @@ is refused before any table is wiped.
 
 Tests: `minitos_core/test_scenario_reset_isolation.py` (P5) and
 `execution/test_scenario_reset_isolation.py` (O2) replay the previous run's
-message after a reset and check the INFO log and the ignored counter;
+message after a reset and check the WARNING log and the ignored counter;
 `minitos_core/test_scenario_import_v1.py` (`ScenarioResetMakeTargetTests`) runs
 the real target against a stub `COMPOSE` and checks the failure exit and message;
 the contract tests check the stamped envelope against the
@@ -164,6 +180,24 @@ ETA/ATA, order ETC) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
 1792886400000, 2026-10-25 00:00 UTC, so the vessel's ATA is sim time 0. A plain
 `make up` recreates `terminal-oes` with `.env`'s `SIMULATOR_SEED` (default 1);
 run `make scenario-reset SEED=n` again afterwards to keep both seeds equal.
+
+Yard planning seed (TCL-012, #10): the reset also stores `SEED` in MiniTOS
+(`ScenarioSeed`, one row, wiped by the next reset). When the visit later goes
+InOperation (TCL-010: admin panel, API, Django admin or
+`make scenario-step STEP=visit-in-operation`), each new discharge order gets a
+random free BLOCK01 slot drawn from
+`random.Random("TCL-012:<SEED>:<visit id>")`, so the same `SEED` gives the same
+slots after a reset. "Free" means no container (`container_visit` empty,
+`is_occupied` false), not `is_reserved`, and not the destination of an open
+order (not complete, failed or cancelled) or of one of its legs, at any tier up
+to `StorageGrid.max_tier` (import_v1 BLOCK01 is 3). Planning fills ground
+(tier 1) first, then stacks on tier 2 and up; a higher tier is only chosen when
+every lower tier of the same pile is already held, so no floating containers
+are planned (Yael, 5 Nov 2026). A fully stacked BLOCK01 refuses InOperation with
+`discharge_no_free_slot`; nothing spills into another block. The QA M2 reset
+epoch is not part of the seed (it is new on every reset). Until TCL-010b the
+seed pre-creates the order, with a slot from the scenario RNG above, and
+InOperation adopts it.
 Event ids, wall-clock timestamps and the snapshot checksum (it embeds
 `generated_at`) still differ per run; the canonical dump masks exactly those.
 Outbox delivery bookkeeping (`attempts`, `last_error`, `published_at`) is also
