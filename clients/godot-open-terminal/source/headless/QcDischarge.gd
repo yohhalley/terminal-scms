@@ -16,7 +16,8 @@ extends RefCounted
 ## - Deposit on the TT happens at max(hold wait end, TT ready); if the hold wait
 ##   ends first, the QC enters waiting_for_tt until the TT is ready.
 ## - D-013 / T-007 no-show: after `tt_no_show_timeout_ms` of sim time in
-##   waiting_for_tt the QC publishes handoff_timed_out once and keeps the
+##   waiting_for_tt the QC publishes handoff_timed_out (in the simulator, again
+##   every period while it keeps waiting, D-059) and keeps the
 ##   container. The HandoffId is then no longer valid here (a late TT gets no
 ##   transfer). OES cancels both legs and cancel() clears the QC to idle.
 

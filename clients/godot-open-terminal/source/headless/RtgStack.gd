@@ -29,7 +29,8 @@ extends RefCounted
 ##   slot (or the dummy slot when OES sent none): container_dropped
 ##   (depositing_to_stack, slot echoed) + completed (idle).
 ## - D-013 analogue: after `tt_no_show_timeout_ms` of sim time in
-##   waiting_for_tt the RTG publishes handoff_timed_out once and the HandoffId
+##   waiting_for_tt the RTG publishes handoff_timed_out (the simulator repeats it
+##   every period while the RTG keeps waiting, D-059) and the HandoffId
 ##   is no longer valid here (a late TT gets no transfer). OES cancels.
 
 const IDLE := "idle"

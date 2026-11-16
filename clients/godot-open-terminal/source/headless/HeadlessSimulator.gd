@@ -88,7 +88,9 @@ const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 ## Qc/RtgNoShowTimeoutS, LegStallTimeoutS added, RtgNoShowTimeoutEnabled removed
 ## (contract rev 9.4 assumed; names confirmed by BE on 15 Nov 2026).
 ## tcl-002.3 (TCL-034e, D-053): Sim/Timing/NoShowTimeoutEnabled (Boolean) added.
-## tcl-002.4 (TCL-034e, D-058): Sim/Timing/RtgPositioningS (Int64) added.
+## tcl-002.4 (TCL-034e, D-058): Sim/Timing/RtgPositioningS (Int64) added;
+## D-059: the waiter repeats handoff_timed_out every time-out period while it
+## keeps waiting (was: at most one report per HandoffId).
 const CONTRACT_VERSION := "tcl-002.4"
 
 var _bootstrap := OESBootstrapClient.new()
@@ -1244,8 +1246,10 @@ func _drive_towards(che_id: int, che: Dictionary, target_latitude: float, target
 ## per tick, giver first. If the giver's no-show is due, publish only the
 ## giver's handoff_timed_out and close the hand-off locally so the receiver
 ## does not publish. The receiver publishes only if its clock expired and the
-## giver's did not. One report per HandoffId, independent of CHE iteration
-## order (D-016). OES still applies "first arrived wins" as the safety net;
+## giver's did not. One reporter per HandoffId, independent of CHE iteration
+## order (D-016). D-059: that reporter reports again every time-out period
+## while it keeps waiting (OES has not cancelled it yet); see
+## _publish_due_repeat_timeouts. OES still applies "first arrived wins" as the safety net;
 ## this does not invent OES behaviour. Timeouts run after movement and crane
 ## steps so a counterpart that became ready in this tick can still complete
 ## the transfer (if both CHEs are at the lane, the hand-off happens).
@@ -1272,6 +1276,52 @@ func _publish_due_handoff_timeouts():
 		elif receiver_id > 0 and _no_show_due_for(receiver_id):
 			_publish_handoff_timeout(receiver_id)
 			_mark_handoff_closed(str(handoff_id))
+	_publish_due_repeat_timeouts()
+
+
+## D-059: "Report again every 5 minutes while it keeps waiting." The CHE that
+## reported handoff_timed_out reports it again each time its own time-out
+## period (the same N as the first report, default 300 s) has passed since its
+## last report, as long as it is still in the same wait for that HandoffId and
+## OES has not cancelled the leg. The hand-off stays closed locally (a late
+## counterpart still gets no transfer). Gated by the D-053 switch. Every report
+## has its own Command/Result/Id; OES treats a repeat on an `exception`
+## hand-off as an INFORMATIONAL no-op, and raises the exception if the first
+## report never arrived (the hand-off is still `pending`).
+func _publish_due_repeat_timeouts():
+	if not _no_show_timeout_enabled:
+		return
+	var che_ids: Array = _active_commands.keys()
+	che_ids.sort()
+	for che_key in che_ids:
+		var che_id = int(che_key)
+		var command: Dictionary = _active_commands[che_key]
+		if not command.has("no_show_reported_at_ms"):
+			continue
+		var period_ms = int(command.get("no_show_repeat_ms", 0))
+		if period_ms <= 0 or _clock.now_ms - int(command.no_show_reported_at_ms) < period_ms:
+			continue
+		if not _still_waiting_after_no_show(command):
+			continue
+		_publish_handoff_timeout(che_id)
+
+
+## True while the reporter of a no-show is still in the wait it reported.
+func _still_waiting_after_no_show(command: Dictionary) -> bool:
+	var handoff_id = str(command.get("handoff_id", ""))
+	if handoff_id.is_empty() or str(command.get("handoff_timed_out_id", "")) != handoff_id:
+		return false
+	if _is_crane_command(command):
+		return str(command.get("work_state", "")) == QcDischarge.WAITING_FOR_TT
+	return str(command.get("tt_phase", "")) == str(command.get("no_show_phase", ""))
+
+
+## The no-show period (ms) of the waiter `command` (QC/RTG: TtNoShowTimeoutS;
+## TT: QcNoShowTimeoutS at the QC lane, RtgNoShowTimeoutS at the block lane).
+func _no_show_period_ms(command: Dictionary) -> int:
+	if _is_crane_command(command):
+		return int(command.get("tt_no_show_timeout_ms", _tt_no_show_timeout_s * 1000))
+	return _tt_no_show_timeout_s_for(command) * 1000
 
 
 func _command_handoff_closed(command: Dictionary) -> bool:
@@ -1351,6 +1401,12 @@ func _publish_handoff_timeout(che_id: int):
 		return
 	var command: Dictionary = _active_commands[che_id]
 	var handoff_id = str(command.get("handoff_id", ""))
+	# D-059: remember when and in which wait this CHE reported, for repeats.
+	command["no_show_reported_at_ms"] = _clock.now_ms
+	command["no_show_report_count"] = int(command.get("no_show_report_count", 0)) + 1
+	if not command.has("no_show_repeat_ms"):
+		command["no_show_repeat_ms"] = _no_show_period_ms(command)
+		command["no_show_phase"] = str(command.get("tt_phase", ""))
 	if _is_crane_command(command):
 		command["handoff_timed_out"] = true
 		command["handoff_timed_out_id"] = handoff_id
@@ -1359,7 +1415,7 @@ func _publish_handoff_timeout(che_id: int):
 		_publish_events(che_id, command, [{"event": "handoff_timed_out"}])
 		_publish_equipment_state(_ches[che_id], true)
 		return
-	# As for the QC (D-013): handoff_timed_out once, the TT keeps its state
+	# As for the QC (D-013): handoff_timed_out (again every period, D-059), the TT keeps its state
 	# (and the box at H2), the HandoffId no longer pairs, and the TT waits for
 	# OES to cancel. The waiter reports; OES accepting a TT-side report is BE
 	# work (TCL-011 §6.3). BE confirmed: H1 reports on the leg command id

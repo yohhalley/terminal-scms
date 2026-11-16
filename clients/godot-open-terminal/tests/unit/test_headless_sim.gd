@@ -134,7 +134,7 @@ func _initialize():
 	_test_no_show_switch_parsing()
 	_test_no_show_switch_off_all_waits()
 	_test_no_show_clock_restarts_per_period()
-	_test_no_rearm_after_timeout()
+	_test_no_show_repeats_while_waiting()
 	_test_margins_skip_no_show_when_off()
 	_cleanup_state_file()
 	if not _failed:
@@ -1690,7 +1690,7 @@ func _test_tt_waits_for_qc_no_show_w2():
 	_assert(str(timed_out.get("Command/Result/HandoffRole", "")) == "receiver" and int(timed_out.get("Command/Result/CounterpartCheId", 0)) == QC_ID, "W2: TT is the receiver, the absent QC its counterpart")
 	_assert(str(timed_out.get("Command/Result/HandoffId", "")) == HANDOFF_ID, "W2 carries H1")
 	_run_steps(simulator, 600)
-	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 1, "W2 fires once")
+	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 3, "W2 repeats every 30 s while the TT keeps waiting (D-059)")
 	_assert(_tt_phase(simulator) == "at_source_waiting", "The TT waits for OES to cancel")
 	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
 	_run_steps(simulator, 200)
@@ -1872,7 +1872,8 @@ func _test_receiver_due_first_giver_not_yet():
 	_assert(str(simulator._active_commands[QC_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID and bool(simulator._active_commands[QC_ID].get("handoff_timed_out", false)), "Receiver-due-first: the hand-off is closed locally on the giver too")
 	_run_until(simulator, func(): return int(simulator._clock.now_ms) >= start_ms + 60000, 1000)
 	_run_steps(simulator, 20)
-	_assert(_timeout_results(_results(simulator)).size() == before + 1, "Receiver-due-first: giver still silent after its own clock falls due")
+	var later = _timeout_results(_results(simulator)).slice(before)
+	_assert(later.size() == 2 and later.all(func(r): return r.device == "TT01"), "Receiver-due-first: giver still silent after its own clock falls due; only the receiver repeats (D-059) (%s)" % [later.size()])
 	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 0, "Receiver-due-first: QC never publishes")
 	_free_simulator(simulator)
 
@@ -2154,15 +2155,32 @@ func _test_no_show_clock_restarts_per_period():
 	_assert(_names(QcDischarge.step(second, 135000, 0)) == ["handoff_timed_out"], "Periods: second W1 times out 30 s after its own hold end")
 
 
-## D-053 / TCL-011 S1: after one handoff_timed_out the waiter stays put
-## (until OES cancels) and never reports again for that HandoffId.
-func _test_no_rearm_after_timeout():
+## D-059 (replaces "one report per hand-off"): after handoff_timed_out the
+## waiter stays put until OES cancels, and the same CHE reports again every
+## time-out period (here 30 s) while it keeps waiting. Its counterpart never
+## reports. Each report has its own Command/Result/Id; OES cancel stops them.
+func _test_no_show_repeats_while_waiting():
 	for harness in ["h1", "h2"]:
 		var simulator = _waiting_h1_simulator() if harness == "h1" else _waiting_h2_simulator()
 		var start_ms = int(simulator._clock.now_ms)
-		_assert(_run_until(simulator, func(): return not _timeout_results(_results(simulator)).is_empty(), 2000), "No re-arm (%s): the first report" % harness)
+		_assert(_run_until(simulator, func(): return not _timeout_results(_results(simulator)).is_empty(), 2000), "Repeat (%s): the first report" % harness)
 		_run_until(simulator, func(): return int(simulator._clock.now_ms) >= start_ms + 6 * 30000, 3000)
-		_assert(_timeout_results(_results(simulator)).size() == 1, "No re-arm (%s): one report per hand-off after 5 more time-outs" % harness)
+		var reports = _timeout_results(_results(simulator))
+		_assert(reports.size() >= 5, "Repeat (%s): reports keep coming every period (%s)" % [harness, reports.size()])
+		var ids := {}
+		for i in range(reports.size()):
+			ids[str(reports[i].m["Command/Result/Id"])] = true
+			_assert(reports[i].device == reports[0].device and str(reports[i].m.get("Command/Result/HandoffRole", "")) == str(reports[0].m.get("Command/Result/HandoffRole", "")), "Repeat (%s): same reporter and role" % harness)
+			_assert(str(reports[i].m["Command/Result/CommandId"]) == str(reports[0].m["Command/Result/CommandId"]), "Repeat (%s): same command id" % harness)
+			if i > 0:
+				_assert(int(reports[i].m["Sim/TimeMs"]) - int(reports[i - 1].m["Sim/TimeMs"]) == 30000, "Repeat (%s): one report per 30 s period" % harness)
+		_assert(ids.size() == reports.size(), "Repeat (%s): every report has its own Command/Result/Id" % harness)
+		var reporter_id = TT_ID if reports[0].device == "TT01" else (QC_ID if reports[0].device == "QC01" else RTG_ID)
+		var leg_id = str(simulator._active_commands[reporter_id].command_id)
+		_send(simulator, reporter_id, _cancel(reporter_id, leg_id))
+		var after_cancel = reports.size()
+		_run_steps(simulator, 900)
+		_assert(_timeout_results(_results(simulator)).size() == after_cancel, "Repeat (%s): OES cancel stops the reports" % harness)
 		_free_simulator(simulator)
 
 
