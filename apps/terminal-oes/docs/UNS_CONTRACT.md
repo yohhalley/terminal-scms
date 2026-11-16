@@ -150,10 +150,17 @@ file preserves active commands and recent CHE state across process restart.
   `Sim/Timing/NoShowTimeoutEnabled` is `false`, Godot sends no
   `handoff_timed_out` (the CHEs keep waiting and `waiting_for_handoff` is
   still reported); if one arrives anyway, OES applies it as below and logs a
-  WARNING. Remaining live legs are
+  WARNING. The 10-minute leg stall (`Sim/Timing/LegStallTimeoutS`,
+  `failed`/`SIMULATOR_FAILURE`) does not depend on the switch and still ends
+  the job when it is off (D-060). Remaining live legs are
   cancelled (`Command/Reason` = the same code) and the order ends complete
-  by exception (D-017). A late or duplicate report on a hand-off already in
-  `exception` or `cancelled` is an INFORMATIONAL no-op; a report after
+  by exception (D-017). A CHE that keeps waiting re-reports
+  `handoff_timed_out` every timeout period (D-059), each with a new
+  `Command/Result/Id`; OES raises the exception once, and a late or
+  duplicate report on a hand-off already in `exception` or `cancelled` (same
+  side, any time later, also after the order has completed by exception) is
+  an INFORMATIONAL no-op: no second `handoff_exception`, no cancel, no
+  conflict flag. A report after
   `transferred` is a contract breach (WARNING, `handoff_not_pending`,
   flagged on the hand-off) and does not undo the transfer. `reason` is an
   extensible enum (OES `HandoffExceptionReason`, MiniTOS

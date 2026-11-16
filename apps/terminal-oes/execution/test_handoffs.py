@@ -6,6 +6,7 @@ Event/TimeMs = Sim/StartEpochMs + Sim/TimeMs and Sim/EventSeq.
 """
 
 import uuid
+from unittest import mock
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -1212,3 +1213,114 @@ class DestinationMetricTests(HandoffTestBase):
         # A leg without a code sends no empty code metric.
         self.assertNotIn("Command/DestinationPositionCode", self.dcmd_metrics(tt_cmd))
         self.assertEqual(self.dcmd_metrics(tt_cmd)["Command/DestinationPositionId"], 7)
+
+
+class RepeatedNoShowReportTests(HandoffTestBase):
+    """D-059: a CHE still waiting re-reports handoff_timed_out every timeout
+    period (5 min). Same-side repeats are idempotent INFO no-ops, also minutes
+    later and after the order completed by exception: no second exception,
+    no second handoff_exception (so MiniTOS frees the planned slot once), no
+    WARNING and no conflict flag."""
+
+    def snapshot(self, handoff):
+        handoff.refresh_from_db()
+        self.order.refresh_from_db()
+        return {
+            "handoff": (
+                handoff.status, handoff.exception_reason, handoff.exception_detail,
+                handoff.exception_event_ms, handoff.conflict_count, handoff.last_conflict,
+            ),
+            "order": (self.order.status, self.order.failure_reason, self.order.completed_at),
+            "legs": list(self.order.operations.order_by("sequence").values_list("status", flat=True)),
+            "outbox": OutboxEvent.objects.count(),
+            "handoff_exceptions": list(
+                OutboxEvent.objects.filter(payload__data__event="handoff_exception")
+                .values_list("event_id", "payload__data__destination_position_id"),
+            ),
+            "cancels": EquipmentCommand.objects.filter(command_type="cancel").count(),
+        }
+
+    def assert_repeats_are_noops(self, command, first_ms, handoff, other_cmds):
+        before = self.snapshot(handoff)
+        self.assertEqual(before["handoff"][0], Handoff.EXCEPTION)
+        self.assertEqual(before["order"][0], ExecutionOrder.COMPLETE)
+        self.assertEqual(len(before["handoff_exceptions"]), 1)
+        # Godot confirms the cancels; the order has completed by exception.
+        for cmd in other_cmds:
+            self.result(cmd, "cancelled", first_ms + 100)
+        before = self.snapshot(handoff)
+        with mock.patch("execution.services.sparkplug_runtime.record_conflict") as conflict:
+            for minutes in (5, 10, 15):
+                at_ms = first_ms + minutes * 60_000
+                with self.assertNoLogs("execution", level="WARNING"), \
+                        self.assertLogs("execution.services.handoffs", level="INFO") as captured:
+                    repeat = self.result(command, "handoff_timed_out", at_ms)
+                self.assertEqual(repeat.status, CommandResultReceipt.INFORMATIONAL)
+                self.assertTrue(any("Idempotent no-op" in line for line in captured.output))
+                # assertLogs stops propagation from the handoffs logger, so
+                # check its own records for WARNING too.
+                self.assertEqual([r.levelname for r in captured.records if r.levelno >= 30], [])
+                self.assertEqual(self.snapshot(handoff), before)
+        conflict.assert_not_called()
+        self.assertEqual(self.business_events().count("handoff_exception"), 1)
+
+    def test_repeated_w3_reports_on_the_assign_id_are_idempotent(self):
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        first = self.result(h2_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(first.status, CommandResultReceipt.APPLIED)
+        handoff = Handoff.objects.get(giver_equipment=tt)
+        self.assertEqual(handoff.exception_detail, "no RTG within 300 s")
+        self.assert_repeats_are_noops(h2_cmd, 380_000, handoff, [tt_cmd, rtg_cmd])
+
+    def test_repeated_h1_receiver_reports_on_the_leg_id_are_idempotent(self):
+        qc_cmd, _tt, tt_cmd = self.run_h1()
+        first = self.result(tt_cmd, "handoff_timed_out", 320_000)
+        self.assertEqual(first.status, CommandResultReceipt.APPLIED)
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.exception_detail, "no QC within 300 s")
+        self.assert_repeats_are_noops(tt_cmd, 320_000, handoff, [qc_cmd])
+
+    def test_repeated_h1_giver_reports_are_idempotent(self):
+        qc_cmd, _tt, tt_cmd = self.run_h1(tt_ready_ms=10**9)
+        self.result(qc_cmd, "waiting_for_handoff", 20_000)
+        first = self.result(qc_cmd, "handoff_timed_out", 320_000)
+        self.assertEqual(first.status, CommandResultReceipt.APPLIED)
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.exception_detail, "no TT within 300 s")
+        self.assert_repeats_are_noops(qc_cmd, 320_000, handoff, [tt_cmd])
+
+
+class NoShowSwitchOffStallTests(HandoffTestBase):
+    """D-060: with the no-show switch off, the leg stall still ends the job.
+    OES stall handling does not read ``no_show_timeout_enabled``."""
+
+    def test_stall_failure_with_the_switch_off_marks_the_leg_failed(self):
+        self.session.no_show_timeout_enabled = False
+        self.session.save(update_fields=["no_show_timeout_enabled"])
+        _tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        self.result(h2_cmd, "handoff_completed", 95_000)
+        self.result(rtg_cmd, "handoff_completed", 95_000)
+        self.result(tt_cmd, "completed", 95_000)
+        with self.assertNoLogs("execution.services.handoffs", level="WARNING"):
+            receipt = self.result(
+                rtg_cmd, "failed", 700_000, **{"Command/Result/Reason": "SIMULATOR_FAILURE"},
+            )
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        rtg_op = self.order.operations.get(sequence=3)
+        self.assertEqual(rtg_op.status, ExecutionOperation.FAILED)
+        self.assertEqual(rtg_op.failure_reason, "SIMULATOR_FAILURE")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.failure_reason, "SIMULATOR_FAILURE")
+        rtg_cmd.refresh_from_db()
+        self.assertEqual(rtg_cmd.status, EquipmentCommand.FAILED)
+
+    def test_stall_failure_with_the_switch_off_closes_a_pending_handoff(self):
+        self.session.no_show_timeout_enabled = False
+        self.session.save(update_fields=["no_show_timeout_enabled"])
+        tt, tt_cmd, _h2_cmd, _rtg_cmd = self.run_h2()
+        receipt = self.result(
+            tt_cmd, "failed", 700_000, **{"Command/Result/Reason": "SIMULATOR_FAILURE"},
+        )
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        self.assertEqual(self.order.operations.get(sequence=2).status, ExecutionOperation.FAILED)
+        self.assertNotEqual(Handoff.objects.get(giver_equipment=tt).status, Handoff.PENDING)
