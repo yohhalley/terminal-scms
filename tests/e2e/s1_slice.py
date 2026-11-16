@@ -21,9 +21,12 @@ What it does, in order:
    4: TT drive, crane cycle) are asserted in sim time from
    ``data.occurred_at`` (the UNS field filled from the Sparkplug
    ``Event/TimeMs`` envelope stamp, contract §2.1) against a bound derived
-   from the import_v1 layout, TT speed and the configured SimTiming profile
-   (D-050). Their wall-clock time is logged; the wait uses only a generous
-   safety timeout, not the 5 s limit.
+   from the import_v1 layout, TT speed, and the effective crane timings
+   published on the session NBIRTH (D-050; ``Sim/Timing/QcHold*``,
+   ``RtgHold*``, and after TCL-034e ``RtgPositioningS``). Their wall-clock
+   time is logged; the wait uses only a generous safety timeout, not the
+   5 s limit. Step 4's second dispatch is still checked against the 5 s
+   wall-clock reaction limit; the physical work after that is sim time.
 4. Writes a per-step PASS/FAIL summary (stdout, JSON, Markdown and, on GitHub
    Actions, ``$GITHUB_STEP_SUMMARY``). Exit code 0 only if every step passed.
 
@@ -58,6 +61,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
+_E2E_DIR = Path(__file__).resolve().parent
+if str(_E2E_DIR) not in sys.path:
+    sys.path.insert(0, str(_E2E_DIR))
+from sparkplug_codec import (  # noqa: E402
+    decode_payload,
+    encode_rebirth_ncmd,
+    metrics_by_name,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_SCHEMA_PATH = REPO_ROOT / "contracts/schemas/scms.execution.event.v1.schema.json"
 FAILURE_EVENTS = {"handoff_exception", "leg_failed", "order_cancelled"}
@@ -69,19 +81,38 @@ SIM_CLOCK_EVENTS = {
 }
 # D-050: steps that include physical work (TT drive, crane cycle).
 PHYSICAL_STEPS = ("3d", "4")
-# Two 100 ms sim ticks (SimClock step), so a discrete arrival can still sit
-# just past hypot/speed without failing a tight bound.
-SIM_BOUND_SLACK_S = 0.2
+# Slack on a drive term is exactly two sim ticks (GD review of #49, S1): the
+# safe, speed-independent margin against tick alignment. Not a literal 0.2 s.
+TICKS_OF_SLACK = 2
+DEFAULT_STEP_MS = 100
 # Added to (sim bound / time_scale) so a hung run still stops; not a D-050
 # or D-037 assertion.
 SAFETY_WALL_SLACK_S = 30.0
 DEFAULT_TIMING_PROFILE = "fast"
-# RTG gantry_to_bay is unmodelled and takes zero sim time (RtgStack.gd).
-RTG_GANTRY_S = 0.0
 IMPORT_V1_REL = Path("apps/minitos/minitos_core/scenarios/import_v1.py")
-SIM_TIMING_REL = Path("clients/godot-open-terminal/source/headless/SimTiming.gd")
 COMPOSE_REL = Path("compose.yaml")
 HEADLESS_REL = Path("clients/godot-open-terminal/source/headless/HeadlessSimulator.gd")
+SIMCLOCK_REL = Path("clients/godot-open-terminal/source/headless/SimClock.gd")
+# Env keys the simulator applies on top of the profile. Effective holds come
+# from NBIRTH, so these do not need to be parsed; they are listed so a live
+# run can note that overrides were in effect.
+HOLD_OVERRIDE_ENV_KEYS = (
+    "SIMULATOR_QC_WAIT_MIN_S", "SIM_QC_WAIT_MIN_S",
+    "SIMULATOR_QC_WAIT_MAX_S", "SIM_QC_WAIT_MAX_S",
+    "SIMULATOR_QC_HOLD_WAIT_MIN_S", "SIM_QC_HOLD_WAIT_MIN_S",
+    "SIMULATOR_QC_HOLD_WAIT_MAX_S", "SIM_QC_HOLD_WAIT_MAX_S",
+    "SIMULATOR_RTG_WAIT_MIN_S", "SIM_RTG_WAIT_MIN_S",
+    "SIMULATOR_RTG_WAIT_MAX_S", "SIM_RTG_WAIT_MAX_S",
+    "SIMULATOR_RTG_HOLD_WAIT_MIN_S", "SIM_RTG_HOLD_WAIT_MIN_S",
+    "SIMULATOR_RTG_HOLD_WAIT_MAX_S", "SIM_RTG_HOLD_WAIT_MAX_S",
+)
+NBIRTH_QC_HOLD = ("Sim/Timing/QcHoldMinS", "Sim/Timing/QcHoldMaxS")
+NBIRTH_RTG_HOLD = ("Sim/Timing/RtgHoldMinS", "Sim/Timing/RtgHoldMaxS")
+NBIRTH_POSITIONING = "Sim/Timing/RtgPositioningS"
+NBIRTH_STEP_MS = "Sim/FixedStepMs"
+NBIRTH_PROFILE = "Sim/Timing/Profile"
+NBIRTH_TIME_SCALE = "Sim/TimeScale"
+SPARKPLUG_NBIRTH_FILTER = "spBv1.0/+/NBIRTH/+"
 
 
 # --------------------------------------------------------------------------
@@ -115,55 +146,81 @@ def drive_time_s(start: Point, end: Point, speed_mps: float) -> float:
     return start.distance_to(end) / speed_mps
 
 
-def _brace_block(text: str, start: int) -> str:
-    depth = 0
-    for i, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-    raise ValueError("unbalanced braces")
+def slack_s(step_ms: int | float) -> float:
+    """Drive slack: two configured sim ticks, in seconds."""
+    return TICKS_OF_SLACK * (float(step_ms) / 1000.0)
 
 
-def parse_sim_timing_profiles(text: str) -> dict[str, dict[str, tuple[float, float]]]:
-    """Parse SimTiming.PROFILES. Keys are profile names ('fast', 'realistic')."""
-    aliases = {}
-    for match in re.finditer(
-        r'const\s+(PROFILE_[A-Z]+)\s*:=\s*"([a-zA-Z0-9_-]+)"', text,
-    ):
-        aliases[match.group(1)] = match.group(2)
-    marker = re.search(r"const\s+PROFILES\s*:=", text)
-    if not marker:
-        raise ValueError("SimTiming.gd: no const PROFILES := block")
-    brace = text.find("{", marker.end())
-    if brace < 0:
-        raise ValueError("SimTiming.gd: PROFILES has no opening brace")
-    block = _brace_block(text, brace)
-    profiles: dict[str, dict[str, tuple[float, float]]] = {}
-    entry = re.compile(
-        r"(PROFILE_[A-Z]+|\"[a-zA-Z0-9_-]+\")\s*:\s*\{([^}]*)\}",
-    )
-    hold = re.compile(
-        r"['\"]?(qc_hold|rtg_hold|qc_cycle|rtg_cycle)['\"]?\s*:\s*\[\s*([0-9.]+)\s*,\s*([0-9.]+)\s*\]",
-    )
-    for match in entry.finditer(block):
-        raw_name, body = match.group(1), match.group(2)
-        name = aliases.get(raw_name, raw_name.strip().strip('"'))
-        values: dict[str, tuple[float, float]] = {}
-        for item in hold.finditer(body):
-            values[item.group(1)] = (float(item.group(2)), float(item.group(3)))
-        if "qc_hold" not in values and "qc_cycle" in values:
-            values["qc_hold"] = values["qc_cycle"]
-        if "rtg_hold" not in values and "rtg_cycle" in values:
-            values["rtg_hold"] = values["rtg_cycle"]
-        if "qc_hold" not in values or "rtg_hold" not in values:
-            raise ValueError(f"SimTiming.gd: profile {name!r} missing qc/rtg hold or cycle range")
-        profiles[name] = values
-    if not profiles:
-        raise ValueError("SimTiming.gd: PROFILES parsed empty")
-    return profiles
+def tick_s(step_ms: int | float) -> float:
+    return float(step_ms) / 1000.0
+
+
+def _require_metric(metrics: dict, name: str) -> float:
+    if name not in metrics or metrics[name] is None:
+        raise ValueError(f"session NBIRTH is missing required metric {name}")
+    try:
+        return float(metrics[name])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"session NBIRTH metric {name} is not a number: {metrics[name]!r}") from exc
+
+
+def timings_from_nbirth(metrics: dict) -> dict:
+    """Effective crane timings from a decoded session NBIRTH.
+
+    Holds are the values the simulator actually uses (profile plus any env
+    overrides). ``RtgPositioningS`` is absent on main before TCL-034e and
+    defaults to 0. ``Sim/FixedStepMs`` is used for the 2-tick slack when
+    present.
+    """
+    qc = (_require_metric(metrics, NBIRTH_QC_HOLD[0]), _require_metric(metrics, NBIRTH_QC_HOLD[1]))
+    rtg = (_require_metric(metrics, NBIRTH_RTG_HOLD[0]), _require_metric(metrics, NBIRTH_RTG_HOLD[1]))
+    if qc[1] < qc[0] or rtg[1] < rtg[0]:
+        raise ValueError(f"session NBIRTH hold ranges are inverted: qc={qc}, rtg={rtg}")
+    positioning = 0.0
+    if metrics.get(NBIRTH_POSITIONING) is not None:
+        positioning = float(metrics[NBIRTH_POSITIONING])
+    step_ms = None
+    if metrics.get(NBIRTH_STEP_MS) is not None:
+        step_ms = int(metrics[NBIRTH_STEP_MS])
+        if step_ms <= 0:
+            raise ValueError(f"session NBIRTH {NBIRTH_STEP_MS} must be > 0, got {step_ms}")
+    profile = str(metrics[NBIRTH_PROFILE]).strip() if metrics.get(NBIRTH_PROFILE) else ""
+    time_scale = None
+    if metrics.get(NBIRTH_TIME_SCALE) is not None:
+        time_scale = float(metrics[NBIRTH_TIME_SCALE])
+    return {
+        "qc_hold": (qc[0], qc[1]),
+        "rtg_hold": (rtg[0], rtg[1]),
+        "rtg_positioning_s": positioning,
+        "step_ms": step_ms,
+        "profile": profile or None,
+        "time_scale": time_scale,
+    }
+
+
+def nbirth_fixture(
+    *,
+    profile: str,
+    qc_hold: tuple[float, float],
+    rtg_hold: tuple[float, float],
+    positioning_s: float = 0.0,
+    step_ms: int = DEFAULT_STEP_MS,
+    time_scale: float = 10.0,
+    include_positioning: bool = True,
+) -> dict:
+    """Build an NBIRTH-like metric map for self-tests (no broker)."""
+    metrics = {
+        NBIRTH_PROFILE: profile,
+        NBIRTH_QC_HOLD[0]: qc_hold[0],
+        NBIRTH_QC_HOLD[1]: qc_hold[1],
+        NBIRTH_RTG_HOLD[0]: rtg_hold[0],
+        NBIRTH_RTG_HOLD[1]: rtg_hold[1],
+        NBIRTH_STEP_MS: step_ms,
+        NBIRTH_TIME_SCALE: time_scale,
+    }
+    if include_positioning:
+        metrics[NBIRTH_POSITIONING] = positioning_s
+    return metrics
 
 
 def parse_default_speed_mps(compose_text: str, headless_text: str = "") -> float:
@@ -181,6 +238,42 @@ def parse_default_speed_mps(compose_text: str, headless_text: str = "") -> float
         "could not read SIMULATOR_DEFAULT_SPEED_MPS default from compose.yaml "
         "or HeadlessSimulator.gd"
     )
+
+
+def parse_fixed_step_ms(compose_text: str, simclock_text: str = "", env=None) -> int:
+    """Tick length: env, then compose default, then SimClock.DEFAULT_STEP_MS."""
+    env = os.environ if env is None else env
+    for key in ("SIMULATOR_FIXED_STEP_MS", "SIM_FIXED_STEP_MS"):
+        raw = env.get(key)
+        if raw:
+            value = int(raw)
+            if value <= 0:
+                raise ValueError(f"{key} must be > 0, got {raw!r}")
+            return value
+    match = re.search(r"SIMULATOR_FIXED_STEP_MS:[^\n]*?:-(\d+)", compose_text)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"const\s+DEFAULT_STEP_MS\s*:=\s*(\d+)", simclock_text)
+    if match:
+        return int(match.group(1))
+    return DEFAULT_STEP_MS
+
+
+def hold_override_env_keys(env=None) -> list[str]:
+    env = os.environ if env is None else env
+    return [key for key in HOLD_OVERRIDE_ENV_KEYS if env.get(key)]
+
+
+def assert_layout_speed_is_default(text: str) -> None:
+    """Fail if the seed sets a CHE driving speed the bound would ignore (S2)."""
+    for match in re.finditer(r"driving_speed_empty_kmh\s*=\s*([0-9.]+)", text):
+        if float(match.group(1)) > 0:
+            raise ValueError(
+                "import_v1 seed sets driving_speed_empty_kmh="
+                f"{match.group(1)}; the D-050 bound uses "
+                "SIMULATOR_DEFAULT_SPEED_MPS and would silently disagree "
+                "with the simulator (HeadlessSimulator._che_speed_mps)"
+            )
 
 
 def parse_import_v1_layout(text: str) -> tuple[dict[str, Point], Point, Point]:
@@ -226,6 +319,10 @@ def parse_import_v1_layout(text: str) -> tuple[dict[str, Point], Point, Point]:
     return starts, qc_lane, block_tl
 
 
+def _fmt_ticks(n: int, step_ms: int | float) -> str:
+    return f"{n} tick{'s' if n != 1 else ''} ({n * tick_s(step_ms):g} s)"
+
+
 @dataclass
 class PhysicalBounds:
     """Layout-derived D-050 sim-time bounds for steps 3d and 4."""
@@ -237,8 +334,16 @@ class PhysicalBounds:
     block_tl: Point
     tt_starts: dict[str, Point]
     time_scale: float
-    rtg_gantry_s: float = RTG_GANTRY_S
-    slack_s: float = SIM_BOUND_SLACK_S
+    step_ms: int = DEFAULT_STEP_MS
+    rtg_positioning_s: float = 0.0
+
+    @property
+    def slack_s(self) -> float:
+        return slack_s(self.step_ms)
+
+    @property
+    def tick_s(self) -> float:
+        return tick_s(self.step_ms)
 
     def drive_s(self, start: Point, end: Point) -> float:
         return drive_time_s(start, end, self.speed_mps)
@@ -257,26 +362,52 @@ class PhysicalBounds:
     def bound_3d_s(self, tt_name: str | None = None) -> float:
         drive_s, _, _ = self.tt_drive_to_qc_s(tt_name)
         # QC hold and TT drive run in parallel; deposit is max(hold end, TT ready).
+        # Measured from TT leg_started, so hold end - t(TT start) <= H_qc.
         return max(drive_s, self.qc_hold[1]) + self.slack_s
 
-    def bound_4_s(self) -> float:
-        # After H1 the TT drives to the block lane; the RTG hold starts at H2.
-        return (
-            self.drive_s(self.qc_lane, self.block_tl)
-            + self.rtg_gantry_s
-            + self.rtg_hold[1]
-            + self.slack_s
-        )
+    def bound_4_s(
+        self,
+        h1_end: datetime | None = None,
+        rtg_started: datetime | None = None,
+    ) -> float:
+        """Step 4: max(drive2 + 2 ticks, (RTG start - H1) + 1 tick + P) + H_rtg.
 
-    def sim_bound_s(self, step_id: str, tt_name: str | None = None) -> float:
+        Dispatch delay is not treated as layout work (M2). When the RTG
+        ``leg_started`` stamp is not yet known, the arrival term is 0.
+        """
+        drive_s = self.drive_s(self.qc_lane, self.block_tl)
+        drive_term = drive_s + self.slack_s
+        arrival_s = 0.0
+        if h1_end is not None and rtg_started is not None:
+            arrival_s = (rtg_started - h1_end).total_seconds()
+        position_term = arrival_s + self.tick_s + self.rtg_positioning_s
+        return max(drive_term, position_term) + self.rtg_hold[1]
+
+    def sim_bound_s(
+        self,
+        step_id: str,
+        tt_name: str | None = None,
+        h1_end: datetime | None = None,
+        rtg_started: datetime | None = None,
+    ) -> float:
         if step_id == "3d":
             return self.bound_3d_s(tt_name)
         if step_id == "4":
-            return self.bound_4_s()
+            return self.bound_4_s(h1_end=h1_end, rtg_started=rtg_started)
         raise ValueError(f"no D-050 sim bound for step {step_id}")
 
-    def safety_wall_s(self, step_id: str, tt_name: str | None = None) -> float:
-        return self.sim_bound_s(step_id, tt_name) / max(self.time_scale, 0.001) + SAFETY_WALL_SLACK_S
+    def safety_wall_s(
+        self,
+        step_id: str,
+        tt_name: str | None = None,
+        h1_end: datetime | None = None,
+        rtg_started: datetime | None = None,
+    ) -> float:
+        return (
+            self.sim_bound_s(step_id, tt_name, h1_end=h1_end, rtg_started=rtg_started)
+            / max(self.time_scale, 0.001)
+            + SAFETY_WALL_SLACK_S
+        )
 
     def formula_3d(self, tt_name: str | None = None) -> str:
         drive_s, used, start = self.tt_drive_to_qc_s(tt_name)
@@ -284,23 +415,41 @@ class PhysicalBounds:
         dist = start.distance_to(self.qc_lane)
         return (
             f"max({who} drive {dist:.1f} m / {self.speed_mps:g} m/s = {drive_s:.3f} s, "
-            f"QC hold ≤ {self.qc_hold[1]:g} s) + {self.slack_s:g} s slack"
+            f"QC hold <= {self.qc_hold[1]:g} s) + {_fmt_ticks(TICKS_OF_SLACK, self.step_ms)}"
         )
 
-    def formula_4(self) -> str:
+    def formula_4(
+        self,
+        h1_end: datetime | None = None,
+        rtg_started: datetime | None = None,
+    ) -> str:
         drive_s = self.drive_s(self.qc_lane, self.block_tl)
         dist = self.qc_lane.distance_to(self.block_tl)
+        arrival_s = 0.0
+        arrival_note = "0 s (dispatch not yet observed)"
+        if h1_end is not None and rtg_started is not None:
+            arrival_s = (rtg_started - h1_end).total_seconds()
+            arrival_note = f"{arrival_s:g} s"
+        position_term = arrival_s + self.tick_s + self.rtg_positioning_s
         return (
-            f"QC01.LANE.01→BLOCK01.TL.01 drive {dist:.1f} m / {self.speed_mps:g} m/s "
-            f"= {drive_s:.3f} s + RTG gantry {self.rtg_gantry_s:g} s "
-            f"+ RTG hold ≤ {self.rtg_hold[1]:g} s + {self.slack_s:g} s slack"
+            f"max(QC01.LANE.01->BLOCK01.TL.01 drive {dist:.1f} m / {self.speed_mps:g} m/s "
+            f"= {drive_s:.3f} s + {_fmt_ticks(TICKS_OF_SLACK, self.step_ms)}, "
+            f"(RTG leg_started - H1) {arrival_note} + {_fmt_ticks(1, self.step_ms)} "
+            f"+ RTG positioning {self.rtg_positioning_s:g} s = {position_term:.3f} s) "
+            f"+ RTG hold <= {self.rtg_hold[1]:g} s"
         )
 
-    def formula(self, step_id: str, tt_name: str | None = None) -> str:
+    def formula(
+        self,
+        step_id: str,
+        tt_name: str | None = None,
+        h1_end: datetime | None = None,
+        rtg_started: datetime | None = None,
+    ) -> str:
         if step_id == "3d":
             return self.formula_3d(tt_name)
         if step_id == "4":
-            return self.formula_4()
+            return self.formula_4(h1_end=h1_end, rtg_started=rtg_started)
         raise ValueError(f"no D-050 formula for step {step_id}")
 
     def setup_notes(self) -> list[str]:
@@ -309,13 +458,14 @@ class PhysicalBounds:
         return [
             (
                 f"D-050 bounds ({self.profile} profile, {self.speed_mps:g} m/s, "
-                f"time_scale {self.time_scale:g}): "
+                f"time_scale {self.time_scale:g}, tick {self.step_ms} ms): "
                 f"QC01.LANE.01=({self.qc_lane.x:g},{self.qc_lane.y:g}), "
                 f"BLOCK01.TL.01=({self.block_tl.x:g},{self.block_tl.y:g}), "
                 f"TT01=({tt01.x:g},{tt01.y:g}), TT02=({tt02.x:g},{tt02.y:g}); "
                 f"QC hold {self.qc_hold[0]:g}..{self.qc_hold[1]:g} s, "
                 f"RTG hold {self.rtg_hold[0]:g}..{self.rtg_hold[1]:g} s, "
-                f"RTG gantry {self.rtg_gantry_s:g} s"
+                f"RTG positioning {self.rtg_positioning_s:g} s "
+                f"(from session NBIRTH)"
             ),
             f"D-050 step 3d bound {self.bound_3d_s():.3f} s sim ({self.formula_3d()})",
             f"D-050 step 4 bound {self.bound_4_s():.3f} s sim ({self.formula_4()})",
@@ -331,7 +481,8 @@ class PhysicalBounds:
             "block_tl": [self.block_tl.x, self.block_tl.y],
             "tt_starts": {name: [p.x, p.y] for name, p in self.tt_starts.items()},
             "time_scale": self.time_scale,
-            "rtg_gantry_s": self.rtg_gantry_s,
+            "step_ms": self.step_ms,
+            "rtg_positioning_s": self.rtg_positioning_s,
             "slack_s": self.slack_s,
             "bound_3d_s": round(self.bound_3d_s(tt_name), 3),
             "bound_4_s": round(self.bound_4_s(), 3),
@@ -344,37 +495,63 @@ class PhysicalBounds:
 def load_physical_bounds(
     repo_root: Path,
     *,
-    profile: str,
+    nbirth: dict,
     time_scale: float,
+    profile: str | None = None,
     speed_mps: float | None = None,
-    env: dict | None = None,
+    env=None,
 ) -> PhysicalBounds:
-    root = Path(repo_root)
-    profiles = parse_sim_timing_profiles((root / SIM_TIMING_REL).read_text())
-    if profile not in profiles:
-        raise ValueError(
-            f"unknown timing profile {profile!r}; known: {sorted(profiles)}"
-        )
-    holds = profiles[profile]
+    """Build D-050 bounds from the layout plus effective NBIRTH timings."""
     env = os.environ if env is None else env
+    timings = timings_from_nbirth(nbirth)
+    used_profile = profile or timings["profile"] or DEFAULT_TIMING_PROFILE
+    if profile and timings["profile"] and timings["profile"] != profile:
+        raise ValueError(
+            f"requested timing profile {profile!r} does not match "
+            f"NBIRTH {NBIRTH_PROFILE}={timings['profile']!r}"
+        )
     if speed_mps is None:
         if env.get("SIMULATOR_DEFAULT_SPEED_MPS"):
             speed_mps = float(env["SIMULATOR_DEFAULT_SPEED_MPS"])
         else:
             speed_mps = parse_default_speed_mps(
-                (root / COMPOSE_REL).read_text(),
-                (root / HEADLESS_REL).read_text() if (root / HEADLESS_REL).exists() else "",
+                (repo_root / COMPOSE_REL).read_text(),
+                (repo_root / HEADLESS_REL).read_text() if (repo_root / HEADLESS_REL).exists() else "",
             )
-    starts, qc_lane, block_tl = parse_import_v1_layout((root / IMPORT_V1_REL).read_text())
+    layout_text = (repo_root / IMPORT_V1_REL).read_text()
+    assert_layout_speed_is_default(layout_text)
+    starts, qc_lane, block_tl = parse_import_v1_layout(layout_text)
+    if timings["step_ms"] is not None:
+        step_ms = timings["step_ms"]
+    else:
+        simclock = (
+            (repo_root / SIMCLOCK_REL).read_text()
+            if (repo_root / SIMCLOCK_REL).exists() else ""
+        )
+        step_ms = parse_fixed_step_ms(
+            (repo_root / COMPOSE_REL).read_text() if (repo_root / COMPOSE_REL).exists() else "",
+            simclock,
+            env=env,
+        )
+    if timings["time_scale"] is not None:
+        # NBIRTH is authoritative for the running session; keep the requested
+        # scale only as a consistency check.
+        if abs(timings["time_scale"] - time_scale) > 1e-9:
+            raise ValueError(
+                f"requested time_scale {time_scale:g} does not match "
+                f"NBIRTH {NBIRTH_TIME_SCALE}={timings['time_scale']:g}"
+            )
     return PhysicalBounds(
-        profile=profile,
+        profile=used_profile,
         speed_mps=speed_mps,
-        qc_hold=holds["qc_hold"],
-        rtg_hold=holds["rtg_hold"],
+        qc_hold=timings["qc_hold"],
+        rtg_hold=timings["rtg_hold"],
         qc_lane=qc_lane,
         block_tl=block_tl,
         tt_starts={name: pt for name, pt in starts.items() if name.startswith("TT")},
         time_scale=time_scale,
+        step_ms=step_ms,
+        rtg_positioning_s=timings["rtg_positioning_s"],
     )
 
 
@@ -496,6 +673,13 @@ class StepResult:
     sim_bound_formula: str = ""
     # True when limit_s is the D-037 5 s wall-clock assertion (reaction steps).
     wall_asserted: bool = True
+    # Step 4: RTG leg_started envelope stamp, used to keep dispatch latency
+    # out of the sim-time bound (M2).
+    rtg_leg_started_at: datetime | None = None
+    # Wall-clock time from the step-4 dispatch request to the first
+    # leg_dispatched; asserted against the 5 s reaction limit.
+    dispatch_wall_s: float | None = None
+    dispatch_limit_s: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -508,6 +692,8 @@ class StepResult:
             "sim_bound_s": self.sim_bound_s,
             "sim_bound_formula": self.sim_bound_formula,
             "wall_asserted": self.wall_asserted,
+            "dispatch_wall_s": self.dispatch_wall_s,
+            "dispatch_limit_s": self.dispatch_limit_s,
         }
 
 
@@ -594,6 +780,9 @@ def record_sim_time(step: StepResult, message: UnsMessage) -> None:
     if step.first_sim_at is None:
         step.first_sim_at = stamp
     step.last_sim_at = stamp
+    che = str(message.data.get("che_name") or "")
+    if message.event == "leg_started" and che.startswith("RTG"):
+        step.rtg_leg_started_at = stamp
 
 
 def annotate_sim_elapsed(results: list[StepResult]) -> None:
@@ -647,6 +836,43 @@ def worst_step_summary(results: list[StepResult]) -> str | None:
     )
 
 
+def _previous_sim_end(results: list[StepResult], current: StepResult) -> datetime | None:
+    prev = None
+    for step in results:
+        if step is current:
+            return prev
+        if step.last_sim_at is not None:
+            prev = step.last_sim_at
+    return prev
+
+
+def apply_dispatch_wall_assertion(step: StepResult) -> None:
+    """Assert step 4's dispatch reaction against the 5 s wall-clock limit (M2)."""
+    if step.dispatch_limit_s is None:
+        return
+    if step.error.startswith("skipped"):
+        return
+    if step.dispatch_wall_s is None:
+        if step.passed or "timeout" not in step.error:
+            # Events were matched but the dispatch stamp was not recorded.
+            if any("leg_dispatched" in item for item in step.observed):
+                step.passed = False
+                step.error = (
+                    "D-050: step 4 saw leg_dispatched but recorded no dispatch "
+                    "wall-clock time"
+                )
+        return
+    check = (
+        f"D-050 dispatch reaction {step.dispatch_wall_s:g} s / "
+        f"wall limit {step.dispatch_limit_s:g} s"
+    )
+    if step.dispatch_wall_s > step.dispatch_limit_s + 1e-9:
+        step.passed = False
+        step.error = f"dispatch reaction exceeds 5 s wall-clock limit: {check}"
+    elif check not in step.checks:
+        step.checks.append(check)
+
+
 def apply_sim_time_assertions(
     results: list[StepResult],
     bounds: "PhysicalBounds | None" = None,
@@ -655,13 +881,25 @@ def apply_sim_time_assertions(
     """Fail a physical-work step whose envelope sim span exceeds its layout bound."""
     annotate_sim_elapsed(results)
     for step in results:
+        apply_dispatch_wall_assertion(step)
         if step.step not in PHYSICAL_STEPS:
             continue
         if step.error.startswith("skipped"):
             continue
-        if bounds is not None and step.sim_bound_s is None:
-            step.sim_bound_s = round(bounds.sim_bound_s(step.step, tt_name), 3)
-            step.sim_bound_formula = bounds.formula(step.step, tt_name)
+        h1_end = _previous_sim_end(results, step) if step.step == "4" else None
+        rtg_started = step.rtg_leg_started_at if step.step == "4" else None
+        if bounds is not None:
+            # Recompute step 4 once RTG leg_started is known, so a late
+            # dispatch does not fail a layout bound (M2).
+            step.sim_bound_s = round(
+                bounds.sim_bound_s(
+                    step.step, tt_name, h1_end=h1_end, rtg_started=rtg_started,
+                ),
+                3,
+            )
+            step.sim_bound_formula = bounds.formula(
+                step.step, tt_name, h1_end=h1_end, rtg_started=rtg_started,
+            )
         if step.sim_bound_s is None:
             continue
         if not step.passed and step.sim_elapsed_s is None:
@@ -753,6 +991,12 @@ def run_expectations(
             return step
         step.observed.append(message.describe(stream.leg_seq))
         record_sim_time(step, message)
+        if (
+            step.step == "4"
+            and message.event == "leg_dispatched"
+            and step.dispatch_wall_s is None
+        ):
+            step.dispatch_wall_s = round(message.received_at - start, 3)
         if message.event in FAILURE_EVENTS and message.event != expect.event:
             step.error = f"failure event on the UNS: {message.describe(stream.leg_seq)} {message.data}"
             step.elapsed_s = round(message.received_at - start, 3)
@@ -845,7 +1089,40 @@ def wait_until(predicate: Callable[[], object], timeout: float, interval: float 
     raise TimeoutError(f"setup timeout after {timeout:g} s waiting for {what}" + (f" ({last_exc})" if last_exc else ""))
 
 
-def start_mqtt(host: str, port: int, root: str, stream: EventStream):
+class BirthCollector:
+    """Captures the session NBIRTH metrics from the broker (M1)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.metrics: dict | None = None
+        self.topic: str | None = None
+        self.error: str | None = None
+        self.received = threading.Event()
+
+    def accept(self, topic: str, payload: bytes) -> None:
+        if "/NBIRTH/" not in str(topic):
+            return
+        try:
+            metrics = metrics_by_name(decode_payload(payload))
+            # Validate required holds now so a partial decode does not pass.
+            timings_from_nbirth(metrics)
+        except ValueError as exc:
+            self.error = f"{topic}: {exc}"
+            return
+        with self._lock:
+            self.metrics = metrics
+            self.topic = topic
+            self.error = None
+        self.received.set()
+
+
+def request_nbirth_rebirth(client, group_id: str, node_id: str) -> str:
+    topic = f"spBv1.0/{group_id}/NCMD/{node_id}"
+    client.publish(topic, encode_rebirth_ncmd(), qos=1)
+    return topic
+
+
+def start_mqtt(host: str, port: int, root: str, stream: EventStream, birth: BirthCollector | None = None):
     import paho.mqtt.client as mqtt
 
     connected = threading.Event()
@@ -858,12 +1135,15 @@ def start_mqtt(host: str, port: int, root: str, stream: EventStream):
     def on_connect(client, _userdata, _flags, reason_code, _properties):
         if not reason_code.is_failure:
             client.subscribe(f"{root}/#", qos=1)
+            client.subscribe(SPARKPLUG_NBIRTH_FILTER, qos=1)
 
     def on_subscribe(*_args):
         connected.set()
 
     def on_message(_client, _userdata, msg):
         received = time.monotonic()
+        if birth is not None and "/NBIRTH/" in str(msg.topic):
+            birth.accept(msg.topic, bytes(msg.payload))
         if msg.retain:
             return  # business events are never retained (UNS_CONTRACT.md)
         try:
@@ -879,7 +1159,10 @@ def start_mqtt(host: str, port: int, root: str, stream: EventStream):
     client.connect(host, port, keepalive=30)
     client.loop_start()
     if not connected.wait(15):
-        raise RuntimeError(f"could not subscribe to {root}/# on {host}:{port}")
+        raise RuntimeError(
+            f"could not subscribe to {root}/# and {SPARKPLUG_NBIRTH_FILTER} "
+            f"on {host}:{port}"
+        )
     return client
 
 
@@ -898,7 +1181,7 @@ def run_cli(command: list[str], timeout: float = 60.0) -> tuple[int, str, float]
 EXPECTED_CHES = ("QC01", "TT01", "TT02", "RTG01")
 
 
-def s1_plan(include_step4: bool):
+def s1_plan(include_step4: bool, profile: str = DEFAULT_TIMING_PROFILE):
     """(step id, title, trigger kind, expectations). Spec AC3.4 and AC4.3 order."""
     plan = [
         ("3a", "Release the discharge order", "minitos-release", [
@@ -912,7 +1195,7 @@ def s1_plan(include_step4: bool):
             Expect("leg_started", leg=1, che="QC01"),
             Expect("container_picked_up", leg=1, che="QC01"),
         ]),
-        ("3d", "QC01 -> TT hand-off (Godot, fast timings)", "simulator", [
+        ("3d", f"QC01 -> TT hand-off (Godot, {profile} timings)", "simulator", [
             Expect("leg_started", leg=2, che="TT*"),
             Expect("container_transferred", from_che="QC01", to_che="TT*"),
             Expect("leg_completed", leg=1, che="QC01"),
@@ -950,6 +1233,9 @@ class SliceRun:
         self.session_id: str | None = None
         self.tt_name: str | None = None
         self.compose = shlex.split(args.compose)
+        self.birth = BirthCollector()
+        self.nbirth_metrics: dict | None = None
+        self.mqtt_client = None
 
     # ---- setup --------------------------------------------------------
     def setup(self):
@@ -978,11 +1264,12 @@ class SliceRun:
             return get_status == 200 and get_body.get("actual_state") == "running"
 
         wait_until(session_running, a.setup_timeout, 2, "the simulation session to be running (is the runner up?)")
-        # Seed is filled from NBIRTH once the session is running; log it then.
+        # Seed and timing params are filled from NBIRTH once the session is running.
         get_status, got = self.oes.request("GET", f"/api/simulation-sessions/{self.session_id}/")
         if get_status == 200 and isinstance(got, dict):
             session = got
         self.setup_notes.append(session_setup_note(session, created=created))
+        self.ensure_nbirth(session, created=created)
 
         def ches_ready():
             rows = self.oes.list(f"/api/equipment/?site_id={site.get('source_id')}")
@@ -1003,6 +1290,54 @@ class SliceRun:
         except TimeoutError as exc:
             raise TimeoutError(f"{exc}; last seen: {', '.join(last_che_states) or 'no equipment rows'}") from None
         self.setup_notes.append(f"CHEs {', '.join(EXPECTED_CHES)} connected and available (AC2.3)")
+
+    def ensure_nbirth(self, session: dict, *, created: bool) -> None:
+        """Wait for the session NBIRTH; request a Rebirth if we missed it."""
+        if self.nbirth_metrics:
+            return
+        if self.birth.received.is_set():
+            self._apply_nbirth(session)
+            return
+        # A reused (HTTP 200) session was already born before we subscribed.
+        group = session.get("sparkplug_group_id")
+        node = session.get("sparkplug_node_id")
+        if self.mqtt_client is not None and group and node:
+            topic = request_nbirth_rebirth(self.mqtt_client, str(group), str(node))
+            self.setup_notes.append(
+                f"NBIRTH not yet seen (session {'created' if created else 'reused'}); "
+                f"sent Node Control/Rebirth on {topic}"
+            )
+        if not self.birth.received.wait(min(30.0, getattr(self.args, "setup_timeout", 180.0))):
+            detail = self.birth.error or "no NBIRTH received"
+            raise TimeoutError(
+                "setup timeout waiting for session NBIRTH "
+                f"(Sim/Timing/QcHold* and RtgHold*): {detail}. "
+                "The D-050 bounds read effective timings from NBIRTH; "
+                "start a fresh simulation session and retry."
+            )
+        self._apply_nbirth(session)
+
+    def _apply_nbirth(self, session: dict) -> None:
+        metrics = self.birth.metrics
+        if not metrics:
+            raise RuntimeError("NBIRTH collector was signalled but has no metrics")
+        self.nbirth_metrics = metrics
+        timings = timings_from_nbirth(metrics)
+        seed = metrics.get("Sim/Seed", session.get("seed"))
+        self.setup_notes.append(
+            f"Session NBIRTH on {self.birth.topic}: profile {timings['profile']}, "
+            f"QC hold {timings['qc_hold'][0]:g}..{timings['qc_hold'][1]:g} s, "
+            f"RTG hold {timings['rtg_hold'][0]:g}..{timings['rtg_hold'][1]:g} s, "
+            f"RTG positioning {timings['rtg_positioning_s']:g} s, "
+            f"tick {timings['step_ms'] or 'unset'} ms, seed {seed}"
+        )
+        overrides = hold_override_env_keys()
+        if overrides:
+            self.setup_notes.append(
+                "Hold env overrides are set ("
+                + ", ".join(overrides)
+                + "); bounds use the effective NBIRTH holds"
+            )
 
     # ---- triggers -----------------------------------------------------
     def trigger_release(self, step: StepResult) -> bool:
@@ -1071,12 +1406,19 @@ class SliceRun:
 
     def load_bounds(self) -> PhysicalBounds:
         if getattr(self, "bounds", None) is None:
+            if not self.nbirth_metrics:
+                raise RuntimeError(
+                    "D-050 bounds need the session NBIRTH timings; none were received"
+                )
             profile = getattr(
                 self.args, "timing_profile", None,
             ) or os.environ.get("SIMULATOR_TIMING_PROFILE", DEFAULT_TIMING_PROFILE)
             time_scale = float(getattr(self.args, "time_scale", 10.0))
             self.bounds = load_physical_bounds(
-                REPO_ROOT, profile=profile, time_scale=time_scale,
+                REPO_ROOT,
+                nbirth=self.nbirth_metrics,
+                profile=profile,
+                time_scale=time_scale,
             )
             self.setup_notes.extend(self.bounds.setup_notes())
         return self.bounds
@@ -1092,10 +1434,13 @@ class SliceRun:
         the step's last expected event is received. Reaction-only steps are
         asserted against the 5 s wall-clock limit; physical-work steps (3d, 4)
         wait only up to a generous safety timeout and are asserted in sim time.
+        Step 4's dispatch itself is still checked against the 5 s wall limit.
         """
         bounds = self.load_bounds()
         previous: StepResult | None = None
-        for step_id, title, trigger, expectations in s1_plan(self.args.include_step4):
+        for step_id, title, trigger, expectations in s1_plan(
+            self.args.include_step4, profile=bounds.profile,
+        ):
             physical = step_id in PHYSICAL_STEPS
             tt_name = getattr(self, "tt_name", None)
             if physical:
@@ -1111,6 +1456,7 @@ class SliceRun:
                 expected=[e.label() for e in expectations], limit_s=limit_s,
                 sim_bound_s=sim_bound_s, sim_bound_formula=formula,
                 wall_asserted=not physical,
+                dispatch_limit_s=self.args.step_limit if step_id == "4" else None,
             )
             self.results.append(step)
             if any(not r.passed for r in self.results[:-1]):
@@ -1305,7 +1651,7 @@ def parse_args(argv=None):
     p.add_argument("--time-scale", type=float, default=float(os.environ.get("E2E_TIME_SCALE", "10")),
                    help="Simulation session time_scale (CI: 10, because import_v1 TT drives are 20-32 sim-s; QC/RTG holds add <= 5 sim-s and are not the binding wait). D-050 keeps this scale and asserts 3d/4 in sim time.")
     p.add_argument("--timing-profile", default=os.environ.get("SIMULATOR_TIMING_PROFILE", DEFAULT_TIMING_PROFILE),
-                   help="SimTiming profile used to derive crane-hold bounds (CI: fast).")
+                   help="Expected SIMULATOR_TIMING_PROFILE; must match NBIRTH Sim/Timing/Profile (CI: fast).")
     p.add_argument("--setup-timeout", type=float, default=180.0)
     p.add_argument("--quiet-period", type=float, default=1.0,
                    help="seconds to wait for stray events after the last step")
@@ -1323,8 +1669,14 @@ def main(argv=None) -> int:
     client = None
     fatal = ""
     try:
-        client = start_mqtt(args.mqtt_host, args.mqtt_port, args.uns_root, run.stream)
-        run.setup_notes.append(f"Subscribed to {args.uns_root}/# on {args.mqtt_host}:{args.mqtt_port}")
+        run.mqtt_client = start_mqtt(
+            args.mqtt_host, args.mqtt_port, args.uns_root, run.stream, birth=run.birth,
+        )
+        client = run.mqtt_client
+        run.setup_notes.append(
+            f"Subscribed to {args.uns_root}/# and {SPARKPLUG_NBIRTH_FILTER} "
+            f"on {args.mqtt_host}:{args.mqtt_port}"
+        )
         if run.validator is None:
             run.setup_notes.append("jsonschema not installed: execution events are NOT schema-validated")
         else:

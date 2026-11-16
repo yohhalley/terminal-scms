@@ -406,11 +406,11 @@ Decisions are quoted from the team vault note `03 Decisions.md` (Yael's answers 
 | D-038 | B11 | No-show container to a normal block, marked `SIMULATOR_FAILURE`, out of KPIs | step 3x, AC3.8f; AC4.7; R3 | Q16 |
 | D-039 | B12 | Realistic crane timings (QC ~90–120 s, RTG ~60–120 s) in the live demo only; fast in tests/CI; profile is a sim-init parameter; hoist/trolley motion after 1 Dec | header term; §0; K7; step 3 decisions, AC3.6, AC3.14; step 4 | — (changes D-012's hold for the live demo) |
 | D-040 | B13 | "Waiting for TT" shown separately, not idle; live demo at real time (×1) | §0; step 3 decisions, UI, AC3.12; R3 | — (`NO_TT` field still open: Q19) |
-| D-050 | Q24 | CI step limits at accelerated speed: 5 s wall-clock for reaction-only steps; sim-time layout bounds for TT-drive / crane-cycle steps (3d, 4). Refines D-037. | §0; AC3.11, AC4.9; TCL-007 e2e | Q24 |
 | D-041 | B14 | Screens show the ISO 6346 container number and its vessel slot | §0; step 1 decisions, UI, AC1.6; step 3d UI | — |
 | D-042 | B15 | Ops KPIs as headline, OEE shown too | R3 | — |
 | D-043 | B16 | MiniTOS shows failure reason and details; OES fills in a default code when none is given | step 3x, AC3.8g | — (which code: Q20) |
 | D-044, D-045 | — | Historian TimescaleDB; KG Neo4j with Cypher (context, not group A/B) | header; KG/historian cells | Q12 in part. D-046 (own terminal-specific historian/KG tooling, long term) doesn't change this spec. |
+| D-050 | Q24 | CI step limits at accelerated speed: 5 s wall-clock for reaction-only steps; sim-time layout bounds for TT-drive / crane-cycle steps (3d, 4). Refines D-037. | §0; AC3.11, AC4.9; TCL-007 e2e | Q24 |
 
 ### 6.2 Open questions for Yael
 

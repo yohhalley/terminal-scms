@@ -62,28 +62,42 @@ The exit code is 0 only when every step passes.
     positions at `(index-0.5)/count` along the lane, matching
     `sync_interface_positions`;
   - straight-line distance at `SIMULATOR_DEFAULT_SPEED_MPS` (compose default
-    4.0 m/s, same as HeadlessSimulator);
-  - the configured crane hold range from `SimTiming.PROFILES` for the active
-    profile (`SIMULATOR_TIMING_PROFILE`, CI: `fast`). The bound follows the
-    profile file, so TCL-034e's D-051 cycle change is picked up without a
-    hard-coded 60 s.
-  - Formulas (plus 0.2 s of slack, two 100 ms sim ticks):
-    - 3d: `max(TT drive from that TT's start to QC01.LANE.01, QC hold max)`
-      (the deposit is `max(hold end, TT ready)`);
-    - 4: `TT drive QC01.LANE.01 → BLOCK01.TL.01 + RTG gantry (0 s, unmodelled) + RTG hold max`.
-  - On the current `fast` profile and layout that is **28.704 s** sim for 3d
-    with TT02 (32.020 s with TT01) and **24.936 s** sim for step 4.
-- Wall-clock time for 3d and 4 is logged in the report and the job summary. It
-  is not asserted. The runner waits only up to a generous safety timeout
-  (`sim bound / time_scale + 30 s`) so a hung run still stops.
+    4.0 m/s, same as HeadlessSimulator). The runner fails if the seed sets
+    `driving_speed_empty_kmh`, which the simulator would prefer over this
+    default;
+  - the *effective* crane timings published on the session NBIRTH
+    (`Sim/Timing/QcHold{Min,Max}S`, `RtgHold{Min,Max}S`, and after
+    TCL-034e / D-058 `RtgPositioningS`). Those already include env
+    overrides (`SIMULATOR_{QC,RTG}_[HOLD_]WAIT_*`). The runner does not
+    parse `SimTiming.gd`. Slack is `2 × Sim/FixedStepMs` (else
+    `SIMULATOR_FIXED_STEP_MS`, else `SimClock.DEFAULT_STEP_MS`).
+  - Formulas (Δ is the configured tick; slack is 2 ticks, e.g. 0.2 s at 100 ms):
+    - 3d: `max(TT drive from that TT's start to QC01.LANE.01, QC hold max) + 2Δ`
+      (the deposit is `max(hold end, TT ready)`; QC hold is the NBIRTH
+      value, i.e. cycle − simulated motion after TCL-034e);
+    - 4: `max(TT drive QC01.LANE.01 -> BLOCK01.TL.01 + 2Δ, (RTG leg_started − H1) + Δ + RTG positioning) + RTG hold max`.
+      Positioning is the profile value (fast 0 s, realistic 30 s after
+      TCL-034e / D-058) and must not be added on top of the drive. The
+      second dispatch's wall-clock latency is not counted as sim time;
+      that dispatch itself is still checked against the 5 s wall-clock
+      reaction limit.
+  - On the current `fast` profile and layout, with a prompt dispatch, that
+    is **28.704 s** sim for 3d with TT02 (32.020 s with TT01) and
+    **24.936 s** sim for step 4.
+- Wall-clock time for 3d and 4 is logged in the report and the job summary.
+  The physical work is not asserted on the wall clock. The runner waits
+  only up to a generous safety timeout (`sim bound / time_scale + 30 s`)
+  so a hung run still stops. Step 4's dispatch reaction (request to first
+  `leg_dispatched`) is asserted against the 5 s wall-clock limit.
 - A flaky or slow run gets a ticket, with the uploaded report and logs attached.
   **Never raise the 5 s reaction limit or loosen a layout bound to make a run green.**
 
 ## Fast timings (TCL-034) and CI speed
 
 CI and this job set `SIMULATOR_TIMING_PROFILE=fast` in `.env` so OES forwards it on
-the session claim (D-039). The fast profile's crane holds are 2..5 sim seconds (an
-assumption, Q22). The live demo is ×1 (D-040). This job keeps `E2E_TIME_SCALE=10`
+the session claim (D-039). The bounds use the holds (and positioning) the
+running session publishes on NBIRTH, currently 2..5 sim seconds on `fast`.
+The live demo is ×1 (D-040). This job keeps `E2E_TIME_SCALE=10`
 because the TT drives on import_v1 are 20–32 sim seconds (QC/RTG holds add ≤ 5
 sim seconds and are not on the 3d critical path). At ×1 those drives cannot
 finish in 5 s of wall-clock: run 43690094196 failed step 3d at 5.0 s after
