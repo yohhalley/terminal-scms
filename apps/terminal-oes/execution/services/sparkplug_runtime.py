@@ -303,6 +303,12 @@ def _advance_sim_clock(session, metrics):
         session.save(update_fields=["last_sim_time_ms", "updated_at"])
 
 
+def _optional_positive_int(metrics, name):
+    """A Sparkplug Int64 metric that must be > 0; missing or invalid is None."""
+    value = _optional_int(metrics, name)
+    return value if value and value > 0 else None
+
+
 def _handle_nbirth(session, document, metrics):
     _require_session_identity(session, metrics)
     if "bdSeq" not in metrics:
@@ -325,8 +331,20 @@ def _handle_nbirth(session, document, metrics):
         session.start_epoch_ms = start_epoch
     command_ttl_s = _optional_int(metrics, "Sim/Timing/CommandTtlS")
     session.command_ttl_s = command_ttl_s if command_ttl_s and command_ttl_s > 0 else None
-    no_show_s = _optional_int(metrics, "Sim/Timing/TtNoShowTimeoutS")
-    session.tt_no_show_timeout_s = no_show_s if no_show_s and no_show_s > 0 else None
+    # TCL-034 / TCL-011 §6.1: persist every no-show and stall param Godot ran with.
+    session.tt_no_show_timeout_s = _optional_positive_int(metrics, "Sim/Timing/TtNoShowTimeoutS")
+    session.qc_no_show_timeout_s = _optional_positive_int(metrics, "Sim/Timing/QcNoShowTimeoutS")
+    session.rtg_no_show_timeout_s = _optional_positive_int(metrics, "Sim/Timing/RtgNoShowTimeoutS")
+    session.leg_stall_timeout_s = _optional_positive_int(metrics, "Sim/Timing/LegStallTimeoutS")
+    profile = str(metrics.get("Sim/Timing/Profile") or "").strip()
+    # models.SimulationSession.timing_profile max_length=32; Postgres enforces it.
+    limit = SimulationSession._meta.get_field("timing_profile").max_length
+    if len(profile) > limit:
+        logger.warning(
+            "Sim/Timing/Profile %r exceeds %s characters; truncated.", profile, limit,
+        )
+        profile = profile[:limit]
+    session.timing_profile = profile or None
     session.save()
     # TL review B-2: hand-offs left pending by an abandoned earlier session of
     # this site are closed, so they never lock a CHE out of this run.

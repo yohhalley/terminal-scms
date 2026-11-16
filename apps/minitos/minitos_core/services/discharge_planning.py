@@ -19,9 +19,13 @@ adopted, not planned again. Since TCL-010b the import_v1 seed creates no
 orders, so on the demo path every order is created here ("1 created, 0
 adopted"); adoption covers reruns.
 
-The yard slot is a random free ground slot (tier 1) of the yard block served
-by the block lane, drawn from a seeded ``random.Random`` (D-016: the same
-visit gives the same slots on a rerun). Tests can pass their own ``rng``.
+The yard slot is a random free slot of BLOCK01 (the block served by the
+block lane), drawn from a seeded ``random.Random`` (D-016: the same scenario
+seed and visit give the same slots on a rerun). TCL-012 fills ground (tier 1)
+first, then stacks on higher tiers up to ``StorageGrid.max_tier`` without
+floating containers. TCL-012 owns the block choice, what "free" means, the
+stacking order and the seed: see ``services.yard_planning``. Tests can pass
+their own ``rng``.
 """
 
 import itertools
@@ -40,10 +44,10 @@ from minitos_core.models import (
     OrderLeg,
     OrderLegRouteEdge,
     OrderRoutePlan,
-    Position,
     TransferInterface,
     WorkQueue,
 )
+from minitos_core.services import yard_planning
 from minitos_core.services.routing import _endpoint_node, _shortest_path
 
 logger = logging.getLogger(__name__)
@@ -76,16 +80,15 @@ class DischargePlanningError(ValidationError):
 
 
 def default_rng(visit):
-    """Seeded RNG for the yard slot draw: same visit -> same slots (D-016)."""
-    # TODO(TCL-012): once TCL-012 lands, seed this from the scenario seed plus
-    # the visit id (TL decision on PR #34), instead of location + visit name.
-    return random.Random(f'TCL-010:{visit.location_id}:{visit.name}')
+    """Seeded RNG for the yard slot draw (D-016): TCL-012 seeds it from the
+    scenario seed plus the visit id (TL decision on PR #34)."""
+    return yard_planning.slot_rng(visit)
 
 
 def discharge_container_visits(visit):
     return ContainerVisit.objects.filter(
         ib_carrier=visit, category__in=DISCHARGE_CATEGORIES, status__in=ON_VESSEL_STATUSES,
-    ).select_related('container_number').order_by('pk')
+    ).select_related('container_number__iso_type').order_by('pk')
 
 
 def existing_discharge_order(container_visit):
@@ -127,10 +130,12 @@ def _qc_lane(visit, layout):
 
 
 def _block_lane(visit, layout):
-    for interface in TransferInterface.objects.filter(
+    lanes = TransferInterface.objects.filter(
         asset__layout_version=layout, interface_kind=TransferInterface.VEHICLE_LANE,
         storage_grid__isnull=False,
-    ).select_related('storage_grid').order_by('code'):
+    ).select_related('storage_grid').order_by('code')
+    # TCL-012: BLOCK01 is the import block when the layout has it.
+    for interface in yard_planning.prefer_import_block(lanes):
         position = _first_lane_position(interface)
         if position is not None:
             return interface, position
@@ -158,11 +163,10 @@ def _work_queue(visit):
 
 
 def free_yard_slots(grid):
-    """Free ground slots (tier 1) of ``grid`` that a plan can still reserve."""
-    return Position.objects.filter(
-        pile__storage_grid=grid, tier=1, container_visit__isnull=True,
-        is_reserved=False, is_occupied=False, operational_position__isnull=False,
-    ).select_related('operational_position').order_by('pk')
+    """Unheld yard slots of ``grid`` that a plan can still reserve (TCL-012
+    definition in ``services.yard_planning``; stacking order is applied by
+    ``choose_slots``)."""
+    return yard_planning.free_yard_slots(grid)
 
 
 def _vessel_slot(visit, layout, qc_interface, qc_position, container_visit):
@@ -270,16 +274,40 @@ def check_discharge_plannable(visit):
     block_interface, _ = _block_lane(visit, layout)
     _equipment_types(visit)
     _work_queue(visit)
-    free = free_yard_slots(block_interface.storage_grid).count()
-    if free < len(pending):
-        _no_free_slot(visit, block_interface.storage_grid, len(pending), free)
+    grid = block_interface.storage_grid
+    free = list(free_yard_slots(grid))
+    if len(free) < len(pending):
+        _no_free_slot(visit, grid, len(pending), len(free))
+    # Same reachability rule as the real draw (TL N1 / BE S-1 on #38); the
+    # RNG does not change how many slots are reachable, only which.
+    _choose_slots(visit, grid, free, pending, random.Random(0))
 
 
-def _no_free_slot(visit, grid, needed, free):
+def _no_free_slot(visit, grid, needed, free, detail=''):
     _fail(
         visit, CODE_NO_FREE_SLOT,
-        f'{needed} container(s) need a yard slot but block {grid.name} has {free} free ground slot(s)',
+        f'{needed} container(s) need a yard slot but block {grid.name} has {free} free slot(s){detail}',
     )
+
+
+def _choose_slots(visit, grid, free, pending, rng):
+    """``yard_planning.choose_slots`` for the ``pending`` container visits (each
+    slot fits its container's length by the bay rule), with a shortage (e.g. a
+    gappy grid where stacking leaves fewer slots reachable than are free, or no
+    free slot of a compatible bay) mapped to ``discharge_no_free_slot`` instead
+    of leaking a ValueError (500)."""
+    needed = len(pending)
+    try:
+        return yard_planning.choose_slots(free, needed, rng, containers=pending)
+    except ValueError as exc:
+        available = getattr(exc, 'available', 0)
+        if getattr(exc, 'size_mismatch', False):
+            detail = f' that fit the container sizes ({exc})'
+        elif available < len(free):
+            detail = ' reachable without a floating stack'
+        else:
+            detail = ''
+        _no_free_slot(visit, grid, needed, available, detail=detail)
 
 
 @transaction.atomic
@@ -315,7 +343,7 @@ def plan_visit_discharge(visit, rng=None):
     if len(free) < len(pending):
         _no_free_slot(visit, grid, len(pending), len(free))
     rng = rng or default_rng(visit)
-    slots = rng.sample(free, len(pending))
+    slots = _choose_slots(visit, grid, free, pending, rng)
     road = _road_edges(visit, layout, qc_position, tl_position)
 
     next_priority = FIRST_PRIORITY + Order.objects.filter(

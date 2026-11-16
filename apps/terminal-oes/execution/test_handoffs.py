@@ -198,6 +198,18 @@ class HandoffTestBase(TestCase):
         self.result(rtg_cmd, "completed", 130_000)
         return tt
 
+    def run_h2(self):
+        """H1 transferred and H2 dispatched, both sides still pending."""
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        self.transfer_h1(qc_cmd, tt_cmd)
+        dispatch_next_operation(self.order.pk)
+        h2_cmd = self.command_for(tt, "assign_handoff")
+        rtg_cmd = self.command_for(self.rtg)
+        self.result(rtg_cmd, "acknowledged", 20_000)
+        self.result(rtg_cmd, "started", 20_000)
+        self.result(tt_cmd, "arrived_at_destination", 80_000)
+        return tt, tt_cmd, h2_cmd, rtg_cmd
+
 
 class PairedDispatchTests(HandoffTestBase):
     def test_qc_and_tt_are_dispatched_together_with_one_handoff_id(self):
@@ -408,12 +420,53 @@ class NoShowTests(HandoffTestBase):
         self.assertEqual(HandoffExceptionReason.SIMULATOR_FAILURE.label, "Simulator failure")
         self.assertNotIn("NO_TT_TIMEOUT", HandoffExceptionReason.values)
 
-    def test_timed_out_after_transfer_is_rejected(self):
+    def test_timed_out_after_transfer_is_rejected_and_flagged(self):
+        """S-1: a no-show after transfer is a Godot contradiction: WARNING + conflict."""
         qc_cmd, tt, tt_cmd = self.run_h1()
         self.result(qc_cmd, "handoff_completed", 20_000)
-        receipt = self.result(qc_cmd, "handoff_timed_out", 320_000)
+        with self.assertLogs("execution.services.handoffs", level="WARNING") as captured:
+            receipt = self.result(qc_cmd, "handoff_timed_out", 320_000)
         self.assertEqual(receipt.status, CommandResultReceipt.REJECTED)
-        self.assertEqual(Handoff.objects.get().status, Handoff.TRANSFERRED)
+        self.assertEqual(receipt.reason, "handoff_not_pending")
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.status, Handoff.TRANSFERRED)
+        self.assertEqual(handoff.conflict_count, 1)
+        self.assertIn("giver handoff_timed_out after transfer", handoff.last_conflict)
+        self.assertTrue(any("conflict" in line.lower() for line in captured.output))
+
+    def test_timed_out_after_h2_transfer_is_rejected_and_flagged(self):
+        """S-1: TT→RTG already transferred, then the RTG reports handoff_timed_out."""
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        self.result(h2_cmd, "handoff_completed", 95_000)
+        self.result(rtg_cmd, "handoff_completed", 95_000)
+        with self.assertLogs("execution.services.handoffs", level="WARNING"):
+            receipt = self.result(rtg_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.REJECTED)
+        self.assertEqual(receipt.reason, "handoff_not_pending")
+        handoff = Handoff.objects.get(giver_equipment=tt)
+        self.assertEqual(handoff.status, Handoff.TRANSFERRED)
+        self.assertEqual(handoff.conflict_count, 1)
+        self.assertIn("receiver handoff_timed_out after transfer", handoff.last_conflict)
+
+    def test_timed_out_from_the_wrong_role_is_rejected(self):
+        """The role guard is now the only role check; a wrong HandoffRole is rejected."""
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        receipt = self.result(
+            tt_cmd, "handoff_timed_out", 320_000,
+            **{"Command/Result/HandoffRole": "giver"},
+        )
+        self.assertEqual(receipt.status, CommandResultReceipt.REJECTED)
+        self.assertEqual(receipt.reason, "handoff_role_mismatch")
+        self.assertEqual(Handoff.objects.get().status, Handoff.PENDING)
+
+    def test_unknown_absent_type_warns_and_falls_back_to_tt(self):
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        tt.equipment_type_code = "XYZ"
+        tt.save(update_fields=["equipment_type_code"])
+        with self.assertLogs("execution.services.handoffs", level="WARNING") as captured:
+            self.result(qc_cmd, "handoff_timed_out", 320_000)
+        self.assertEqual(Handoff.objects.get().exception_detail, "no TT within 300 s")
+        self.assertTrue(any("Unknown equipment type code" in line for line in captured.output))
 
     def test_operator_cancel_via_api_queues_a_cancel_dcmd(self):
         """B10/TCL-028: an OES cancel tells the CHE."""
@@ -433,6 +486,88 @@ class NoShowTests(HandoffTestBase):
         # The QC gets its cancel and, per TL review B-2, so does the paired TT.
         tt_cmd = self.command_for(self.chosen_tt())
         self.assertEqual(targets, {str(qc_cmd.command_id), str(tt_cmd.command_id)})
+
+    def test_receiver_no_show_at_h1_is_accepted(self):
+        """W2: the TT (receiver) reports handoff_timed_out; detail is no QC."""
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        receipt = self.result(tt_cmd, "handoff_timed_out", 320_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.status, Handoff.EXCEPTION)
+        self.assertEqual(handoff.exception_reason, "SIMULATOR_FAILURE")
+        self.assertEqual(handoff.exception_detail, "no QC within 300 s")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, ExecutionOrder.COMPLETE)
+        self.assertEqual(self.order.failure_reason, "SIMULATOR_FAILURE")
+        data = OutboxEvent.objects.get(payload__data__event="handoff_exception").payload["data"]
+        self.assertEqual(data["detail"], "no QC within 300 s")
+        self.assertEqual(data["reason"], "SIMULATOR_FAILURE")
+
+    def test_giver_no_show_at_h2_is_accepted_on_the_assign_id(self):
+        """W3: the TT reports on the assign_handoff command; detail is no RTG."""
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        receipt = self.result(h2_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        handoff = Handoff.objects.get(giver_equipment=tt)
+        self.assertEqual(handoff.status, Handoff.EXCEPTION)
+        self.assertEqual(handoff.exception_detail, "no RTG within 300 s")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, ExecutionOrder.COMPLETE)
+        data = OutboxEvent.objects.get(payload__data__event="handoff_exception").payload["data"]
+        self.assertEqual(data["detail"], "no RTG within 300 s")
+        # The assign_handoff command is the one the receipt is tied to.
+        self.assertEqual(receipt.command_id, h2_cmd.command_id)
+
+    def test_receiver_no_show_at_h2_is_accepted(self):
+        """W4: the RTG (receiver) reports handoff_timed_out; detail is no TT."""
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        receipt = self.result(rtg_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        handoff = Handoff.objects.get(receiver_equipment=self.rtg)
+        self.assertEqual(handoff.status, Handoff.EXCEPTION)
+        self.assertEqual(handoff.exception_detail, "no TT within 300 s")
+        data = OutboxEvent.objects.get(payload__data__event="handoff_exception").payload["data"]
+        self.assertEqual(data["detail"], "no TT within 300 s")
+
+    def test_first_report_wins_and_the_other_side_is_a_noop(self):
+        """First applied wins; the later report (even the giver) is a logged no-op."""
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        first = self.result(rtg_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(first.status, CommandResultReceipt.APPLIED)
+        events = OutboxEvent.objects.filter(payload__data__event="handoff_exception").count()
+        with self.assertLogs("execution.services.handoffs", level="WARNING") as captured:
+            second = self.result(h2_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(second.status, CommandResultReceipt.INFORMATIONAL)
+        self.assertEqual(Handoff.objects.get(giver_equipment=tt).status, Handoff.EXCEPTION)
+        self.assertEqual(Handoff.objects.get(giver_equipment=tt).exception_detail, "no TT within 300 s")
+        self.assertEqual(
+            OutboxEvent.objects.filter(payload__data__event="handoff_exception").count(),
+            events,
+        )
+        self.assertTrue(any("S1 same-tick rule did not hold" in line for line in captured.output))
+
+    def test_timed_out_after_cancel_is_an_idempotent_noop(self):
+        """Real race: TT leg fails (B-2 abort), then the RTG's H2 no-show arrives."""
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        self.result(tt_cmd, "failed", 90_000, **{"Command/Result/Reason": "spreader fault"})
+        handoff = Handoff.objects.get(giver_equipment=tt)
+        self.assertEqual(handoff.status, Handoff.CANCELLED)
+        with self.assertLogs("execution.services.handoffs", level="INFO") as captured:
+            receipt = self.result(rtg_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.INFORMATIONAL)
+        handoff.refresh_from_db()
+        self.assertEqual(handoff.status, Handoff.CANCELLED)
+        self.assertTrue(any("Idempotent no-op" in line for line in captured.output))
+
+    def test_no_show_detail_uses_the_matching_timeout_for_the_absent_type(self):
+        """Each wait quotes its own session N (Qc for W2, Rtg for W3)."""
+        self.session.qc_no_show_timeout_s = 90
+        self.session.rtg_no_show_timeout_s = 150
+        self.session.tt_no_show_timeout_s = 180
+        self.session.save()
+        qc_cmd, tt, tt_cmd = self.run_h1()
+        self.result(tt_cmd, "handoff_timed_out", 200_000)
+        self.assertEqual(Handoff.objects.get().exception_detail, "no QC within 90 s")
 
 
 class TtSelectionTests(HandoffTestBase):
@@ -644,6 +779,47 @@ class SimTimeExpiryTests(HandoffTestBase):
         # An invalid value on a rebirth is not kept (falls back like CommandTtlS).
         self.nbirth([{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": 0}])
         self.assertIsNone(self.session.tt_no_show_timeout_s)
+
+    def test_nbirth_persists_all_timing_timeout_params(self):
+        """TCL-034 (c): all three no-show timeouts, LegStallTimeoutS and Profile."""
+        self.nbirth([
+            {"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": 180},
+            {"name": "Sim/Timing/QcNoShowTimeoutS", "type": "Int64", "value": 90},
+            {"name": "Sim/Timing/RtgNoShowTimeoutS", "type": "Int64", "value": 150},
+            {"name": "Sim/Timing/LegStallTimeoutS", "type": "Int64", "value": 600},
+            {"name": "Sim/Timing/Profile", "type": "String", "value": "fast"},
+        ])
+        self.assertEqual(self.session.tt_no_show_timeout_s, 180)
+        self.assertEqual(self.session.qc_no_show_timeout_s, 90)
+        self.assertEqual(self.session.rtg_no_show_timeout_s, 150)
+        self.assertEqual(self.session.leg_stall_timeout_s, 600)
+        self.assertEqual(self.session.timing_profile, "fast")
+        # A W3 report quotes the session's RTG N, not the OES env fallback.
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        with self.settings(SIMULATOR_SIM_SETTINGS={"SIMULATOR_RTG_NO_SHOW_TIMEOUT_S": "300"}):
+            self.result(h2_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(Handoff.objects.get(giver_equipment=tt).exception_detail, "no RTG within 150 s")
+        # A rebirth with zeros / a blank profile clears the stored values.
+        self.nbirth([
+            {"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": 0},
+            {"name": "Sim/Timing/QcNoShowTimeoutS", "type": "Int64", "value": 0},
+            {"name": "Sim/Timing/RtgNoShowTimeoutS", "type": "Int64", "value": 0},
+            {"name": "Sim/Timing/LegStallTimeoutS", "type": "Int64", "value": 0},
+            {"name": "Sim/Timing/Profile", "type": "String", "value": ""},
+        ])
+        self.assertIsNone(self.session.tt_no_show_timeout_s)
+        self.assertIsNone(self.session.qc_no_show_timeout_s)
+        self.assertIsNone(self.session.rtg_no_show_timeout_s)
+        self.assertIsNone(self.session.leg_stall_timeout_s)
+        self.assertIsNone(self.session.timing_profile)
+
+    def test_nbirth_truncates_a_timing_profile_longer_than_the_field(self):
+        """Postgres would DataError on >32 chars; SQLite would not, so we truncate."""
+        with self.assertLogs("execution.services.sparkplug_runtime", level="WARNING") as captured:
+            self.nbirth([{"name": "Sim/Timing/Profile", "type": "String", "value": "x" * 40}])
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.timing_profile, "x" * 32)
+        self.assertTrue(any("truncated" in line for line in captured.output))
 
     def test_ttl_comes_from_nbirth_with_600_s_fallback(self):
         self.nbirth([{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": 90}])

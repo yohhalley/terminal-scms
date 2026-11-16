@@ -293,8 +293,9 @@ class ImportV1SeedContentTests(TestCase):
         number = container.container_number_id
         self.assertEqual(number, 'MSCU1234566')
         self.assertEqual(int(number[-1]), iso6346_check_digit(number[:10]))
-
         self.assertEqual(visit.status, CarrierVisit.ARRIVED)
+        # The K6 / step 3 planned-order precondition is asserted after InOperation
+        # (test_k6_planned_discharge_order_exists_after_inoperation; D-048, TCL-010).
 
     def test_seed_creates_no_discharge_orders(self):
         # TCL-010b / D-048: planning at InOperation is the only creation path.
@@ -314,6 +315,18 @@ class ImportV1SeedContentTests(TestCase):
         self.assertEqual(slot.logical_address['stow'], '0330682')
         self.assertEqual(slot.logical_address['bay'] % 2, 1)
         self.assertEqual(slot.logical_address['container_visit_id'], container.pk)
+
+    def test_k6_planned_discharge_order_exists_after_inoperation(self):
+        # #25's K6 precondition, aligned with D-048 / TCL-010 / TCL-010b: the
+        # 3-leg planned discharge order is created at InOperation, not at seed.
+        result = run_step('import_v1', 'visit-in-operation')
+        self.assertEqual(result.visit.status, CarrierVisit.IN_OPERATION)
+        order = Order.objects.get()
+        self.assertEqual((order.order_type, order.status), (Order.MOVE_IN, Order.PLANNED))
+        self.assertEqual(order.from_position.logical_address['stow'], '0330682')
+        self.assertEqual(order.to_position.stack_position.pile.storage_grid.name, 'BLOCK01')
+        self.assertEqual([item.created for item in result.planned], [True])
+        self.assertIn('(1 created, 0 adopted)', result.summary())
 
     def test_block_has_room_for_five_imports(self):
         free = Position.objects.filter(
@@ -401,6 +414,7 @@ class ImportV1PlanningAtInOperationTests(TestCase):
 
 class ImportV1ReleaseStepTests(TestCase):
     def setUp(self):
+        # D-048 / TCL-010: release is the step after the visit is InOperation.
         reset_scenario('import_v1')
         run_step('import_v1', 'visit-in-operation')
 

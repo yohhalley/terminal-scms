@@ -107,7 +107,9 @@ file preserves active commands and recent CHE state across process restart.
   else the highest `Sim/TimeMs` OES has seen on any NDATA/DDATA/DBIRTH of the
   session. The TTL is NBIRTH `Sim/Timing/CommandTtlS`, else
   `EQUIPMENT_COMMAND_TTL_SIM_SECONDS` (default 600). OES also sends it to the
-  simulator as `SIMULATOR_COMMAND_TTL_S` in the claim environment.
+  simulator as `SIMULATOR_COMMAND_TTL_S` in the claim environment. OES stores
+  the NBIRTH timing params Godot ran with: `Sim/Timing/{Tt,Qc,Rtg}NoShowTimeoutS`,
+  `Sim/Timing/LegStallTimeoutS` and `Sim/Timing/Profile` (TCL-034).
 - **Paired dispatch (T-006).** A hand-off pair shares `Command/HandoffId` and
   carries `Command/HandoffRole` (`giver`/`receiver`), `Command/CounterpartCheId`
   and `Command/TransferPositionId`. A QC giver gets `Command/Type=qc_discharge`.
@@ -135,16 +137,22 @@ file preserves active commands and recent CHE state across process restart.
   `Event/TimeMs` and `Sim/EventSeq`. `arrived_at_source`,
   `arrived_at_destination` and `waiting_for_handoff` are informational. One
   `handoff_completed` per side; the first emits `container_transferred`.
-  `handoff_timed_out` (QC giver) raises `handoff_exception` with
-  `reason` `SIMULATOR_FAILURE` and `detail` `"no TT within <N> s"` (N = this
-  session's NBIRTH `Sim/Timing/TtNoShowTimeoutS`, else OES
-  `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, else 300), and cancels the remaining
-  legs (cancel `Command/Reason` = the same code); the order ends complete by
-  exception (D-017). `reason` is an extensible enum (OES
-  `HandoffExceptionReason`, MiniTOS `ExceptionReason`); MiniTOS rejects a
-  missing reason (`reason_required`) or an unknown one (`reason_unknown`).
-  `detail` is optional free text. A rejected result is stored with a reason
-  and logged, never rolled back into the DDATA.
+  `handoff_timed_out` from either side (QC or TT at H1, TT or RTG at
+  H2) raises `handoff_exception` with `reason` `SIMULATOR_FAILURE` and
+  `detail` `"no <QC|TT|RTG> within <N> s"`. The absent type is the
+  counterpart of the waiter; N is that type's session timeout
+  (`Sim/Timing/{Qc,Tt,Rtg}NoShowTimeoutS`, else the matching
+  `SIMULATOR_*_NO_SHOW_TIMEOUT_S`, else 300). Remaining live legs are
+  cancelled (`Command/Reason` = the same code) and the order ends complete
+  by exception (D-017). A late or duplicate report on a hand-off already in
+  `exception` or `cancelled` is an INFORMATIONAL no-op; a report after
+  `transferred` is a contract breach (WARNING, `handoff_not_pending`,
+  flagged on the hand-off) and does not undo the transfer. `reason` is an
+  extensible enum (OES `HandoffExceptionReason`, MiniTOS
+  `ExceptionReason`); MiniTOS rejects a missing reason (`reason_required`)
+  or an unknown one (`reason_unknown`). `detail` is optional free text. A
+  rejected result is stored with a reason and logged, never rolled back
+  into the DDATA.
 - **Aborted hand-offs.** A failed or cancelled leg cancels its pending
   hand-off and the counterpart leg (cancel DCMD). Stopping, a runner
   stop/failure, NDEATH after stop, or NBIRTH of a new session closes the
