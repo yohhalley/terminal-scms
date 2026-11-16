@@ -1505,8 +1505,9 @@ func _check_leg_stalls(step_ms: int):
 		_mark_che_idle(che)
 		_ches[che_id] = che
 		_active_commands.erase(che_key)
-		# One report per HandoffId: a stall must close the hand-off so the
-		# counterpart's no-show clock cannot later publish handoff_timed_out.
+		# One outcome per HandoffId: a stall must close the hand-off so the
+		# counterpart's no-show clock cannot later publish handoff_timed_out
+		# (and, with no reporter, nothing repeats under D-059).
 		if not handoff_id.is_empty():
 			_mark_handoff_closed(handoff_id)
 		_save_runtime_state()

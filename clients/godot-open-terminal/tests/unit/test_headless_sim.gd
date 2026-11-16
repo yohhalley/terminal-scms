@@ -267,7 +267,7 @@ func _test_qc_state_machine_no_show_and_cancel():
 	var events = QcDischarge.step(command, 310000, 0)
 	_assert(_names(events) == ["handoff_timed_out"], "D-013: handoff_timed_out after 300 s sim time in waiting_for_tt")
 	_assert(command.work_state == QcDischarge.WAITING_FOR_TT and int(command.load_container_visit_id) == 101, "QC keeps the container after the time-out")
-	_assert(QcDischarge.step(command, 400000, 0).is_empty(), "handoff_timed_out is published once")
+	_assert(QcDischarge.step(command, 400000, 0).is_empty(), "QcDischarge alone emits handoff_timed_out once (D-059 repeats come from the simulator)")
 	_assert(QcDischarge.step(command, 410000, 9).is_empty(), "A TT arriving after the time-out gets no transfer")
 	events = QcDischarge.cancel(command)
 	_assert(_names(events) == ["cancelled"] and str(events[0].work_state) == QcDischarge.IDLE, "Cancel emits cancelled in idle")
@@ -1636,7 +1636,7 @@ func _test_profile_determinism():
 	_assert(not real_a.is_empty() and real_a == real_b, "realistic: deterministic per seed")
 	_assert(fast_a != real_a, "The profile changes the run")
 	# A fixed realistic cycle (TCL-034e default [60, 60]) draws no randomness, so
-	# another seed only changes the run when the cycle is a range (Y1).
+	# another seed only changes the run when the cycle is a range (D-054 fixed it at 60 s).
 	if _realistic_hold("qc")[0] < _realistic_hold("qc")[1] or _realistic_hold("rtg")[0] < _realistic_hold("rtg")[1]:
 		_assert(_profile_trace(77, "realistic") != real_a, "realistic: another seed changes the run")
 	else:
@@ -1769,7 +1769,7 @@ func _assert_same_tick_w3_w4(reversed_order: bool):
 	_assert(str(item.m.get("Command/Result/HandoffId", "")) == HANDOFF_ID_2, "S1: the report carries H2 (%s)" % label)
 	_assert(int(item.m.get("Sim/TimeMs", 0)) == start_ms + 30000, "S1: both clocks expire at wait start + 30 s (%s)" % label)
 	_assert(_events_of(_results(simulator), "RTG01").count("handoff_timed_out") == 0, "S1: the receiver (RTG / W4) does not publish (%s)" % label)
-	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 1, "S1: the giver publishes once (%s)" % label)
+	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 1, "S1: the giver alone publishes the first report (%s)" % label)
 	_assert(str(simulator._active_commands[RTG_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID_2 and bool(simulator._active_commands[RTG_ID].get("handoff_timed_out", false)), "S1: the hand-off is closed locally on the receiver too (%s)" % label)
 	_assert(not _events_of(_results(simulator), "RTG01").has("handoff_completed") and not _events_of(_results(simulator), "TT01").has("failed"), "S1: no transfer and no stall (%s)" % label)
 	# A later step must not let the closed receiver publish or complete.
@@ -1843,7 +1843,7 @@ func _assert_same_tick_w1_w2(reversed_order: bool):
 	_assert(str(item.m.get("Command/Result/HandoffId", "")) == HANDOFF_ID, "S1: the report carries H1 (%s)" % label)
 	_assert(int(item.m.get("Sim/TimeMs", 0)) == start_ms + 30000, "S1: both clocks expire at wait start + 30 s (%s)" % label)
 	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 0, "S1: the receiver (TT / W2) does not publish (%s)" % label)
-	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 1, "S1: the giver publishes once (%s)" % label)
+	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 1, "S1: the giver alone publishes the first report (%s)" % label)
 	_assert(str(simulator._active_commands[TT_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID, "S1: the hand-off is closed locally on the receiver too (%s)" % label)
 	_assert(not _events_of(_results(simulator), "QC01").has("handoff_completed") and not _events_of(_results(simulator), "TT01").has("failed"), "S1: no transfer and no stall (%s)" % label)
 	_run_steps(simulator, 20)

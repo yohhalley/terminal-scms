@@ -153,13 +153,30 @@ file preserves active commands and recent CHE state across process restart.
   or an unknown one (`reason_unknown`). `detail` is optional free text. A
   rejected result is stored with a reason and logged, never rolled back
   into the DDATA.
-- **No-show switch (TCL-034e, D-053, `Contract/Version` `tcl-002.3`).** NBIRTH
+- **No-show switch (TCL-034e, D-053, D-055, D-060).** NBIRTH
   `Sim/Timing/NoShowTimeoutEnabled` (Boolean, env
   `SIMULATOR_NO_SHOW_TIMEOUT_ENABLED`, default true) is one switch for every
   no-show clock (W1 to W4). When it is false Godot never sends
-  `handoff_timed_out`; waits are still reported (`waiting_for_handoff`). The
-  leg stall clock is not affected. Each waiting period starts its own clock,
-  and there is at most one `handoff_timed_out` per `HandoffId`.
+  `handoff_timed_out`; waits are still reported (`waiting_for_handoff`), and
+  the leg stall clock keeps running in hand-off waits as the backstop (D-060):
+  after `Sim/Timing/LegStallTimeoutS` (default 600 s) the waiting leg gets
+  `failed` with reason `SIMULATOR_FAILURE`. With the switch on, waits pause
+  the stall clock. Each waiting period starts its own clock.
+- **Repeated no-show reports (TCL-034e, D-059, `Contract/Version`
+  `tcl-002.4`).** One CHE reports per `HandoffId` (on a same-tick tie, the
+  giver). A CHE that keeps waiting re-reports `handoff_timed_out` every
+  timeout period (the same N, default 300 s) until its leg is cancelled, each
+  with a new `Command/Result/Id` on the same command id. OES raises the
+  exception once, and a late or duplicate report on a hand-off already in
+  `exception` or `cancelled` (same side, any time later, also after the order
+  has completed by exception) is an INFORMATIONAL no-op: no second
+  `handoff_exception`, no cancel, no conflict flag.
+- **RTG positioning (TCL-034e, D-058, `tcl-002.4`).** NBIRTH
+  `Sim/Timing/RtgPositioningS` (Int64; `realistic` 30, `fast` 0): from its
+  command the RTG positions (`gantry_to_bay`) this long before it can pick.
+  The RTG no-show clock (W4) starts when positioning ends.
+  `Sim/Timing/RtgHold{Min,Max}S` stay the effective hold after the pick
+  (realistic 60 s cycle − 30 s positioning = 30 s).
 - **Aborted hand-offs.** A failed or cancelled leg cancels its pending
   hand-off and the counterpart leg (cancel DCMD). Stopping, a runner
   stop/failure, NDEATH after stop, or NBIRTH of a new session closes the

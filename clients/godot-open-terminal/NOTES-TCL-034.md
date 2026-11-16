@@ -1,11 +1,14 @@
 # TCL-034: simulation timing parameters, no-show time-outs and leg stall clock
 
-> **TCL-034e update (D-051 to D-053):** see `NOTES-TCL-034e.md`. The realistic
-> profile is now a 60 s QC and RTG cycle (hold = cycle - simulated motion). W4
-> starts at ready-to-pick. A global no-show switch
+> **TCL-034e update (D-051 to D-060):** see `NOTES-TCL-034e.md`. The realistic
+> profile is now a 60 s QC and RTG cycle (hold = cycle - simulated motion; the
+> RTG positions 30 s before the pick, D-058). W4 starts at ready-to-pick, after
+> positioning. A global no-show switch
 > `SIMULATOR_NO_SHOW_TIMEOUT_ENABLED` / `Sim/Timing/NoShowTimeoutEnabled`
-> (default true) is back. `ContractVersion` is `tcl-002.3`. The values below
-> that say otherwise are historical.
+> (default true) is back; when off, the stall clock is the backstop (D-060).
+> A no-show is reported again every period while the CHE keeps waiting
+> (D-059). `ContractVersion` is `tcl-002.4`. The values below that say
+> otherwise are historical.
 
 Implements the Godot side of the TCL-011 hand-off design (§6.1 to §6.3) and D-027
 (every CHE has the same failure logic; the time-out is a user parameter at
@@ -97,8 +100,9 @@ that break the margin are logged as warnings and are not rejected.
 * Same-tick giver-first rule (TCL-011 rev 2, S1): if the giver and receiver
   no-show clocks expire in the same tick, Godot publishes only the giver's
   `handoff_timed_out` and closes the hand-off locally. The receiver publishes
-  only if its clock expired and the giver's did not. One report per HandoffId,
-  independent of CHE iteration order. Covered by W3+W4 and W1+W2 regression
+  only if its clock expired and the giver's did not. One reporter per
+  HandoffId, independent of CHE iteration order (D-059: that reporter repeats
+  every period while it keeps waiting; see NOTES-TCL-034e). Covered by W3+W4 and W1+W2 regression
   tests (including reversed CHE maps) and a receiver-due-first case.
 * A stall on one side of an open hand-off closes it locally so the counterpart
   no-show cannot later publish a second `handoff_timed_out`.
