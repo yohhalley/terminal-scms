@@ -10,4 +10,4 @@ variant does the same with the realistic hold and no-show parameters. The QC
 deposit event is `handoff_completed`; device ids are MiniTOS CHE names
 (`QC01`, `TT01`).
 
-Not wired into `make test-godot` / CI yet.
+Wired into `make test-godot` and the `godot` CI job (fast profile, no broker).
