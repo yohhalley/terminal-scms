@@ -41,8 +41,8 @@
 | Time | Event times come from sim time (`Event/TimeMs = Sim/StartEpochMs + Sim/TimeMs`). The default `SIMULATOR_START_EPOCH_MS=1792886400000` is 2026-10-25T00:00Z. | `compose.yaml` [PR #13]; NOTES-TCL-014a |
 | Rerun | the same business states in the same order; payload bytes may differ (D-016) | D-016 |
 | Timing profile (D-039) | sim-init parameter: `fast` in tests and CI, `realistic` (QC ~90–120 s, RTG ~60–120 s) in the live demo only. **(not built:** S2 "Sim params" task) | D-039 |
-| Live demo speed (D-040) | the live demo runs at real time (×1): sim time = wall-clock time. CI speed is not stated (Q24). | D-040 |
-| Timing limits (D-037) | MiniTOS and OES show a consistent state within **2 s in the demo** and **5 s per step in CI**; event order is checked strictly. Replaces the Q10 proposal (5 s / 10 s). | D-037 |
+| Live demo speed (D-040) | the live demo runs at real time (×1): sim time = wall-clock time. CI runs at `E2E_TIME_SCALE=10`. | D-040, D-050 |
+| Timing limits (D-037, D-050) | MiniTOS and OES show a consistent state within **2 s in the demo**. In CI, reaction-only steps have a **5 s wall-clock** limit; steps with physical work (TT drive, crane cycle: import steps 3d and 4) are asserted in **sim time** from envelope timestamps against a layout-derived bound (D-050, closes Q24, refines D-037). Event order is checked strictly. Replaces the Q10 proposal (5 s / 10 s). | D-037, D-050 |
 | Simulation failures (D-027) | every CHE (QC, TT, RTG) uses the same failure logic as D-017: on time-out, record `SIMULATOR_FAILURE`, let the flow continue, mark it as a simulation issue. The time-out is a user-adjustable sim-init parameter (default 300 s: a team default per the S2 Sim params task, extending D-013/D-017's 300 s for the TT at the quay; D-027 sets no default). **(not built** for the RTG ↔ TT wait: S2 "Sim params" task) | D-027, D-017 |
 | Container display (D-041) | demo screens show the container number (valid ISO 6346 check digit) and its slot on the vessel | D-041 |
 | Equipment view (D-028, D-029) | Godot stays headless, with no 3D view. Equipment real-state visualisation lives in OES (equipment-state view, MVP, scheduled after S2). MVP telemetry: position and a "twistlocks locked" signal only. | D-028, D-029 |
@@ -163,7 +163,7 @@ D-005 and D-012 set the flow. The TT drives to the quay. The container *appears*
 - **D-040 (B13):** "waiting for TT" is shown **separately from idle** and doesn't count as idle; the live demo runs at real time (×1). **Still open (B13):** whether to add the single `NO_TT` delay-code field (Q19).
 - **D-029 (B2):** MVP telemetry is position plus a **"twistlocks locked"** signal, e.g. when the QC handles the container. **(not built**, scheduled after S2; the contract name is TBD)
 - **D-026 (A9):** container-visit and equipment state changes go on the UNS (S2: container visits; equipment states in S3).
-- **D-037 (B10):** each step reaches a consistent MiniTOS and OES state within 2 s in the demo and 5 s per step in CI, with strict event order.
+- **D-037 (B10), refined by D-050:** each reaction-only step reaches a consistent MiniTOS and OES state within 2 s in the demo and 5 s wall-clock in CI; steps with physical work (3d, 4) are asserted in sim time against a layout-derived bound. Event order is checked strictly.
 
 **Preconditions:**
 - Step 2 passed, and the session is running.
@@ -254,7 +254,7 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
   - **AC3.8g** *(D-043; not built, S2 stretch)* The MiniTOS UI shows the failure reason and detail on the visit. A failed result with no reason gets OES's default code (value open, Q20).
 - **AC3.9** The duplicate DCMD and duplicate result (QoS 1) are each applied once (`Command/Result/Id`, `event_id`).
 - **AC3.10** *(D-033; not built)* At the QC → TT transfer (AC3.4 step 6), the container becomes "in the terminal" (`ContainerUnit.is_in_terminal=True`) and its dwell clock starts at the transfer's event time. Today it turns True only at the yard drop (G5).
-- **AC3.11** *(D-037)* After each UNS event in AC3.4, MiniTOS and OES show a consistent state within 5 s in CI (2 s in the demo); the order of AC3.4 is checked strictly.
+- **AC3.11** *(D-037, D-050)* After each UNS event in AC3.4, MiniTOS and OES show a consistent state within 5 s wall-clock in CI (2 s in the demo) for reaction-only steps; the QC→TT hand-off (3d) is asserted in sim time against a layout-derived bound. The order of AC3.4 is checked strictly.
 - **AC3.12** *(D-040)* During the hold the QC is working (`holding`). From the end of the hold until the QC→TT transfer, if the TT hasn't arrived, the QC's state is "waiting for TT" (QC `waiting_for_handoff`, `Work/State=waiting_for_tt`), not idle, and that time isn't counted as idle (UI and KPIs; not built). If the TT is there at the hold end, the waiting time is 0.
 - **AC3.13** *(D-029; not built)* When the QC handles the container, a "twistlocks locked" signal is published for QC01.
 - **AC3.14** *(D-039; Sim params task)* With the `fast` profile, AC3.6 applies with the fast profile's hold range (Q22). With the `realistic` profile (live demo only), the QC cycle is ~90–120 s, measured per move as QC `leg_started` → QC `leg_completed` (QA's test definition; matches SME KPI draft K3, not yet decided). CI never runs `realistic`.
@@ -311,7 +311,7 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
 - **AC4.6** Rerun from reset: the same states in the same order for steps 1–4 (D-016), with the same TT choice and the same hold sequence.
 - **AC4.7** *(D-027, D-038; not built: Sim params task)* RTG/TT no-show at the block: after the RTG time-out (sim-init parameter; default 300 s is the team default per the S2 Sim params task, D-017's 300 s, not set by D-027), the hand-off is recorded as `SIMULATOR_FAILURE`, the order completes by exception and the run doesn't stall; the container ends in a normal block slot, marked, out of KPIs. Which CHE detects the time-out and how MiniTOS places the container are for TCL-011 (design), not set by D-027. Until it lands, a stall means stop and reset (see the caveat above).
 - **AC4.8** *(D-027)* Changing the time-out parameter at sim init changes when the no-show fires (at the quay and at the block).
-- **AC4.9** *(D-037)* AC4.2's order is strict, and each step is consistent in both systems within 5 s in CI (2 s demo).
+- **AC4.9** *(D-037, D-050)* AC4.2's order is strict. Reaction-only parts stay within 5 s wall-clock in CI (2 s demo). The TT drive and RTG stack (step 4) are asserted in sim time against a layout-derived bound.
 
 **Coverage:**
 - **Per service, on open PRs:**
@@ -358,7 +358,7 @@ These issue-level requirements apply after step 9:
 | AC4.5 RTG slot | Godot TCL-014b [#17] | Broker-level; O12 guard (S2) |
 | AC3.8f, R3 KPIs | — | KPI tests once KPIs exist (S3–S4, D-038, D-042) |
 | AC3.10 custody at QC → TT | — | MiniTOS test (container status rework, D-033) |
-| AC3.11, AC4.9 timing limits | — | TCL-007 CI e2e, ≤5 s per step (D-037) |
+| AC3.11, AC4.9 timing limits | — | TCL-007 CI e2e: ≤5 s wall-clock for reaction steps; sim-time layout bounds for 3d and 4 (D-037, D-050, TCL-007b) |
 | AC3.12–3.14 waiting for TT, twistlocks, timing profile | — | OES view (D-028/D-040); telemetry (D-029); Godot tests for both profiles (Sim params, D-039) |
 | AC4.7–4.8 block no-show, time-out parameter | — | Godot + OES tests (Sim params task, D-027) |
 | AC1.5, AC4.6 rerun | OES `test_handoffs.py::test_d016_same_seed_same_states_in_the_same_order` [#13]; `execution/test_acceptance_rules.py::test_d016_rerun_produces_same_state_sequence_not_same_messages` [#14] | Full stack (needs TCL-006) |
@@ -402,10 +402,11 @@ Decisions are quoted from the team vault note `03 Decisions.md` (Yael's answers 
 | D-034 | B7 | Seed has some yard containers already there a few days (MVP); busy-terminal start after 1 Dec | K8; §4 step 5 | Q8 in part (dwell display still open) |
 | D-035 | B8 | Separate customs, line and terminal holds from step 1, released during dwell, checked at booking and gate | K5; step 1 decisions, AC1.7; §4 steps 5–7 | Q17 |
 | D-036 | B9 | At gate-out the container visit is `Departed` and `Completed` together; truck visit `Departed` | §2 row 9; §4 step 9 | Q9 (own event: Q21) |
-| D-037 | B10 | Consistent state within 2 s (demo) and 5 s per step (CI); strict event order | §0; AC1.4, AC2.4, AC3.11, AC4.9 | Q10 |
+| D-037 | B10 | Consistent state within 2 s (demo) and 5 s per step (CI); strict event order. Refined by D-050. | §0; AC1.4, AC2.4, AC3.11, AC4.9 | Q10 |
 | D-038 | B11 | No-show container to a normal block, marked `SIMULATOR_FAILURE`, out of KPIs | step 3x, AC3.8f; AC4.7; R3 | Q16 |
 | D-039 | B12 | Realistic crane timings (QC ~90–120 s, RTG ~60–120 s) in the live demo only; fast in tests/CI; profile is a sim-init parameter; hoist/trolley motion after 1 Dec | header term; §0; K7; step 3 decisions, AC3.6, AC3.14; step 4 | — (changes D-012's hold for the live demo) |
 | D-040 | B13 | "Waiting for TT" shown separately, not idle; live demo at real time (×1) | §0; step 3 decisions, UI, AC3.12; R3 | — (`NO_TT` field still open: Q19) |
+| D-050 | Q24 | CI step limits at accelerated speed: 5 s wall-clock for reaction-only steps; sim-time layout bounds for TT-drive / crane-cycle steps (3d, 4). Refines D-037. | §0; AC3.11, AC4.9; TCL-007 e2e | Q24 |
 | D-041 | B14 | Screens show the ISO 6346 container number and its vessel slot | §0; step 1 decisions, UI, AC1.6; step 3d UI | — |
 | D-042 | B15 | Ops KPIs as headline, OEE shown too | R3 | — |
 | D-043 | B16 | MiniTOS shows failure reason and details; OES fills in a default code when none is given | step 3x, AC3.8g | — (which code: Q20) |
@@ -440,7 +441,7 @@ These go through the Tech Lead. QA doesn't decide them. Each has the SME's recom
 | **Q21** Visit-end event (D-036) | **Open.** D-036 doesn't say whether the end of the visit gets its own event. | Does gate-out emit its own visit-end event? | Yes (Q9 recommendation). |
 | **Q22** Timing profile values (D-039) | **Open** (team design, Sim params task). D-039 doesn't say how the realistic cycle splits into hold/move phases, or what the fast profile's values are (today's 10–30 s hold?). | — | — |
 | **Q23** Skipped forward jumps (D-025) | **Open for confirmation.** The S2 task acceptance refuses skipped jumps (e.g. `Arrived` → `Departed`); D-025's words cover backward jumps. | Are skipped forward jumps refused too? | — |
-| **Q24** CI sim speed (D-040) | **Open** (team proposal: CI may run faster than real time; D-040 is about the live demo). | — | — |
+| **Q24** CI sim speed (D-040) | **Answered: D-050** (15 Nov). At accelerated CI speed, the 5 s wall-clock limit applies only to reaction-only steps; steps with physical work (TT drive, crane cycle: 3d and 4) are asserted in sim time from envelope timestamps against a layout-derived bound. CI keeps `E2E_TIME_SCALE=10`. | — | Option (a) of the GD review of #32. |
 | **Q25** "Discharged" and "in yard" milestones (D-026, D-033) | **Open** (SME review of PR #26). The spec has only the flag (AC3.10). If yes, they become AC3.15 and AC4.10; names from TCL-003b. | Emit a container-visit "discharged" milestone (visit id, ISO number, vessel visit, vessel slot, time) at the QC→TT transfer, and an "in yard" milestone with the slot at the RTG drop? | Yes to both. |
 | **Q26** Seeded vessel slot (D-041) | **Open.** AC1.6 shows the vessel slot, but no seed field holds one. | Add an arrival vessel slot (BBBRRTT, e.g. `0340682`) to the seeded container (K5), carried on the "lifted from vessel"/"discharged" events? | Yes. |
 | **Q27** Discharge list time vs arrival (D-031, D-018) | **Open.** Not covered by the spec: K5 and step 1 give the "discharge list received" time, but no ordering against `ata` (= the seed epoch). | Must the seeded "discharge list received" time be before `ata`, and by how much? | Yes, seeded and deterministic, typically 24–72 h before arrival. |
