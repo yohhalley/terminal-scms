@@ -93,12 +93,14 @@ class StaleExecutionEventAfterResetTests(TestCase):
         # Run 1: seed, release, and capture the leg_dispatched OES sent in run 1
         # (still queued for the MiniTOS consumer, or in flight, at reset time).
         reset_scenario('import_v1', reset_epoch=RUN_1)
+        run_step('import_v1', 'visit-in-operation')
         run_step('import_v1', 'release-discharge')
         self.stale_topic, self.stale = oes_leg_dispatched(RUN_1)
 
         # make scenario-reset (run 2), then the demo releases the new order 1.
         reset_scenario('import_v1', reset_epoch=RUN_2)
         self.clean = canonical_checksum(canonical_dump())
+        run_step('import_v1', 'visit-in-operation')
         run_step('import_v1', 'release-discharge')
         self.released = canonical_checksum(canonical_dump())
         self.before = new_run_state()
@@ -167,10 +169,12 @@ class UnfencedResetStillAcceptsStaleEventsTests(TestCase):
 
     def test_reset_without_epoch_accepts_the_previous_runs_event(self):
         reset_scenario('import_v1')
+        run_step('import_v1', 'visit-in-operation')
         run_step('import_v1', 'release-discharge')
         topic, stale = oes_leg_dispatched(None)
 
         reset_scenario('import_v1')
+        run_step('import_v1', 'visit-in-operation')
         run_step('import_v1', 'release-discharge')
         self.assertEqual(current_epoch(), '')
         deliver(topic, stale)
@@ -183,6 +187,7 @@ class UnfencedResetStillAcceptsStaleEventsTests(TestCase):
 class ResetEpochSeedTests(TestCase):
     def test_reset_stores_the_epoch_and_stamps_every_outbox_envelope(self):
         result = reset_scenario('import_v1', reset_epoch=RUN_2)
+        run_step('import_v1', 'visit-in-operation')
         run_step('import_v1', 'release-discharge')
 
         self.assertEqual(result['reset_epoch'], RUN_2)

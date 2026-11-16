@@ -15,8 +15,9 @@ on a yard slot (``destination_inventory_position_id`` set in the release
 payload).
 
 Idempotent: a container that already has a live discharge (MOVE_IN) order is
-adopted, not planned again. The import_v1 seed still pre-creates its orders
-until TCL-010b, so on the demo path every order is adopted.
+adopted, not planned again. Since TCL-010b the import_v1 seed creates no
+orders, so on the demo path every order is created here ("1 created, 0
+adopted"); adoption covers reruns.
 
 The yard slot is a random free ground slot (tier 1) of the yard block served
 by the block lane, drawn from a seeded ``random.Random`` (D-016: the same

@@ -1,8 +1,8 @@
 """TCL-010: discharge orders are created when a vessel visit goes InOperation.
 
-The import_v1 seed still pre-creates its orders (TCL-010b removes that), so
-the "creates" tests delete the seeded orders first, which is the state the
-seed will leave once TCL-010b lands.
+Since TCL-010b the import_v1 seed creates no orders: container visits only,
+no yard reservations. "Adopts" tests plan once first to get an existing order
+(a rerun, or an order created before TCL-010b).
 """
 
 import io
@@ -35,12 +35,6 @@ from minitos_core.services.discharge_planning import (
 User = get_user_model()
 
 
-def drop_seeded_orders():
-    """The seed state after TCL-010b: container visits, no orders, slots free."""
-    Order.objects.all().delete()
-    Position.objects.filter(is_reserved=True).update(is_reserved=False)
-
-
 def block_slots():
     return Position.objects.filter(pile__storage_grid__name='BLOCK01', tier=1)
 
@@ -67,9 +61,10 @@ class DischargePlanningTestBase(TestCase):
 
 
 class CreatesOrdersTests(DischargePlanningTestBase):
-    def setUp(self):
-        super().setUp()
-        drop_seeded_orders()
+    def test_seed_leaves_no_orders_and_no_reserved_slots(self):
+        # TCL-010b: planning at InOperation is the single creation path.
+        self.assertFalse(self.discharge_orders().exists())
+        self.assertFalse(Position.objects.filter(is_reserved=True).exists())
 
     def test_in_operation_creates_one_planned_order_per_container_with_three_legs(self):
         self.move_to_in_operation()
@@ -132,7 +127,6 @@ class CreatesOrdersTests(DischargePlanningTestBase):
         first = [order.to_position.code for order in self.discharge_orders()]
 
         reset_scenario('import_v1', containers=self.containers)
-        drop_seeded_orders()
         self.visit = CarrierVisit.objects.get()
         self.move_to_in_operation()
 
@@ -204,14 +198,19 @@ class CreatesOrdersTests(DischargePlanningTestBase):
 
 
 class AdoptsExistingOrderTests(DischargePlanningTestBase):
-    def test_seeded_orders_are_adopted_not_duplicated(self):
-        seeded = list(self.discharge_orders().values_list('pk', 'to_position_id', 'status'))
-        self.assertEqual(len(seeded), self.containers)
+    def setUp(self):
+        super().setUp()
+        # An existing live order per container, planned while still Arrived.
+        plan_visit_discharge(self.visit)
+
+    def test_existing_orders_are_adopted_not_duplicated(self):
+        existing = list(self.discharge_orders().values_list('pk', 'to_position_id', 'status'))
+        self.assertEqual(len(existing), self.containers)
         legs = OrderLeg.objects.count()
 
         self.move_to_in_operation()
 
-        self.assertEqual(list(self.discharge_orders().values_list('pk', 'to_position_id', 'status')), seeded)
+        self.assertEqual(list(self.discharge_orders().values_list('pk', 'to_position_id', 'status')), existing)
         self.assertEqual(OrderLeg.objects.count(), legs)
 
     def test_only_containers_without_an_order_get_one(self):
@@ -239,15 +238,11 @@ class AdoptsExistingOrderTests(DischargePlanningTestBase):
     LOGGER = 'minitos_core.services.discharge_planning'
 
     def test_adopted_order_matching_the_plan_logs_no_warning(self):
-        drop_seeded_orders()
-        plan_visit_discharge(self.visit)
         with self.assertNoLogs(self.LOGGER, level='WARNING'):
             planned = plan_visit_discharge(self.visit)
         self.assertEqual([item.created for item in planned], [False] * self.containers)
 
     def test_adopted_order_with_mismatched_legs_is_kept_and_logs_a_warning(self):
-        drop_seeded_orders()
-        plan_visit_discharge(self.visit)
         order = self.discharge_orders().first()
         rtg_leg = order.order_legs.get(sequence=3)
         tt_type = order.order_legs.get(sequence=2).equipment_type
@@ -267,12 +262,12 @@ class AdoptsExistingOrderTests(DischargePlanningTestBase):
         self.assertIn('RTG', message)
         self.assertEqual(list(OrderLeg.objects.order_by('pk').values_list('pk', 'equipment_type_id')), legs_before)
 
-    def test_adopting_the_seeded_orders_logs_no_warning(self):
+    def test_adopting_existing_orders_logs_no_warning(self):
         with self.assertNoLogs(self.LOGGER, level='WARNING'):
             self.move_to_in_operation()
         self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
 
-    def test_adopted_seed_with_no_free_slot_still_moves(self):
+    def test_adopted_orders_with_no_free_slot_still_move(self):
         block_slots().update(is_reserved=True)
         self.move_to_in_operation()
         self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
@@ -283,7 +278,6 @@ class TriggerPathTests(DischargePlanningTestBase):
 
     def setUp(self):
         super().setUp()
-        drop_seeded_orders()
         self.user = User.objects.create_superuser(
             username='tcl010-admin', email='admin@terminal-scms.invalid', password='test-password',
         )
@@ -365,16 +359,15 @@ class TriggerPathTests(DischargePlanningTestBase):
 class VisitInOperationStepTests(DischargePlanningTestBase):
     containers = 1
 
-    def test_step_moves_the_seeded_visit_and_adopts_the_seeded_order(self):
-        seeded = self.discharge_orders().get()
+    def test_step_moves_the_seeded_visit_and_creates_its_order(self):
+        self.assertFalse(self.discharge_orders().exists())
         result = run_step('import_v1', 'visit-in-operation')
         self.visit.refresh_from_db()
         self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
-        self.assertEqual([item.order.pk for item in result.planned], [seeded.pk])
-        self.assertEqual(self.discharge_orders().count(), 1)
+        created = self.discharge_orders().get()
+        self.assertEqual([(item.order.pk, item.created) for item in result.planned], [(created.pk, True)])
 
     def test_step_then_release_discharge(self):
-        drop_seeded_orders()
         run_step('import_v1', 'visit-in-operation')
         order = run_step('import_v1', 'release-discharge')
         self.assertEqual(order.status, Order.RELEASED)
@@ -384,8 +377,9 @@ class VisitInOperationStepTests(DischargePlanningTestBase):
         out = io.StringIO()
         call_command('scenario_step', 'import_v1', 'visit-in-operation', stdout=out)
         self.assertIn('visit V001 Arrived -> InOperation', out.getvalue())
-        self.assertIn('0 created, 1 adopted', out.getvalue())
+        self.assertIn('1 created, 0 adopted', out.getvalue())
         out = io.StringIO()
         call_command('scenario_step', 'import_v1', 'visit-in-operation', stdout=out)
         self.assertIn('InOperation -> InOperation', out.getvalue())
+        self.assertIn('0 created, 1 adopted', out.getvalue())
         self.assertEqual(self.discharge_orders().count(), 1)

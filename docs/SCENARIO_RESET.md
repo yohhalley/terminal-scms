@@ -10,6 +10,7 @@ states and order, not byte-identical messages).
 | What | Make | Without Make |
 | --- | --- | --- |
 | Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`, `RESET_EPOCH=` optional) | see the steps below; pass the same `--reset-epoch` to both services |
+| Move V001 to InOperation (plans the discharge orders, TCL-010/TCL-010b) | `make scenario-step STEP=visit-in-operation` | `docker compose exec -T minitos python manage.py scenario_step import_v1 visit-in-operation` |
 | Release the discharge order | `make scenario-step STEP=release-discharge [ORDER=id]` | `docker compose exec -T minitos python manage.py scenario_step import_v1 release-discharge` |
 | Dispatch the next step | `make scenario-step STEP=dispatch-next [ORDER=tos-id]` | `docker compose exec -T terminal-oes python manage.py scenario_step import_v1 dispatch-next` |
 | Reset, then start the simulator | `make scenario-reset SIM=1` | `simulation_stop --wait 30` before step 1, `simulation_start` after step 4 (in `terminal-oes`) |
@@ -115,7 +116,7 @@ the real target against a stub `COMPOSE` and checks the failure exit and message
 the contract tests check the stamped envelope against the
 schema and feed goldens with and without `reset_epoch` to the MiniTOS consumer.
 
-If the TT leg cannot be routed (QC01 lane to BLOCK01.TL), the MiniTOS reset
+If the TT cannot be routed from the QC01 lane to BLOCK01.TL, the MiniTOS reset
 fails with "Reset rolled back: import_v1: no road route ..." and the previous
 MiniTOS state is kept.
 
@@ -146,21 +147,33 @@ If `simulation_stop` times out, check `make logs-runner`; as a last resort run
   available and not dispatched (spec K3); work queue `QC01-WQ`. OES marks them
   available after each CHE's DBIRTH.
 - Vessel visit `V001` (Arrived), and 1 (up to 5) pre-advised import container(s)
-  owned by `MSCU` with a valid ISO 6346 check digit, in vessel slot `0340682`
-  (then `0340684`, ...). The first container is always `MSCU1234566`; any extra
-  containers get seeded serials.
-- One PLANNED discharge order per container with an active route plan:
-  QC handle (vessel slot -> QC01 lane, hand-off), TT move (QC01 lane -> BLOCK01.TL,
-  hand-off, `movement_mode` road), RTG handle (BLOCK01.TL -> yard slot).
+  owned by `MSCU` with a valid ISO 6346 check digit, all 20' (`22G1`), in vessel
+  slot `0330682` (then `0330684`, ...; BBBRRTT, odd bay because 20' boxes stow in
+  odd bays). The first container is always `MSCU1234566`; any extra containers
+  get seeded serials.
+- **No discharge orders and no yard reservations** (TCL-010b, D-048). Orders
+  are created by TCL-010 discharge planning when V001 goes InOperation
+  (`make scenario-step STEP=visit-in-operation`, or the vessel visit panel / API
+  / admin): one PLANNED order per container with an active route plan:
+  QC handle (seeded vessel slot -> QC01 lane, hand-off), TT move (QC01 lane ->
+  BLOCK01.TL, hand-off, `movement_mode` road), RTG handle (BLOCK01.TL -> yard
+  slot chosen by planning). The step prints "N created, 0 adopted"; a rerun
+  adopts. `release-discharge` before InOperation fails with "run the
+  visit-in-operation step first".
+
+Demo order: `make scenario-reset` -> `make scenario-step STEP=visit-in-operation`
+-> `make scenario-step STEP=release-discharge` -> `dispatch-next`.
 
 Determinism: auto ids restart at 1, Enterprise/Site ids are uuid5 under the
 fixed namespace `7c0e5b1a-6d1e-4c55-9a2b-0000000000c6`, and extra container
-serials, weights and yard slots come from `random.Random(SEED)` (default `1`).
+serials and weights come from `random.Random(SEED)` (default `1`). Yard slots
+are drawn at InOperation by discharge planning with its own seeded RNG, so the
+same visit gets the same slots on a rerun (D-016).
 
 Seed and clock (spec K7): `SEED` defaults to 1, the same as `SIMULATOR_SEED`, and
 `make scenario-reset SEED=n` sets both the MiniTOS scenario RNG and the simulator
 seed (OES forwards `SIMULATOR_SEED` to the runner). Seeded business times (visit
-ETA/ATA, order ETC) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
+ETA/ATA/ETD) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
 1792886400000, 2026-10-25 00:00 UTC, so the vessel's ATA is sim time 0. A plain
 `make up` recreates `terminal-oes` with `.env`'s `SIMULATOR_SEED` (default 1);
 run `make scenario-reset SEED=n` again afterwards to keep both seeds equal.
