@@ -1,9 +1,10 @@
 extends SceneTree
 # QA acceptance tests for D-012 (QC discharge hold) and D-013 (TT no-show),
-# vault '03 Decisions'. Written by QA for TCL-005; reworked to match the
-# current simulator (TCL-014a has landed on main).
+# vault '03 Decisions'. Written by QA for TCL-005; reworked in TCL-037 to match
+# the current simulator (TCL-014a has landed on main).
 #
-# Needs SimClock, SimRandom and qc_discharge. Not wired into make test-godot.
+# Needs SimClock, SimRandom and qc_discharge. Wired into make test-godot and
+# the godot CI job (fast profile, no broker).
 # B10 (cancel) lives in tests/unit/test_cancel_regression.gd.
 # Oracle: everything is measured from published results (Sim/TimeMs), not from
 # SimRandom, except where noted (D-012d uses the same draw keys and bounds as
@@ -11,9 +12,10 @@ extends SceneTree
 # Device ids are MiniTOS CHE names (QC01, TT01; SimIds default). The QC deposit
 # is handoff_completed (giver); the QC does not publish container_dropped
 # (QcDischarge, Q8-R5). Timing is an explicit fixture: the main suite uses the
-# fast profile (same values as SIMULATOR_TIMING_PROFILE=fast). Hold and no-show
-# bounds are read from the configured profile, not hard-coded 10..30 s. A
-# shorter realistic-profile variant uses the same rule.
+# fast profile (same values as SIMULATOR_TIMING_PROFILE=fast). Hold bounds are
+# asserted against SimTiming.hold_range(profile, "qc"), not the simulator's
+# own readback, and not hard-coded 10..30 s. A shorter realistic-profile
+# variant uses the same rule.
 #   godot --headless --path clients/godot-open-terminal -s res://tests/requires-TCL-014a/test_acceptance_d012_d013.gd
 
 const HeadlessSimulator = preload("res://source/headless/HeadlessSimulator.gd")
@@ -30,6 +32,8 @@ const QC_LAT := 41.35
 const QC_LON := 2.17
 const FAST_PROFILE := SimTiming.PROFILE_FAST
 const REALISTIC_PROFILE := SimTiming.PROFILE_REALISTIC
+## Sim-time deadline (Sim/TimeMs units) far beyond every test run.
+const COMMAND_EXPIRES_AT_SIM_MS := 86400000
 
 var _failed := false
 var _counter := 0
@@ -96,6 +100,10 @@ func _sim(run_seed: int, tt_lat: float, profile: String = FAST_PROFILE):
 	# overrides are not applied here (same as the unit-test harness).
 	SimIds.use_che_name = true
 	simulator.configure_timing_profile(profile)
+	var expected_hold = SimTiming.hold_range(profile, "qc")
+	_assert(_hold_bounds(simulator) == expected_hold, "profile %s: applied QC hold %s must equal SimTiming.hold_range (%s)" % [profile, _hold_bounds(simulator), expected_hold])
+	if profile == FAST_PROFILE:
+		_assert(int(expected_hold[0]) >= 1 and int(expected_hold[1]) <= SimTiming.FAST_STEP_CAP_S, "fast: QC hold %s must have min >= 1 s and max <= FAST_STEP_CAP_S (%d s)" % [expected_hold, SimTiming.FAST_STEP_CAP_S])
 	simulator._ches = {QC_ID: _che(QC_ID, "QC01", QC_LAT), TT_ID: _che(TT_ID, "TT01", tt_lat)}
 	return simulator
 
@@ -132,13 +140,6 @@ func _no_show_ms(simulator) -> int:
 	return int(simulator._tt_no_show_timeout_s) * 1000
 
 
-func _profile_hold_bounds(profile: String) -> Array:
-	var simulator = _sim(1, QC_LAT, profile)
-	var bounds = _hold_bounds(simulator)
-	_free(simulator)
-	return bounds
-
-
 func _steps_for_hold(simulator, extra_steps := 20) -> int:
 	var max_s = int(_hold_bounds(simulator)[1])
 	return int((max_s * 1000) / simulator._clock.step_ms) + extra_steps
@@ -156,7 +157,7 @@ func _cmd(che_id: int, extra: Dictionary) -> Dictionary:
 		"Command/Id": "33333333-3333-4333-8333-%012d" % _counter,
 		"Command/CheId": che_id, "Command/SessionId": SESSION_ID, "Command/SiteId": SITE_ID,
 		"Command/ConfigurationRevision": 7,
-		"Command/ExpiresAtMs": int(Time.get_unix_time_from_system() * 1000.0) + 60000,
+		"Command/ExpiresAtMs": COMMAND_EXPIRES_AT_SIM_MS,
 		"Command/AssignmentId": "44444444-4444-4444-8444-%012d" % _counter,
 	}
 	for key in extra:
@@ -269,7 +270,7 @@ func _test_d012_appear_on_receipt_from_vessel():
 
 
 func _test_d012a_hold_is_whole_seconds_in_profile_bounds():
-	var bounds = _profile_hold_bounds(FAST_PROFILE)
+	var bounds = SimTiming.hold_range(FAST_PROFILE, "qc")
 	var min_ms = int(bounds[0]) * 1000
 	var max_ms = int(bounds[1]) * 1000
 	var seen := {}
@@ -406,9 +407,9 @@ func _test_d013_no_show_reports_exception_once():
 	var t = int(timed_out.get("Sim/TimeMs", -1))
 	var from_appear = t - int(appear.get("Sim/TimeMs", 0))
 	var from_hold_end = t - int(hold_end.get("Sim/TimeMs", 0))
-	# "5 min after the QC is ready": the note doesn't say whether ready = appear
-	# or = hold end. Accept either reading and report which one the code uses.
-	_assert(from_appear == timeout_ms or from_hold_end == timeout_ms, "D-013: time-out at configured %d ms sim time (from appear %d ms, from hold end %d ms)" % [timeout_ms, from_appear, from_hold_end])
+	# D-013 (Tech Lead reading) / D-053: the no-show clock starts at the end of
+	# the D-012 hold (waiting_for_handoff), not when the container appears.
+	_assert(from_hold_end == timeout_ms, "D-013: time-out at configured %d ms sim time from hold end (got %d ms; from appear %d ms)" % [timeout_ms, from_hold_end, from_appear])
 	_assert(str(timed_out.get("Command/Result/HandoffId", "")) == _handoff(3000), "D-013: exception names the hand-off")
 	_summary.append("D013-1: handoff_timed_out at %d ms = appear+%d ms = hold end+%d ms; QC keeps container %d; yard-block move is OES/MiniTOS (not in Godot)" % [
 		t, from_appear, from_hold_end, int(timed_out.get("Carrying/ContainerVisitId", -1))])
@@ -439,7 +440,7 @@ func _test_d013_tt_just_before_timeout_gets_container():
 ## Compact check that the same oracles follow the configured realistic hold
 ## and no-show parameters, rather than hard-coded 10..30 s (D-039 / D-051).
 func _test_realistic_profile_holds_follow_configured_bounds():
-	var bounds = _profile_hold_bounds(REALISTIC_PROFILE)
+	var bounds = SimTiming.hold_range(REALISTIC_PROFILE, "qc")
 	var min_ms = int(bounds[0]) * 1000
 	var max_ms = int(bounds[1]) * 1000
 	var bad: Array = []
@@ -485,7 +486,8 @@ func _test_realistic_profile_holds_follow_configured_bounds():
 	_assert(events.count("handoff_timed_out") == 1 and not events.has("failed"), "realistic: no-show reported once: %s" % [events])
 	var from_appear = int(timed_out.get("Sim/TimeMs", -1)) - int(appear.get("Sim/TimeMs", 0))
 	var from_hold_end = int(timed_out.get("Sim/TimeMs", -1)) - int(hold_end.get("Sim/TimeMs", 0))
-	_assert(from_appear == timeout_ms or from_hold_end == timeout_ms, "realistic: time-out at configured %d ms (from appear %d ms, from hold end %d ms)" % [timeout_ms, from_appear, from_hold_end])
+	# D-013 / D-053: the no-show clock starts at hold end, not appear.
+	_assert(from_hold_end == timeout_ms, "realistic: time-out at configured %d ms from hold end (got %d ms; from appear %d ms)" % [timeout_ms, from_hold_end, from_appear])
 	_free(simulator)
 
 	var values = seen.keys()
