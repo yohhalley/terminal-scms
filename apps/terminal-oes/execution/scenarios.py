@@ -19,7 +19,7 @@ from django.core.management.color import no_style
 from django.db import connection, transaction
 
 from .models import ExecutionOrder, SimulationSession, SiteProjection
-from .services.reset_epoch import set_epoch, validate_epoch
+from .services.reset_epoch import current_epoch, set_epoch, validate_epoch
 
 APP_LABEL = "execution"
 SCENARIOS = ("import_v1",)
@@ -109,6 +109,19 @@ def reset_execution_tables(*, force=False, reset_epoch=None, scenario=""):
     return len(tables)
 
 
+def _epoch_hint():
+    """QA M2 follow-up (BE review S-1 on #28): a reset-epoch mismatch also
+    shows up only as this timeout, so name the stored epoch and the fix."""
+    epoch = current_epoch()
+    if not epoch:
+        return "OES reset epoch: none (no stale-message fence)."
+    return (
+        f"OES reset epoch: {epoch}. If the OES consumer logs 'Ignored stale message ... "
+        f"seen=none' or another epoch, MiniTOS was not reset with --reset-epoch {epoch}; "
+        "re-run make scenario-reset."
+    )
+
+
 def wait_for_ready_site(site_code=None, *, min_revision=1, timeout=60.0, interval=1.0,
                         sleep=time.sleep, clock=time.monotonic):
     """Poll until a Site projection is READY at ``min_revision`` or later."""
@@ -126,7 +139,7 @@ def wait_for_ready_site(site_code=None, *, min_revision=1, timeout=60.0, interva
             raise TimeoutError(
                 f"No READY Site projection{f' {site_code!r}' if site_code else ''} at revision "
                 f">= {min_revision} after {timeout:.0f}s. Are the MiniTOS outbox publisher, "
-                "the broker and the OES consumer running?"
+                "the broker and the OES consumer running? " + _epoch_hint()
             )
         sleep(interval)
 
