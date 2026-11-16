@@ -813,6 +813,50 @@ class SimTimeExpiryTests(HandoffTestBase):
         self.assertIsNone(self.session.leg_stall_timeout_s)
         self.assertIsNone(self.session.timing_profile)
 
+    def test_nbirth_persists_the_no_show_timeout_switch(self):
+        """TCL-034e / D-053: Sim/Timing/NoShowTimeoutEnabled true / false / missing."""
+        metric = "Sim/Timing/NoShowTimeoutEnabled"
+        self.nbirth([{"name": metric, "type": "Boolean", "value": True}])
+        self.assertIs(self.session.no_show_timeout_enabled, True)
+        self.nbirth([
+            {"name": metric, "type": "Boolean", "value": False},
+            {"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": 300},
+        ])
+        self.assertIs(self.session.no_show_timeout_enabled, False)
+        # The timeout values are stored as reported, not marked inactive.
+        self.assertEqual(self.session.tt_no_show_timeout_s, 300)
+        # A rebirth without the metric (older Godot) stores NULL = on.
+        self.nbirth()
+        self.assertIsNone(self.session.no_show_timeout_enabled)
+        # A non-Boolean value is not trusted either.
+        self.nbirth([{"name": metric, "type": "Int64", "value": 0}])
+        self.assertIsNone(self.session.no_show_timeout_enabled)
+        self.nbirth([{"name": metric, "type": "String", "value": "false"}])
+        self.assertIsNone(self.session.no_show_timeout_enabled)
+
+    def test_no_show_while_the_switch_is_off_is_applied_with_a_warning(self):
+        """TCL-034e: Godot sends no handoff_timed_out while off; if it does, apply + WARNING."""
+        self.nbirth([{"name": "Sim/Timing/NoShowTimeoutEnabled", "type": "Boolean", "value": False}])
+        qc_cmd, _tt, _tt_cmd = self.run_h1(tt_ready_ms=10**9)
+        with self.assertLogs("execution.services.handoffs", level="WARNING") as captured:
+            receipt = self.result(qc_cmd, "handoff_timed_out", 320_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        self.assertTrue(any("NoShowTimeoutEnabled=false" in line for line in captured.output))
+        handoff = Handoff.objects.get()
+        self.assertEqual(handoff.status, Handoff.EXCEPTION)
+        self.assertEqual(handoff.exception_reason, "SIMULATOR_FAILURE")
+        self.assertEqual(
+            OutboxEvent.objects.filter(payload__data__event="handoff_exception").count(), 1,
+        )
+
+    def test_no_show_with_the_switch_on_logs_no_warning(self):
+        self.nbirth([{"name": "Sim/Timing/NoShowTimeoutEnabled", "type": "Boolean", "value": True}])
+        qc_cmd, _tt, _tt_cmd = self.run_h1(tt_ready_ms=10**9)
+        with self.assertNoLogs("execution.services.handoffs", level="WARNING"):
+            receipt = self.result(qc_cmd, "handoff_timed_out", 320_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        self.assertEqual(Handoff.objects.get().status, Handoff.EXCEPTION)
+
     def test_nbirth_truncates_a_timing_profile_longer_than_the_field(self):
         """Postgres would DataError on >32 chars; SQLite would not, so we truncate."""
         with self.assertLogs("execution.services.sparkplug_runtime", level="WARNING") as captured:

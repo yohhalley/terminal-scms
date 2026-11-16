@@ -309,6 +309,12 @@ def _optional_positive_int(metrics, name):
     return value if value and value > 0 else None
 
 
+def _optional_bool(metrics, name):
+    """A Sparkplug Boolean metric; missing or not a bool is None."""
+    value = metrics.get(name)
+    return value if isinstance(value, bool) else None
+
+
 def _handle_nbirth(session, document, metrics):
     _require_session_identity(session, metrics)
     if "bdSeq" not in metrics:
@@ -345,6 +351,8 @@ def _handle_nbirth(session, document, metrics):
         )
         profile = profile[:limit]
     session.timing_profile = profile or None
+    # TCL-034e / D-053: the no-show timeout switch (NULL = not reported = on).
+    session.no_show_timeout_enabled = _optional_bool(metrics, "Sim/Timing/NoShowTimeoutEnabled")
     session.save()
     # TL review B-2: hand-offs left pending by an abandoned earlier session of
     # this site are closed, so they never lock a CHE out of this run.

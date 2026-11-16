@@ -327,6 +327,20 @@ def _late_handoff_timed_out(handoff, role):
     return False
 
 
+def _warn_if_no_show_timeout_disabled(handoff, role):
+    """TCL-034e / D-053: Godot never reports a no-show while the session's
+    Sim/Timing/NoShowTimeoutEnabled is False. If one arrives anyway it is a
+    Godot contradiction: OES still applies it (flow continues, D-027) and
+    logs a WARNING so it is visible."""
+    session = handoff.simulation_session
+    if session is not None and session.no_show_timeout_enabled is False:
+        logger.warning(
+            "handoff_timed_out for hand-off %s from the %s while the session %s reported "
+            "Sim/Timing/NoShowTimeoutEnabled=false; applying it anyway.",
+            handoff.handoff_id, role, session.pk,
+        )
+
+
 def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
     """TCL-011 §6.3: accept ``handoff_timed_out`` from either side; raise once.
 
@@ -355,6 +369,7 @@ def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
     _check_container(handoff, metrics)
     if handoff.status != Handoff.PENDING:
         return _late_handoff_timed_out(handoff, role)
+    _warn_if_no_show_timeout_disabled(handoff, role)
     reason = NO_SHOW_REASON.value
     absent = (
         handoff.receiver_equipment if role == Handoff.GIVER else handoff.giver_equipment
