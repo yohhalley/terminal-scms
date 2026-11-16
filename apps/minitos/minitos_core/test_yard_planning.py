@@ -11,6 +11,7 @@ tier 2+ up to StorageGrid.max_tier with no floating containers.
 import random
 from types import SimpleNamespace
 
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from minitos_core.models import (
@@ -19,6 +20,7 @@ from minitos_core.models import (
     ContainerUnit,
     ContainerVisit,
     ISOType,
+    OperationalPosition,
     Order,
     Position,
     ScenarioSeed,
@@ -122,6 +124,38 @@ class SeededSlotTests(TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual(random.getstate(), state)
+
+
+class ScenarioSeedSingletonTests(TestCase):
+    """BE review N-2 on #38: ScenarioSeed holds at most one row (unique key);
+    ``set_scenario_seed`` upserts on it, so resets keep working."""
+
+    def test_reset_twice_keeps_a_single_row_with_the_latest_seed(self):
+        reset_scenario('import_v1', seed=7)
+        reset_scenario('import_v1', seed=9)
+        self.assertEqual(
+            list(ScenarioSeed.objects.values_list('key', 'scenario', 'seed')),
+            [(ScenarioSeed.SINGLETON_KEY, 'import_v1', 9)],
+        )
+        self.assertEqual(yard_planning.scenario_seed(), 9)
+
+    def test_set_scenario_seed_upserts_the_existing_row(self):
+        first = yard_planning.set_scenario_seed('import_v1', 3)
+        second = yard_planning.set_scenario_seed('import_v1', 4)
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(ScenarioSeed.objects.count(), 1)
+        self.assertEqual(yard_planning.scenario_seed(), 4)
+
+    def test_database_refuses_a_second_row(self):
+        yard_planning.set_scenario_seed('import_v1', 3)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ScenarioSeed.objects.create(scenario='import_v1', seed=5)
+        self.assertEqual(ScenarioSeed.objects.count(), 1)
+
+    def test_database_refuses_another_key(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ScenarioSeed.objects.create(key='other', scenario='import_v1', seed=5)
+        self.assertFalse(ScenarioSeed.objects.exists())
 
 
 class FreeSlotTests(TestCase):
@@ -453,6 +487,125 @@ class BayLengthTests(TestCase):
         self.visit.refresh_from_db()
         self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
         self.assertFalse(Order.objects.filter(order_type=Order.MOVE_IN).exists())
+
+
+    def make_lengths(self, iso_code, length, height=ISOType.HHC):
+        """Containers 2 and 4 become ``length`` (``iso_code``); the rest stay 20'."""
+        iso_type = ISOType.objects.create(iso_type=iso_code, length=length, height=height)
+        visits = list(discharge_container_visits(self.visit))
+        for container_visit in visits[1::2]:
+            ContainerUnit.objects.filter(pk=container_visit.container_number_id).update(iso_type=iso_type)
+        return list(discharge_container_visits(self.visit))
+
+    def test_45_foot_containers_go_to_even_bays_like_40(self):
+        """BE review N-1 on #38: 45' uses the even-bay (allows_45) rule too."""
+        visits = self.make_lengths('L5G1', ISOType.L45)
+        lengths = sorted(cv.container_number.iso_type.length for cv in visits)
+        self.assertEqual(lengths, [ISOType.L20] * 3 + [ISOType.L45] * 2)
+
+        planned = plan_visit_discharge(self.visit)
+
+        self.assertEqual(len(planned), self.containers)
+        for item in planned:
+            container_visit = ContainerVisit.objects.select_related(
+                'container_number__iso_type',
+            ).get(pk=item.container_visit.pk)
+            slot = Order.objects.get(pk=item.order.pk).to_position.stack_position
+            ok, reason = slot.pile.can_accept_container(container_visit)
+            self.assertTrue(ok, f'{container_visit} -> {slot}: {reason}')
+            expected_parity = 1 if container_visit.container_number.iso_type.length == ISOType.L20 else 0
+            self.assertEqual(slot.pile.bay % 2, expected_parity, str(slot))
+            # The drop accepts it too (Position.save runs the bay check).
+            slot.container_visit = container_visit
+            slot.save()
+
+    def test_choose_slots_puts_45_foot_only_in_even_bays(self):
+        visits = self.make_lengths('L5G1', ISOType.L45)
+        forty_five = [cv for cv in visits if cv.container_number.iso_type.length == ISOType.L45]
+        free = list(yard_planning.free_yard_slots(self.grid))
+        self.assertTrue(any(slot.pile.bay % 2 == 1 for slot in free))
+
+        chosen = yard_planning.choose_slots(free, len(forty_five), random.Random(2), containers=forty_five)
+
+        self.assertEqual([slot.pile.bay % 2 for slot in chosen], [0] * len(forty_five))
+        self.assertTrue(all(slot.pile.allows_45 for slot in chosen))
+
+    def test_no_even_bay_free_refuses_45_foot(self):
+        self.make_lengths('L5G1', ISOType.L45)
+        hold_slots([slot for slot in all_block_slots() if slot.pile.bay % 2 == 0])
+        with self.assertRaises(DischargePlanningError) as caught:
+            plan_visit_discharge(self.visit)
+        self.assertEqual(caught.exception.planning_code, CODE_NO_FREE_SLOT)
+        self.assertIn('fit the container sizes', caught.exception.planning_message)
+        self.assertFalse(Order.objects.filter(order_type=Order.MOVE_IN).exists())
+
+
+class FloatingGuardTests(TestCase):
+    """BE review N-3 on #38: a lower tier that is missing, or empty without an
+    operational position, does not hold up the tier above it; planning must
+    not reserve that higher slot (a floating stack)."""
+
+    containers = 1
+
+    def setUp(self):
+        reset_scenario('import_v1', containers=self.containers)
+        drop_seeded_orders()
+        self.visit = CarrierVisit.objects.get()
+        # An odd (20') bay pile, since import_v1 discharges a 22G1.
+        self.ground = next(slot for slot in ground_slots() if slot.pile.bay % 2 == 1)
+        self.pile = self.ground.pile
+        self.tier2 = Position.objects.get(pile=self.pile, tier=2)
+        self.grid = self.pile.storage_grid
+        # Everything else in the block is held, so only this pile is in play.
+        all_block_slots().exclude(pk__in=[self.ground.pk, self.tier2.pk]).update(is_reserved=True)
+
+    def detach_ground_operational_position(self):
+        OperationalPosition.objects.filter(stack_position=self.ground).update(stack_position=None)
+
+    def free(self):
+        return list(yard_planning.free_yard_slots(self.grid))
+
+    def test_empty_ground_without_operational_position_does_not_hold_up_tier_2(self):
+        self.detach_ground_operational_position()
+        free = self.free()
+        self.assertEqual([slot.pk for slot in free], [self.tier2.pk])
+
+        with self.assertRaises(yard_planning.SlotShortageError) as caught:
+            yard_planning.choose_slots(free, 1, random.Random(0))
+        self.assertEqual((caught.exception.needed, caught.exception.available), (1, 0))
+
+    def test_missing_ground_position_does_not_hold_up_tier_2(self):
+        Position.objects.filter(pk=self.ground.pk).delete()
+        free = self.free()
+        self.assertEqual([slot.pk for slot in free], [self.tier2.pk])
+
+        with self.assertRaises(yard_planning.SlotShortageError):
+            yard_planning.choose_slots(free, 1, random.Random(0))
+
+    def test_plan_maps_the_floating_slot_to_no_free_slot_and_stays_arrived(self):
+        self.detach_ground_operational_position()
+        self.visit.status = CarrierVisit.IN_OPERATION
+
+        with self.assertRaises(DischargePlanningError) as caught:
+            self.visit.save()
+
+        self.assertEqual(caught.exception.planning_code, CODE_NO_FREE_SLOT)
+        self.assertIn('reachable without a floating stack', caught.exception.planning_message)
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
+        self.assertFalse(Order.objects.filter(order_type=Order.MOVE_IN).exists())
+
+    def test_occupied_ground_without_operational_position_still_holds_up_tier_2(self):
+        # Control: a lower tier that really holds a container supports the
+        # tier above, whether or not it is plannable itself.
+        self.detach_ground_operational_position()
+        Position.objects.filter(pk=self.ground.pk).update(is_occupied=True)
+
+        planned = plan_visit_discharge(self.visit)
+
+        self.assertEqual(len(planned), 1)
+        slot = Order.objects.get(pk=planned[0].order.pk).to_position.stack_position
+        self.assertEqual(slot.pk, self.tier2.pk)
 
 
 class ImportBlockTests(TestCase):
