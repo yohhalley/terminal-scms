@@ -1292,12 +1292,39 @@ class RepeatedNoShowReportTests(HandoffTestBase):
 
 class NoShowSwitchOffStallTests(HandoffTestBase):
     """D-060: with the no-show switch off, the leg stall still ends the job.
-    OES stall handling does not read ``no_show_timeout_enabled``."""
+    OES stall handling does not read ``no_show_timeout_enabled``.
 
-    def test_stall_failure_with_the_switch_off_marks_the_leg_failed(self):
+    BL-48a adds counterpart-cancel, planned-slot and box-location
+    assertions of *current* behaviour. BL-47a (a stall should end like a
+    no-show, with the box in one place) is waiting on Yael; these tests
+    do not assert that future, and #39 / D-056 slot release is on hold.
+    """
+
+    def setUp(self):
+        super().setUp()
         self.session.no_show_timeout_enabled = False
         self.session.save(update_fields=["no_show_timeout_enabled"])
-        _tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+
+    def cancel_targets(self):
+        return sorted(
+            self.dcmd_metrics(cancel)["Command/CancelCommandId"]
+            for cancel in EquipmentCommand.objects.filter(command_type="cancel")
+        )
+
+    def last_location_event(self):
+        """OES has no current-location field; the event trail is the record."""
+        events = list(
+            OutboxEvent.objects.filter(
+                schema="scms.execution.event.v1",
+                payload__data__event__in=(
+                    "container_picked_up", "container_transferred", "container_dropped",
+                ),
+            ).order_by("created_at", "event_id")
+        )
+        return events[-1].payload["data"] if events else None
+
+    def test_stall_failure_with_the_switch_off_marks_the_leg_failed(self):
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
         self.result(h2_cmd, "handoff_completed", 95_000)
         self.result(rtg_cmd, "handoff_completed", 95_000)
         self.result(tt_cmd, "completed", 95_000)
@@ -1313,14 +1340,50 @@ class NoShowSwitchOffStallTests(HandoffTestBase):
         self.assertEqual(self.order.failure_reason, "SIMULATOR_FAILURE")
         rtg_cmd.refresh_from_db()
         self.assertEqual(rtg_cmd.status, EquipmentCommand.FAILED)
+        # BL-48a: H2 already transferred and the TT leg is complete, so
+        # there is no counterpart cancel DCMD.
+        self.assertEqual(self.cancel_targets(), [])
+        # OES does not model reserved slots and does not clear the planned
+        # yard position on a stall (#39 / D-056 is on hold).
+        self.assertEqual(rtg_op.destination_inventory_position_id, 112)
+        self.assertEqual(rtg_op.destination_position_id, 12)
+        self.assertNotIn("container_dropped", self.business_events())
+        # Last custody event is the H2 transfer onto the RTG. BL-47a would
+        # want a stall to end like a no-show with the box in one place;
+        # this records current behaviour only.
+        last = self.last_location_event()
+        self.assertEqual(last["event"], "container_transferred")
+        self.assertEqual(last["to_che_id"], 21)
+        self.assertEqual(last["from_che_id"], tt.tos_che_id)
 
     def test_stall_failure_with_the_switch_off_closes_a_pending_handoff(self):
-        self.session.no_show_timeout_enabled = False
-        self.session.save(update_fields=["no_show_timeout_enabled"])
-        tt, tt_cmd, _h2_cmd, _rtg_cmd = self.run_h2()
+        tt, tt_cmd, _h2_cmd, rtg_cmd = self.run_h2()
         receipt = self.result(
             tt_cmd, "failed", 700_000, **{"Command/Result/Reason": "SIMULATOR_FAILURE"},
         )
         self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
         self.assertEqual(self.order.operations.get(sequence=2).status, ExecutionOperation.FAILED)
-        self.assertNotEqual(Handoff.objects.get(giver_equipment=tt).status, Handoff.PENDING)
+        handoff = Handoff.objects.get(giver_equipment=tt)
+        self.assertNotEqual(handoff.status, Handoff.PENDING)
+        self.assertEqual(handoff.status, Handoff.CANCELLED)
+        # BL-48a: counterpart cancel DCMD for the other leg of the hand-off.
+        self.assertEqual(self.cancel_targets(), [str(rtg_cmd.command_id)])
+        cancel = EquipmentCommand.objects.get(command_type="cancel")
+        self.assertEqual(self.dcmd_metrics(cancel)["Command/Reason"], "LEG_FAILED")
+        rtg_cmd.refresh_from_db()
+        self.assertEqual(rtg_cmd.status, EquipmentCommand.CANCELLED)
+        rtg_op = self.order.operations.get(sequence=3)
+        self.assertEqual(rtg_op.status, ExecutionOperation.CANCELLED)
+        # Planned slot is unchanged (OES does not reserve or release yard
+        # slots; #39 / D-056 is on hold).
+        self.assertEqual(rtg_op.destination_inventory_position_id, 112)
+        self.assertEqual(rtg_op.destination_position_id, 12)
+        self.assertNotIn("container_dropped", self.business_events())
+        # Last custody event is the H1 transfer onto the TT. There is no
+        # later drop or relocate. BL-47a would want this to match a no-show
+        # outcome; current behaviour leaves the box last recorded on the
+        # stalled TT, with the planned slot still set.
+        last = self.last_location_event()
+        self.assertEqual(last["event"], "container_transferred")
+        self.assertEqual(last["to_che_id"], tt.tos_che_id)
+        self.assertEqual(last["from_che_id"], 1)
