@@ -90,7 +90,12 @@ The headless simulator publishes working CHE every two seconds and idle CHE
 every twenty seconds. Commands complete within a 0.5-meter target radius.
 Its session-specific `user://simulation_runtime_state.json` records command IDs,
 in-flight actions, and recent CHE positions so a restart resumes the same
-configuration revision without duplicating an action.
+configuration revision without duplicating an action. On Linux, Godot 4.2
+stores `user://` under `$XDG_DATA_HOME/godot/app_userdata/Open terminal/`
+(default `XDG_DATA_HOME` is `~/.local/share`). This project does not set
+`use_custom_user_dir`. `.github/scripts/run-godot-test.sh` gives each test
+run its own throwaway `XDG_DATA_HOME` unless the caller already set one, so
+overlapping local runs do not share that state or `user://sparkplug_session.cfg`.
 
 The headless simulator intentionally uses a simple straight-line motion model.
 Road-graph path execution, crane-specific actions, collision handling and
