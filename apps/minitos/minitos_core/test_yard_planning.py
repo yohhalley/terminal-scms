@@ -1,8 +1,8 @@
 """TCL-012 (#10): random free BLOCK01 slot per discharge order, seeded (D-016).
 
-Planning runs when the vessel visit goes InOperation (TCL-010). The import_v1
-seed still pre-creates its orders until TCL-010b, so the tests drop them first
-(the state the seed leaves once TCL-010b lands), as test_discharge_planning does.
+Planning runs when the vessel visit goes InOperation (TCL-010). Since TCL-010b
+the import_v1 seed creates no orders; drop_seeded_orders() is kept as a guard
+so each test starts with no orders whatever the seed does.
 
 Yael (5 Nov 2026): keep BLOCK01; fill ground (tier 1) first, then stack on
 tier 2+ up to StorageGrid.max_tier with no floating containers.
