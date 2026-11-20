@@ -8,6 +8,8 @@ SITE ?= test-terminal
 TIME_SCALE ?= 1.0
 # QA M2: run marker for make scenario-reset (generated per run unless given).
 RESET_EPOCH ?=
+# Path to the Godot 4.2.1 headless binary. CI sets this via .github/actions/setup-godot.
+GODOT_BIN ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help init setup config build pull up stop down restart ps logs \
@@ -31,7 +33,7 @@ help:
 		'  make logs-simulator Follow the latest on-demand Godot simulator log' \
 		'  make build-simulator Build the on-demand Godot image without starting it' \
 		'  make test-runner     Run restricted host-runner unit tests' \
-		'  make test-godot      Run headless Godot contract and rail tests' \
+		'  make test-godot      Run headless Godot suites as CI does (fast profile; GODOT_BIN or Docker)' \
 		'  make test            Run MiniTOS, OES, runner, and Godot tests' \
 		'  make migrations     Check both Django projects for migration drift' \
 		'  make shell-minitos  Open a MiniTOS Django shell' \
@@ -106,17 +108,49 @@ build-simulator: init
 test-runner:
 	python3 -m unittest discover -s apps/simulator-runner -p 'test_*.py'
 
+# Same suites and invocation as the `godot` CI job (.github/workflows/ci.yml).
+# Pins SIMULATOR_TIMING_PROFILE=fast so a realistic value from the environment,
+# .env.example, or compose.yaml cannot leak in. Does not change the runtime
+# default in those files. run-godot-test.sh fails on a non-zero exit, a
+# timeout, or a SCRIPT ERROR (Godot can exit 0 after one).
+# If GODOT_BIN is set, use that host binary the way CI does, with a throwaway
+# HOME so user:// state from other Godot runs on this machine cannot leak in.
+# If GODOT_BIN is unset, build the godot-simulator image and run the same
+# suites inside that container, so a local Godot install is not required.
+# The profile is passed with -e so compose.yaml:207 and .env cannot override
+# it. Scripts are mounted at /ci-scripts and run with bash (bookworm-slim).
+GODOT_TEST_SUITES := \
+	tests/unit/test_headless_sim.gd \
+	tests/unit/test_terminal_integration.gd \
+	tests/unit/test_che_rails.gd \
+	tests/unit/test_cancel_regression.gd \
+	tests/requires-TCL-014a/test_acceptance_d012_d013.gd
+
+# Two recipes, not one shell if with a recursive make. A recipe line that
+# itself calls make is executed even under make -n.
+ifeq ($(strip $(GODOT_BIN)),)
 test-godot: build-simulator
-	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
-		godot --headless --path /app -s res://tests/unit/test_headless_sim.gd
-	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
-		godot --headless --path /app -s res://tests/unit/test_terminal_integration.gd
-	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
-		godot --headless --path /app -s res://tests/unit/test_che_rails.gd
-	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
-		godot --headless --path /app -s res://tests/unit/test_cancel_regression.gd
-	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
-		godot --headless --path /app -s res://tests/requires-TCL-014a/test_acceptance_d012_d013.gd
+	$(COMPOSE) --profile simulation run --rm --no-deps -T \
+		-e SIMULATOR_TIMING_PROFILE=fast \
+		-e GODOT_BIN=godot \
+		-v "$(CURDIR)/.github/scripts:/ci-scripts:ro" \
+		--entrypoint bash \
+		godot-simulator \
+		-c "set -e; export HOME=\$$(mktemp -d); /ci-scripts/godot-import.sh /app; $(foreach s,$(GODOT_TEST_SUITES),/ci-scripts/run-godot-test.sh 600 $(s); )"
+else
+test-godot:
+	@set -e; \
+	workdir=$$(mktemp -d); \
+	trap 'rm -rf "$$workdir"' EXIT; \
+	export HOME="$$workdir"; \
+	export GODOT_BIN="$(GODOT_BIN)"; \
+	export SIMULATOR_TIMING_PROFILE=fast; \
+	cd clients/godot-open-terminal; \
+	../../.github/scripts/godot-import.sh .; \
+	for script in $(GODOT_TEST_SUITES); do \
+		../../.github/scripts/run-godot-test.sh 600 "$$script"; \
+	done
+endif
 
 run-simulator-runner: init build-simulator
 	set -a; . ./.env; set +a; python3 apps/simulator-runner/runner.py
