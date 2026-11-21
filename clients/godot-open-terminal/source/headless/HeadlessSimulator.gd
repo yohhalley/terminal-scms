@@ -56,13 +56,17 @@ const TT_DRIVING_TO_DESTINATION := "driving_to_destination"
 const TT_AT_DESTINATION_WAITING := "at_destination_waiting"
 ## TCL-034 timing defaults (TCL-011 hand-off design §6.1). The hold ranges come
 ## from Sim/Timing/Profile (SimTiming.gd); explicit env keys override them.
-## The RTG no-show (W4) is always on: D-027 "all CHE ... the same logic"
-## extends D-013/D-017 to the RTG <-> TT wait (O7/O8), so the old
-## SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED switch is retired.
+## D-053 (TCL-034e): one global on/off switch for every no-show clock (W1 to
+## W4), Sim/Timing/NoShowTimeoutEnabled / SIMULATOR_NO_SHOW_TIMEOUT_ENABLED,
+## default on. It gates only the no-show clocks, never the leg stall clock.
+## D-060: with the switch off the stall clock also runs in open hand-off waits,
+## so LegStallTimeoutS (default 600 s) still ends a wait that never ends.
+## The old W4-only SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED stays retired.
 const DEFAULT_TT_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_TT_NO_SHOW_TIMEOUT_S
 const DEFAULT_QC_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_QC_NO_SHOW_TIMEOUT_S
 const DEFAULT_RTG_NO_SHOW_TIMEOUT_S := SimTiming.DEFAULT_RTG_NO_SHOW_TIMEOUT_S
 const DEFAULT_LEG_STALL_TIMEOUT_S := SimTiming.DEFAULT_LEG_STALL_TIMEOUT_S
+const DEFAULT_NO_SHOW_TIMEOUT_ENABLED := true
 ## TCL-011 rev 2 (S4): retired keys. Godot only warns when one is present;
 ## the runner no longer allowlists them.
 const RETIRED_ENV_KEYS := ["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", "SIM_RTG_NO_SHOW_TIMEOUT_ENABLED"]
@@ -74,7 +78,8 @@ const RETIRED_ENV_KEYS := ["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", "SIM_RTG_NO_
 ## manual-dispatch gap before dispatch-next #2), and finished legs waiting for
 ## the next DCMD. "idle" also pauses a crane leg that never leaves idle after
 ## start. The clock runs only in motion/work states (driving, gantrying,
-## holding, picking, dropping).
+## holding, picking, dropping). D-060: with the no-show switch off, (i) does
+## not pause it (_stall_clock_paused).
 const STALL_PAUSED_STATES := [TT_AT_SOURCE_WAITING, TT_AT_DESTINATION_WAITING, "waiting_for_tt", "done", "idle"]
 ## Sim-time command TTL (seconds) applied when a DCMD carries no ExpiresAtMs.
 const DEFAULT_COMMAND_TTL_S := 600
@@ -85,7 +90,11 @@ const RUNTIME_STATE_PATH = "user://simulation_runtime_state.json"
 ## unsupported major version. tcl-002.2 (TCL-034): Sim/Timing/Profile,
 ## Qc/RtgNoShowTimeoutS, LegStallTimeoutS added, RtgNoShowTimeoutEnabled removed
 ## (contract rev 9.4 assumed; names confirmed by BE on 15 Nov 2026).
-const CONTRACT_VERSION := "tcl-002.2"
+## tcl-002.3 (TCL-034e, D-053): Sim/Timing/NoShowTimeoutEnabled (Boolean) added.
+## tcl-002.4 (TCL-034e, D-058): Sim/Timing/RtgPositioningS (Int64) added;
+## D-059: the waiter repeats handoff_timed_out every time-out period while it
+## keeps waiting (was: at most one report per HandoffId).
+const CONTRACT_VERSION := "tcl-002.4"
 
 var _bootstrap := OESBootstrapClient.new()
 var _mqtt := MQTTNodeClient.new()
@@ -122,7 +131,8 @@ var _start_epoch_ms := 0
 ## NBIRTH Sim/ScenarioId: OES bootstrap session.scenario_id, else SIMULATOR_SCENARIO_ID.
 var _scenario_id := ""
 var _last_checkpoint_sim_ms := 0
-## Sim/Timing/Profile (`fast` | `realistic`); sets the hold ranges below.
+## Sim/Timing/Profile (`fast` | `realistic`); sets the hold ranges below
+## (realistic: hold = cycle - simulated motion, D-051; SimTiming.gd).
 var _timing_profile := SimTiming.DEFAULT_PROFILE
 ## Whole seconds, inclusive, per QC wait step. D-012: only the hold wait exists.
 var _qc_wait_s := {
@@ -131,6 +141,9 @@ var _qc_wait_s := {
 var _rtg_wait_s := {
 	"hold": SimTiming.hold_range(SimTiming.DEFAULT_PROFILE, "rtg"),
 }
+## D-058: whole seconds an RTG positions (gantry_to_bay) before it is ready to
+## pick; from the profile (realistic 30 s, fast 0 s). Sim/Timing/RtgPositioningS.
+var _rtg_positioning_s := SimTiming.rtg_positioning_s(SimTiming.DEFAULT_PROFILE)
 ## Whole seconds of sim time before handoff_timed_out, per ABSENT CHE type:
 ## TT absent: QC at H1 (W1) and RTG at H2 (W4); QC absent: TT at H1 (W2);
 ## RTG absent: TT at H2 (W3).
@@ -139,6 +152,9 @@ var _qc_no_show_timeout_s := DEFAULT_QC_NO_SHOW_TIMEOUT_S
 var _rtg_no_show_timeout_s := DEFAULT_RTG_NO_SHOW_TIMEOUT_S
 ## Per-leg stall clock (sim seconds without a progress result -> failed).
 var _leg_stall_timeout_s := DEFAULT_LEG_STALL_TIMEOUT_S
+## Sim/Timing/NoShowTimeoutEnabled (D-053): false = no CHE ever publishes
+## handoff_timed_out; waits still open and are reported (waiting_for_handoff).
+var _no_show_timeout_enabled := DEFAULT_NO_SHOW_TIMEOUT_ENABLED
 var _command_ttl_s := DEFAULT_COMMAND_TTL_S
 
 
@@ -217,11 +233,14 @@ func _configure_timing():
 	configure_leg_stall_timeout(
 		_env_any(["SIMULATOR_LEG_STALL_TIMEOUT_S", "SIM_LEG_STALL_TIMEOUT_S"], str(DEFAULT_LEG_STALL_TIMEOUT_S))
 	)
+	configure_no_show_timeout_enabled(
+		_env_any(["SIMULATOR_NO_SHOW_TIMEOUT_ENABLED", "SIM_NO_SHOW_TIMEOUT_ENABLED"], str(DEFAULT_NO_SHOW_TIMEOUT_ENABLED))
+	)
 	for key in RETIRED_ENV_KEYS:
 		if OS.has_environment(key):
 			var value = OS.get_environment(key).strip_edges().to_lower()
 			var off = value in ["0", "false", "no", "off"]
-			push_warning("%s%s is ignored: the RTG no-show time-out is always on (D-027); set SIMULATOR_TT_NO_SHOW_TIMEOUT_S to change it" % [
+			push_warning("%s%s is ignored: use SIMULATOR_NO_SHOW_TIMEOUT_ENABLED, one switch for every no-show (D-053); set SIMULATOR_TT_NO_SHOW_TIMEOUT_S to change the W4 time-out" % [
 				"DEPRECATED, VALUE OFF IGNORED: " if off else "DEPRECATED: ", key,
 			])
 	for violation in timing_margin_violations():
@@ -239,6 +258,7 @@ func configure_timing_profile(text: String) -> bool:
 	_timing_profile = name
 	_qc_wait_s["hold"] = SimTiming.hold_range(name, "qc")
 	_rtg_wait_s["hold"] = SimTiming.hold_range(name, "rtg")
+	_rtg_positioning_s = SimTiming.rtg_positioning_s(name)
 	return true
 
 
@@ -247,7 +267,7 @@ func timing_margin_violations() -> Array:
 	return SimTiming.margin_violations(_qc_wait_s.hold, _rtg_wait_s.hold, _default_speed_mps, {
 		"tt": _tt_no_show_timeout_s, "qc": _qc_no_show_timeout_s,
 		"rtg": _rtg_no_show_timeout_s, "leg_stall": _leg_stall_timeout_s,
-	})
+	}, _no_show_timeout_enabled, _rtg_positioning_s)
 
 
 static func _positive_s(text: String) -> int:
@@ -274,6 +294,21 @@ func configure_rtg_no_show_timeout(text: String) -> bool:
 		_rtg_no_show_timeout_s = value
 		return true
 	push_warning("Invalid RTG no-show timeout %s; keeping %s s" % [text, _rtg_no_show_timeout_s])
+	return false
+
+
+## Sets Sim/Timing/NoShowTimeoutEnabled (D-053) from true/false, 1/0, yes/no
+## or on/off (case-insensitive). Invalid values keep the current value (default
+## true) and warn. Returns true when applied.
+func configure_no_show_timeout_enabled(text: String) -> bool:
+	var value = text.strip_edges().to_lower()
+	if value in ["true", "1", "yes", "on"]:
+		_no_show_timeout_enabled = true
+		return true
+	if value in ["false", "0", "no", "off"]:
+		_no_show_timeout_enabled = false
+		return true
+	push_warning("Invalid no-show switch %s; keeping %s" % [text, _no_show_timeout_enabled])
 	return false
 
 
@@ -312,7 +347,8 @@ func is_command_expired(metrics: Dictionary) -> bool:
 	return command_deadline_sim_ms(metrics) <= _clock.now_ms
 
 
-## RTG no-show (W4) time-out in ms for RtgStack.start: always on (D-027),
+## RTG no-show (W4) time-out in ms for RtgStack.start (D-027), gated by the
+## global D-053 switch in _no_show_due_for,
 ## measured with Sim/Timing/TtNoShowTimeoutS (the TT is the absent CHE).
 func rtg_no_show_timeout_ms() -> int:
 	return _tt_no_show_timeout_s * 1000
@@ -465,11 +501,13 @@ func node_birth_metrics() -> Array:
 		{"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": int(_qc_wait_s.hold[1])},
 		{"name": "Sim/Timing/RtgHoldMinS", "type": "Int64", "value": int(_rtg_wait_s.hold[0])},
 		{"name": "Sim/Timing/RtgHoldMaxS", "type": "Int64", "value": int(_rtg_wait_s.hold[1])},
+		{"name": "Sim/Timing/RtgPositioningS", "type": "Int64", "value": _rtg_positioning_s},
 		{"name": "Sim/Timing/Profile", "type": "String", "value": _timing_profile},
 		{"name": "Sim/Timing/TtNoShowTimeoutS", "type": "Int64", "value": _tt_no_show_timeout_s},
 		{"name": "Sim/Timing/QcNoShowTimeoutS", "type": "Int64", "value": _qc_no_show_timeout_s},
 		{"name": "Sim/Timing/RtgNoShowTimeoutS", "type": "Int64", "value": _rtg_no_show_timeout_s},
 		{"name": "Sim/Timing/LegStallTimeoutS", "type": "Int64", "value": _leg_stall_timeout_s},
+		{"name": "Sim/Timing/NoShowTimeoutEnabled", "type": "Boolean", "value": _no_show_timeout_enabled},
 		{"name": "Sim/Timing/CommandTtlS", "type": "Int64", "value": _command_ttl_s},
 	]
 
@@ -649,7 +687,7 @@ func _on_sparkplug_command(topic: String, message_type: String, device_id: Strin
 	elif rtg_leg:
 		var rtg_key = _command_seed_key(command)
 		var rtg_hold_s = _draw_rtg_wait_s(che, rtg_key, 0, "hold")
-		var rtg_events = RtgStack.start(command, rtg_hold_s * 1000, _rtg_slot(che, command, rtg_key), rtg_no_show_timeout_ms())
+		var rtg_events = RtgStack.start(command, rtg_hold_s * 1000, _rtg_slot(che, command, rtg_key), rtg_no_show_timeout_ms(), _rtg_positioning_s * 1000, _clock.now_ms)
 		_active_commands[che_id] = command
 		_save_runtime_state()
 		_publish_events(che_id, command, rtg_events)
@@ -868,7 +906,8 @@ func _handle_assign_handoff(che_id: int, assign_id: String, metrics: Dictionary)
 	command["assign_command_id"] = assign_id
 	command["giver_transfer_position_id"] = int(metrics.get("Command/TransferPositionId", 0))
 	if str(command.get("tt_phase", "")) == TT_AT_DESTINATION_WAITING:
-		command["handoff_wait_since_ms"] = _clock.now_ms
+		# W3 starts now: the manual-dispatch gap before the assign is not a wait.
+		_start_tt_wait_period(command)
 	_active_commands[che_id] = command
 	# Silent outcome: a redelivered assign is deduplicated without a reply.
 	_command_outcomes[assign_id] = {"che_id": che_id, "event": "", "silent": true}
@@ -987,6 +1026,8 @@ func _complete_tt_handoff(tt_id: int, qc_id: int):
 		return
 	var command: Dictionary = _active_commands[tt_id]
 	command["tt_phase"] = TT_DRIVING_TO_DESTINATION
+	# D-053: W2 is over; nothing carries into the manual-dispatch gap or W3.
+	command.erase("handoff_wait_since_ms")
 	command["picked_up"] = true
 	command["load_container_visit_id"] = int(command.get("container_visit_id", 0))
 	command["counterpart_che_id_actual"] = qc_id
@@ -1120,7 +1161,7 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 	if phase == TT_DRIVING_TO_SOURCE:
 		if _drive_towards(che_id, che, float(command.source_latitude), float(command.source_longitude), delta):
 			command["tt_phase"] = TT_AT_SOURCE_WAITING
-			command["handoff_wait_since_ms"] = _clock.now_ms
+			_start_tt_wait_period(command)
 			_active_commands[che_id] = command
 			_save_runtime_state()
 			_publish_command_result(che_id, str(command.command_id), "arrived_at_source", 0, "", "", command)
@@ -1135,7 +1176,7 @@ func _step_command(che_id: int, che: Dictionary, command: Dictionary, delta: flo
 		):
 			command["tt_phase"] = TT_AT_DESTINATION_WAITING
 			if _handoff_side(command) == "giver":
-				command["handoff_wait_since_ms"] = _clock.now_ms
+				_start_tt_wait_period(command)
 			_active_commands[che_id] = command
 			_save_runtime_state()
 			_publish_command_result(che_id, str(command.command_id), "arrived_at_destination", 0, "", "", command)
@@ -1208,8 +1249,10 @@ func _drive_towards(che_id: int, che: Dictionary, target_latitude: float, target
 ## per tick, giver first. If the giver's no-show is due, publish only the
 ## giver's handoff_timed_out and close the hand-off locally so the receiver
 ## does not publish. The receiver publishes only if its clock expired and the
-## giver's did not. One report per HandoffId, independent of CHE iteration
-## order (D-016). OES still applies "first arrived wins" as the safety net;
+## giver's did not. One reporter per HandoffId, independent of CHE iteration
+## order (D-016). D-059: that reporter reports again every time-out period
+## while it keeps waiting (OES has not cancelled it yet); see
+## _publish_due_repeat_timeouts. OES still applies "first arrived wins" as the safety net;
 ## this does not invent OES behaviour. Timeouts run after movement and crane
 ## steps so a counterpart that became ready in this tick can still complete
 ## the transfer (if both CHEs are at the lane, the hand-off happens).
@@ -1236,6 +1279,52 @@ func _publish_due_handoff_timeouts():
 		elif receiver_id > 0 and _no_show_due_for(receiver_id):
 			_publish_handoff_timeout(receiver_id)
 			_mark_handoff_closed(str(handoff_id))
+	_publish_due_repeat_timeouts()
+
+
+## D-059: "Report again every 5 minutes while it keeps waiting." The CHE that
+## reported handoff_timed_out reports it again each time its own time-out
+## period (the same N as the first report, default 300 s) has passed since its
+## last report, as long as it is still in the same wait for that HandoffId and
+## OES has not cancelled the leg. The hand-off stays closed locally (a late
+## counterpart still gets no transfer). Gated by the D-053 switch. Every report
+## has its own Command/Result/Id; OES treats a repeat on an `exception`
+## hand-off as an INFORMATIONAL no-op, and raises the exception if the first
+## report never arrived (the hand-off is still `pending`).
+func _publish_due_repeat_timeouts():
+	if not _no_show_timeout_enabled:
+		return
+	var che_ids: Array = _active_commands.keys()
+	che_ids.sort()
+	for che_key in che_ids:
+		var che_id = int(che_key)
+		var command: Dictionary = _active_commands[che_key]
+		if not command.has("no_show_reported_at_ms"):
+			continue
+		var period_ms = int(command.get("no_show_repeat_ms", 0))
+		if period_ms <= 0 or _clock.now_ms - int(command.no_show_reported_at_ms) < period_ms:
+			continue
+		if not _still_waiting_after_no_show(command):
+			continue
+		_publish_handoff_timeout(che_id)
+
+
+## True while the reporter of a no-show is still in the wait it reported.
+func _still_waiting_after_no_show(command: Dictionary) -> bool:
+	var handoff_id = str(command.get("handoff_id", ""))
+	if handoff_id.is_empty() or str(command.get("handoff_timed_out_id", "")) != handoff_id:
+		return false
+	if _is_crane_command(command):
+		return str(command.get("work_state", "")) == QcDischarge.WAITING_FOR_TT
+	return str(command.get("tt_phase", "")) == str(command.get("no_show_phase", ""))
+
+
+## The no-show period (ms) of the waiter `command` (QC/RTG: TtNoShowTimeoutS;
+## TT: QcNoShowTimeoutS at the QC lane, RtgNoShowTimeoutS at the block lane).
+func _no_show_period_ms(command: Dictionary) -> int:
+	if _is_crane_command(command):
+		return int(command.get("tt_no_show_timeout_ms", _tt_no_show_timeout_s * 1000))
+	return _tt_no_show_timeout_s_for(command) * 1000
 
 
 func _command_handoff_closed(command: Dictionary) -> bool:
@@ -1259,7 +1348,12 @@ func _mark_handoff_closed(handoff_id: String):
 	_save_runtime_state()
 
 
+## The single no-show gate for W1 to W4 (the crane state machines run with
+## emit_no_show = false, so every handoff_timed_out goes through here).
+## D-053: with Sim/Timing/NoShowTimeoutEnabled false nothing is ever due.
 func _no_show_due_for(che_id: int) -> bool:
+	if not _no_show_timeout_enabled:
+		return false
 	if not _active_commands.has(che_id):
 		return false
 	var command: Dictionary = _active_commands[che_id]
@@ -1270,6 +1364,14 @@ func _no_show_due_for(che_id: int) -> bool:
 	if _is_rtg_command(command):
 		return RtgStack.no_show_due(command, _clock.now_ms)
 	return _tt_no_show_due(command)
+
+
+## D-053: a TT waiting period (W2 at the QC lane with H1, W3 at the block lane
+## with H2) starts its own no-show clock from now. Clocks are never cumulative
+## per leg or per CHE; the QC (W1) and RTG (W4) do the same in their state
+## machines (waiting_since_ms on entering waiting_for_tt).
+func _start_tt_wait_period(command: Dictionary):
+	command["handoff_wait_since_ms"] = _clock.now_ms
 
 
 ## TCL-034, D-027 "same logic" on the TT side: W2 (TT at the QC lane waits for
@@ -1302,6 +1404,12 @@ func _publish_handoff_timeout(che_id: int):
 		return
 	var command: Dictionary = _active_commands[che_id]
 	var handoff_id = str(command.get("handoff_id", ""))
+	# D-059: remember when and in which wait this CHE reported, for repeats.
+	command["no_show_reported_at_ms"] = _clock.now_ms
+	command["no_show_report_count"] = int(command.get("no_show_report_count", 0)) + 1
+	if not command.has("no_show_repeat_ms"):
+		command["no_show_repeat_ms"] = _no_show_period_ms(command)
+		command["no_show_phase"] = str(command.get("tt_phase", ""))
 	if _is_crane_command(command):
 		command["handoff_timed_out"] = true
 		command["handoff_timed_out_id"] = handoff_id
@@ -1310,7 +1418,7 @@ func _publish_handoff_timeout(che_id: int):
 		_publish_events(che_id, command, [{"event": "handoff_timed_out"}])
 		_publish_equipment_state(_ches[che_id], true)
 		return
-	# As for the QC (D-013): handoff_timed_out once, the TT keeps its state
+	# As for the QC (D-013): handoff_timed_out (again every period, D-059), the TT keeps its state
 	# (and the box at H2), the HandoffId no longer pairs, and the TT waits for
 	# OES to cancel. The waiter reports; OES accepting a TT-side report is BE
 	# work (TCL-011 §6.3). BE confirmed: H1 reports on the leg command id
@@ -1350,7 +1458,23 @@ func _stall_state(command: Dictionary) -> String:
 
 
 func _stall_clock_paused(command: Dictionary) -> bool:
+	if not _no_show_timeout_enabled and _in_open_handoff_wait(command):
+		# D-060: with the no-show switch off the leg stall clock is the backstop
+		# and keeps running in hand-off waits (W1 to W4), so a wait that never
+		# ends still ends the job after LegStallTimeoutS (default 600 s).
+		return false
 	return STALL_PAUSED_STATES.has(_stall_state(command))
+
+
+## D-060: the leg waits at a hand-off that is still open (W1/W4: crane in
+## waiting_for_tt; W2/W3: TT at the lane with its H1/H2 wait started). Waits on
+## OES (manual-dispatch gap, finished legs, after a close) do not count.
+func _in_open_handoff_wait(command: Dictionary) -> bool:
+	if str(command.get("handoff_id", "")).is_empty() or _command_handoff_closed(command):
+		return false
+	if _is_crane_command(command):
+		return str(command.get("work_state", "")) == QcDischarge.WAITING_FOR_TT
+	return command.has("handoff_wait_since_ms") and _tt_no_show_timeout_s_for(command) > 0
 
 
 ## TCL-011 §8(d), rev 2 (B1): per-leg stall clock on sim time. It measures
@@ -1381,8 +1505,9 @@ func _check_leg_stalls(step_ms: int):
 		_mark_che_idle(che)
 		_ches[che_id] = che
 		_active_commands.erase(che_key)
-		# One report per HandoffId: a stall must close the hand-off so the
-		# counterpart's no-show clock cannot later publish handoff_timed_out.
+		# One outcome per HandoffId: a stall must close the hand-off so the
+		# counterpart's no-show clock cannot later publish handoff_timed_out
+		# (and, with no reporter, nothing repeats under D-059).
 		if not handoff_id.is_empty():
 			_mark_handoff_closed(handoff_id)
 		_save_runtime_state()

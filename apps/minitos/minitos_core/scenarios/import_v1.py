@@ -8,13 +8,20 @@ demo steps 1-9):
   no-show exception block), one road (ROAD-01) and two truck hand-off lanes
   (QC01 lane under the crane, BLOCK01 transfer lane);
 * CHEs QC01 (STS), TT01, TT02 (TT) and RTG01 (RTG);
-* vessel visit V001 with ``containers`` (default 1, max 5) pre-advised import
-  containers, each with a PLANNED discharge order (QC -> TT -> RTG legs).
+* vessel visit V001 (Arrived) with ``containers`` (default 1, max 5)
+  pre-advised 20' import containers, each with its vessel slot.
+
+TCL-010b (D-048, TCL-011 design sec. 8 (a)): the seed creates **no** discharge
+orders. Step ``visit-in-operation`` moves V001 to InOperation, and TCL-010
+discharge planning creates one PLANNED order (QC -> TT -> RTG legs) per
+container, with the yard slot chosen by planning. ``release-discharge`` then
+releases them.
 
 Everything is deterministic: auto-increment ids restart on reset, Enterprise
-and Site ids are uuid5 under ``base.SCENARIO_NAMESPACE``, and the only
-"random" choices (container serials, weights, yard slots) come from
-``random.Random(seed)``.
+and Site ids are uuid5 under ``base.SCENARIO_NAMESPACE``, and the seed's only
+"random" choices (container serials, weights) come from
+``random.Random(seed)``. Yard slots are drawn by discharge planning with its
+own seeded RNG (D-016).
 """
 
 import random
@@ -27,8 +34,7 @@ from ..models import (
     AccessPolicy, BerthSegment, CarrierVisit, Che, CheOperatingScope,
     ContainerOwner, ContainerUnit, ContainerVisit, Enterprise, EquipmentType,
     ISOType, LayoutAsset, LinearAxis, Location, OperationalPosition, Order,
-    OrderLeg, OrderLegRouteEdge, OrderRoutePlan, Position, RouteEdge, RouteNode,
-    Site, StorageGrid, TransferInterface, WorkQueue,
+    RouteEdge, RouteNode, Site, StorageGrid, TransferInterface, WorkQueue,
 )
 from ..services import (
     current_layout, geographic_distance_m, local_to_geographic, publish_layout,
@@ -62,8 +68,10 @@ WORK_QUEUE_NAME = 'QC01-WQ'
 # the vessel's ATA is sim time 0.
 SIMULATOR_START_EPOCH_MS = 1792886400000
 SCENARIO_EPOCH = datetime.fromtimestamp(SIMULATOR_START_EPOCH_MS / 1000, tz=dt_timezone.utc)
-# Vessel stowage for container n: bay 034, row 06, tier 82 + 2n (ISO 9711).
-VESSEL_BAY, VESSEL_ROW, VESSEL_FIRST_TIER = 34, 6, 82
+# Vessel stowage for container n: bay 033, row 06, tier 82 + 2n (ISO 9711,
+# BBBRRTT). The seeded boxes are 20' (22G1), and 20' boxes stow in odd bays;
+# even bays denote 40' slots (SME review of #26, BL-26b).
+VESSEL_BAY, VESSEL_ROW, VESSEL_FIRST_TIER = 33, 6, 82
 
 
 def _coordinate(location, x_m, y_m):
@@ -284,6 +292,14 @@ def _route_edges(layout, start, end):
 
 
 def _seed_discharge(location, types, site_layout, rng, containers):
+    """Seed the vessel visit (Arrived) and its pre-advised import containers.
+
+    TCL-010b / D-048: no discharge orders, legs or yard reservations here. The
+    single creation path is TCL-010 discharge planning when the visit goes
+    InOperation (step ``visit-in-operation``), which picks the yard slot
+    (TCL-012 rules). The seed only supplies what planning reads: the visit,
+    the container visits, the QC work queue and each container's vessel slot.
+    """
     layout = site_layout['layout']
     iso_type = ISOType.objects.create(iso_type='22G1', length=ISOType.L20, height=ISOType.HNC)
     owner = ContainerOwner.objects.create(name='Terminal Velocity Line', code=OWNER_CODE, is_shippingline=True)
@@ -295,39 +311,27 @@ def _seed_discharge(location, types, site_layout, rng, containers):
         moves_in=containers, moves_import=containers, total_moves=containers,
         primary_equipment_type=types['STS'],
     )
-    work_queue = WorkQueue.objects.create(
+    WorkQueue.objects.create(
         name=WORK_QUEUE_NAME, description='QC01 discharge V001', is_active=True, location=location,
     )
     qc_position = site_layout['qc_lane'].positions.order_by('sequence').first().operational_position
     tl_position = site_layout['block_lane'].positions.order_by('sequence').first().operational_position
+    # BE review S-2, kept after TCL-010b: a layout where the TT cannot drive
+    # from the QC lane to the block lane fails the reset (and rolls it back)
+    # instead of leaving a world that refuses InOperation later.
+    _route_edges(layout, qc_position, tl_position)
 
-    # RNG draws, in a fixed order: serials, weights, then yard slots. Serials
-    # for containers 2..n skip FIRST_SERIAL so numbers stay unique.
+    # RNG draws, in a fixed order: serials, then weights. Serials for
+    # containers 2..n skip FIRST_SERIAL so numbers stay unique. Yard slots are
+    # no longer drawn here (planning draws them at InOperation).
     serials = [FIRST_SERIAL] + [
         serial + 1 if serial >= FIRST_SERIAL else serial
         for serial in rng.sample(range(100000, 999999), containers - 1)
     ]
     weights = [rng.randrange(8000, 28001, 100) for _ in range(containers)]
-    free_slots = list(
-        Position.objects.filter(pile__storage_grid=site_layout['grid'], tier=1)
-        .select_related('operational_position').order_by('pk')
-    )
-    yard_slots = rng.sample(free_slots, containers)
 
-    orders = []
+    container_visits = []
     for index in range(containers):
-        tier = VESSEL_FIRST_TIER + 2 * index
-        stow = f'{VESSEL_BAY:03d}{VESSEL_ROW:02d}{tier:02d}'
-        vessel_slot = OperationalPosition.objects.create(
-            layout_version=layout, code=f'{VISIT_NAME}.{stow}', name=f'{VISIT_NAME} slot {stow}',
-            position_kind=OperationalPosition.VESSEL_SLOT, asset=site_layout['quay'],
-            axis=site_layout['quay_axis'],
-            latitude=_coordinate(location, 150, 268)[1], longitude=_coordinate(location, 150, 268)[0],
-            logical_address={
-                'carrier_visit': VISIT_NAME, 'bay': VESSEL_BAY, 'row': VESSEL_ROW,
-                'tier': tier, 'stow': stow,
-            },
-        )
         unit = ContainerUnit.objects.create(
             container_number=container_number(OWNER_CODE, serials[index]),
             iso_type=iso_type, owner=owner, is_in_terminal=False,
@@ -338,44 +342,22 @@ def _seed_discharge(location, types, site_layout, rng, containers):
             status=ContainerVisit.PREADVISED,
             bill_of_lading=f'TVL{VISIT_NAME}{index + 1:03d}',
         )
-        yard_slot = yard_slots[index].operational_position
-        order = Order.objects.create(
-            order_type=Order.MOVE_IN, status=Order.DRAFT, priority=10 + index,
-            container_number=container_visit, work_queue=work_queue,
-            from_position=vessel_slot, to_position=yard_slot,
-            etc=SCENARIO_EPOCH + timedelta(hours=1, minutes=10 * index),
+        tier = VESSEL_FIRST_TIER + 2 * index
+        stow = f'{VESSEL_BAY:03d}{VESSEL_ROW:02d}{tier:02d}'
+        # ``container_visit_id`` lets discharge planning use this real BBBRRTT
+        # slot (D-041) as the order origin instead of its CV<id> placeholder.
+        OperationalPosition.objects.create(
+            layout_version=layout, code=f'{VISIT_NAME}.{stow}', name=f'{VISIT_NAME} slot {stow}',
+            position_kind=OperationalPosition.VESSEL_SLOT, asset=site_layout['quay'],
+            axis=site_layout['quay_axis'],
+            latitude=_coordinate(location, 150, 268)[1], longitude=_coordinate(location, 150, 268)[0],
+            logical_address={
+                'carrier_visit': VISIT_NAME, 'container_visit_id': container_visit.pk,
+                'bay': VESSEL_BAY, 'row': VESSEL_ROW, 'tier': tier, 'stow': stow,
+            },
         )
-        plan = OrderRoutePlan.objects.create(
-            order=order, layout_version=layout, version=1, status=OrderRoutePlan.ACTIVE,
-            reason='TCL-006 import_v1 seed (QC -> TT -> RTG hand-off chain)',
-        )
-        # D-015/TCL-003a hand-off shape: QC lands on the truck under the crane,
-        # the truck drives to the block lane, the RTG stacks into the slot.
-        legs = [
-            (OrderLeg.HANDLE, types['STS'], vessel_slot, qc_position),
-            (OrderLeg.MOVE, types['TT'], qc_position, tl_position),
-            (OrderLeg.HANDLE, types['RTG'], tl_position, yard_slot),
-        ]
-        total_cost = 0.0
-        for sequence, (kind, equipment_type, start, end) in enumerate(legs, start=1):
-            edges = _route_edges(layout, start, end) if kind == OrderLeg.MOVE else []
-            distance = sum(float(edge.distance_m or 0.0) for edge in edges)
-            leg = OrderLeg.objects.create(
-                order=order, route_plan=plan, sequence=sequence, leg_kind=kind,
-                equipment_type=equipment_type, distance=distance,
-                start_position=start, end_position=end,
-            )
-            for edge_sequence, edge in enumerate(edges, start=1):
-                OrderLegRouteEdge.objects.create(order_leg=leg, route_edge=edge, sequence=edge_sequence)
-            total_cost += sum(float(edge.base_cost or 0.0) for edge in edges)
-        plan.cost = total_cost
-        plan.save(update_fields=['cost'])
-        yard_slots[index].is_reserved = True
-        yard_slots[index].save(update_fields=['is_reserved'])
-        order.status = Order.PLANNED
-        order.save(update_fields=['status'])
-        orders.append(order)
-    return visit, orders
+        container_visits.append(container_visit)
+    return visit, container_visits
 
 
 @transaction.atomic
@@ -394,14 +376,14 @@ def seed(rng=None, containers=1):
     site = _seed_site(location)
     site_layout = _seed_layout(location, types)
     ches = _seed_ches(location, types, site_layout)
-    visit, orders = _seed_discharge(location, types, site_layout, rng, int(containers))
+    visit, container_visits = _seed_discharge(location, types, site_layout, rng, int(containers))
     # Real publish path: validates the layout, writes the snapshot and the
     # scms.site.configuration.published.v1 outbox event for OES/Godot.
     publish_layout(site_layout['layout'])
     site.refresh_from_db()
     return {
         'site': site, 'layout': site_layout['layout'], 'visit': visit,
-        'orders': orders, 'ches': ches,
+        'container_visits': container_visits, 'ches': ches,
     }
 
 
@@ -417,6 +399,11 @@ def release_discharge(order_id=None):
     else:
         order = orders.filter(status=Order.PLANNED).order_by('priority', 'pk').first()
         if order is None:
+            if not orders.exists():
+                # TCL-010b: the seed creates no orders; planning does, at InOperation.
+                raise ValidationError(
+                    'No import_v1 discharge order yet; run the visit-in-operation step first.'
+                )
             raise ValidationError('No PLANNED import_v1 discharge order left; run scenario-reset.')
     return release_order(order.pk)
 
@@ -442,9 +429,10 @@ class VisitInOperationResult:
 def visit_in_operation(order_id=None):
     """Step ``visit-in-operation`` (TCL-010, design sec. 8 (a)): move the seeded
     visit Arrived -> InOperation through CarrierVisit.save(), the same path as
-    the API and the admin, so discharge planning runs. A rerun saves nothing
-    (the visit is already InOperation) and planning is idempotent, so it only
-    reports (adopts) the orders that exist."""
+    the API and the admin, so discharge planning runs and creates the orders
+    (the seed has none since TCL-010b). A rerun saves nothing (the visit is
+    already InOperation) and planning is idempotent, so it only reports
+    (adopts) the orders that exist."""
     if order_id is not None:
         raise ValidationError('visit-in-operation takes no --order.')
     with transaction.atomic():
@@ -452,10 +440,19 @@ def visit_in_operation(order_id=None):
         if visit is None:
             raise ValidationError(f'No {VISIT_NAME} visit; run scenario-reset.')
         old_status = visit.status
+        # TCL-010b: CarrierVisit.save() already plans on Arrived -> InOperation,
+        # so the plan_visit_discharge() call below only adopts. Remember which
+        # orders existed before the save to report created vs adopted honestly.
+        existing = set(
+            Order.objects.filter(container_number__ib_carrier=visit, order_type=Order.MOVE_IN)
+            .values_list('pk', flat=True)
+        )
         if old_status != CarrierVisit.IN_OPERATION:
             visit.status = CarrierVisit.IN_OPERATION
             visit.save()
         planned = plan_visit_discharge(visit)
+        for item in planned:
+            item.created = item.order.pk not in existing
     return VisitInOperationResult(visit, old_status, planned)
 
 

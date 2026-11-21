@@ -15,8 +15,9 @@ on a yard slot (``destination_inventory_position_id`` set in the release
 payload).
 
 Idempotent: a container that already has a live discharge (MOVE_IN) order is
-adopted, not planned again. The import_v1 seed still pre-creates its orders
-until TCL-010b, so on the demo path every order is adopted.
+adopted, not planned again. Since TCL-010b the import_v1 seed creates no
+orders, so on the demo path every order is created here ("1 created, 0
+adopted"); adoption covers reruns.
 
 The yard slot is a random free slot of BLOCK01 (the block served by the
 block lane), drawn from a seeded ``random.Random`` (D-016: the same scenario
@@ -169,12 +170,12 @@ def free_yard_slots(grid):
 
 
 def _vessel_slot(visit, layout, qc_interface, qc_position, container_visit):
-    """The container's vessel slot: one already in the layout for it (seeded or
-    from a future stowage import), else a placeholder at the crane.
+    """The container's vessel slot.
 
-    PLACEHOLDER until a stowage import exists (post-MVP): there is no real
-    bay/row/tier stow data yet, so the fallback slot sits at the QC lane
-    position with ``stow: None``.
+    Looks up the real BBBRRTT vessel slot already in the layout for this
+    container (``logical_address.container_visit_id``), as seeded by
+    import_v1 or a future stowage import. Only if none exists does it
+    fall back to a placeholder at the QC lane with ``stow: None``.
     """
     slot = OperationalPosition.objects.filter(
         layout_version=layout, position_kind=OperationalPosition.VESSEL_SLOT,

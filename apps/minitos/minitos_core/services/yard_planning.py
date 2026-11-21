@@ -33,8 +33,12 @@ What "free" means (``free_yard_slots``)
     tier 2, then tier 3, and so on. A tier-N slot is only chosen when every
     lower tier of the same pile is already held (occupied, reserved, an
     open-order target, or chosen earlier in the same draw), so planning
-    never places a floating container. ``discharge_no_free_slot`` is raised
-    only when every tier is full. If stacking rules leave fewer slots
+    never places a floating container. "Held" is checked against the
+    database (``held_slot_keys``), not inferred from absence in ``free``: a
+    lower tier that is missing (no Position row) or empty but not plannable
+    (no operational position) does not hold anything up (BE review N-3 on
+    #38, 15 Nov), so the slot above it is not eligible.
+    ``discharge_no_free_slot`` is raised only when every tier is full. If stacking rules leave fewer slots
     reachable than ``free`` holds (a gappy grid), ``choose_slots`` raises
     ``SlotShortageError`` (a ``ValueError``) and discharge planning maps it to
     ``discharge_no_free_slot`` too, never a bare ``ValueError``.
@@ -86,9 +90,16 @@ def scenario_seed():
 
 
 def set_scenario_seed(scenario, seed):
-    """Replace the stored scenario seed (called by ``reset_scenario``)."""
-    ScenarioSeed.objects.all().delete()
-    return ScenarioSeed.objects.create(scenario=scenario, seed=int(seed))
+    """Replace the stored scenario seed (called by ``reset_scenario``).
+
+    ``ScenarioSeed`` is a singleton (unique ``key``), so this is an upsert on
+    that key, never a second insert.
+    """
+    row, _ = ScenarioSeed.objects.update_or_create(
+        key=ScenarioSeed.SINGLETON_KEY,
+        defaults={'scenario': scenario, 'seed': int(seed)},
+    )
+    return row
 
 
 def slot_rng(visit, seed=None):
@@ -129,15 +140,42 @@ def free_yard_slots(grid):
     )
 
 
-def choose_slots(free, count, rng, containers=None):
+def held_slot_q():
+    """Q on Position: something is (or will be) in this slot, so it holds up
+    the tier above: a container, the occupied flag, a reservation, or an open
+    order/leg ending on it."""
+    return (
+        Q(container_visit__isnull=False)
+        | Q(is_occupied=True)
+        | Q(is_reserved=True)
+        | open_order_destination_q()
+    )
+
+
+def held_slot_keys(pile_ids):
+    """``{(pile_id, tier)}`` of the held slots on ``pile_ids`` (``held_slot_q``)."""
+    return set(
+        Position.objects.filter(pile_id__in=set(pile_ids))
+        .filter(held_slot_q())
+        .values_list('pile_id', 'tier')
+    )
+
+
+def choose_slots(free, count, rng, containers=None, held_keys=None):
     """``count`` distinct slots from ``free``, lowest tier first, no floating.
 
     Within each tier, picks randomly with ``rng``. Tier 1 is exhausted before
     any tier 2 is considered, and so on up to the highest tier present in
     ``free``. A tier-N slot is only eligible when every lower tier of the same
-    pile is already held outside ``free``, or was chosen earlier in this call
-    (so a single plan can fill ground and then stack on the piles it just
-    reserved).
+    pile is already held (in ``held_keys``), or was chosen earlier in this
+    call (so a single plan can fill ground and then stack on the piles it
+    just reserved). A lower tier that is neither, e.g. a missing Position or
+    an empty slot with no operational position, makes the slot above it
+    ineligible: no floating stack on a gappy grid (BE review N-3 on #38).
+
+    ``held_keys`` (optional): ``{(pile_id, tier)}`` of held slots. When
+    omitted and ``free`` has a slot above tier 1, it is read from the database
+    with ``held_slot_keys`` for the piles in ``free``.
 
     ``containers`` (optional, one container visit per slot, in order): slot
     ``i`` of the result must fit ``containers[i]`` by the same bay/length rule
@@ -160,7 +198,9 @@ def choose_slots(free, count, rng, containers=None):
     if containers is not None and len(containers) != count:
         raise ValueError(f'{len(containers)} container(s) given for {count} slot(s).')
 
-    free_keys = {(slot.pile_id, slot.tier) for slot in free}
+    if held_keys is None:
+        stacked_piles = {slot.pile_id for slot in free if slot.tier > 1}
+        held_keys = held_slot_keys(stacked_piles) if stacked_piles else set()
     chosen_keys = set()
     taken = set()
 
@@ -181,7 +221,7 @@ def choose_slots(free, count, rng, containers=None):
                     continue
                 if all(
                     (slot.pile_id, lower) in chosen_keys
-                    or (slot.pile_id, lower) not in free_keys
+                    or (slot.pile_id, lower) in held_keys
                     for lower in range(1, tier)
                 ):
                     candidates.append(slot)

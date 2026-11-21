@@ -328,12 +328,15 @@ class SeededDemoPanelTests(TestCase):
         refused = self.client.post(url, {"status": "Created"})
         self.assertEqual(refused.status_code, 409)
         self.assertIn("cannot go back from Arrived to Created", refused.content.decode())
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.status, CarrierVisit.ARRIVED)
+        # TCL-010b: no order before InOperation (D-048); the panel's
+        # InOperation creates exactly one MOVE_IN order (TCL-010 planning).
+        self.assertFalse(Order.objects.filter(container_number__ib_carrier=self.visit).exists())
         response = self.client.post(url, {"status": "InOperation"})
         self.assertEqual(response.status_code, 302)
         self.visit.refresh_from_db()
         self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
-        # Until TCL-010b the seed pre-creates the discharge order, so the visit
-        # has exactly one MOVE_IN order whether or not TCL-010 has landed.
         self.assertEqual(
             Order.objects.filter(container_number__ib_carrier=self.visit, order_type=Order.MOVE_IN).count(), 1,
         )

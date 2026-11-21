@@ -128,10 +128,11 @@ environment are allowlisted explicitly (see `ALLOWED_ENVIRONMENT`):
 `fast` for tests and CI; explicit wait keys override the profile), the no-show time-outs per absent CHE
 `SIMULATOR_TT_NO_SHOW_TIMEOUT_S`, `SIMULATOR_QC_NO_SHOW_TIMEOUT_S`,
 `SIMULATOR_RTG_NO_SHOW_TIMEOUT_S` (300 s each), `SIMULATOR_LEG_STALL_TIMEOUT_S`
-(600 s), `SIMULATOR_COMMAND_TTL_S` and `SIMULATOR_SCENARIO_ID` (NBIRTH `Sim/ScenarioId`;
+(600 s), `SIMULATOR_NO_SHOW_TIMEOUT_ENABLED` (TCL-034e, D-053: one on/off
+switch for every no-show, default true), `SIMULATOR_COMMAND_TTL_S` and `SIMULATOR_SCENARIO_ID` (NBIRTH `Sim/ScenarioId`;
 the OES bootstrap `session.scenario_id` wins when present).
-`SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED` is retired (TCL-034: the RTG no-show is
-always on) and is rejected. `test_runner.py` checks that this allowlist and the
+`SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED` is retired (TCL-034; the global
+`SIMULATOR_NO_SHOW_TIMEOUT_ENABLED` replaces it) and is rejected. `test_runner.py` checks that this allowlist and the
 keys the Godot sources read match both ways.
 
 `SIMULATOR_DEVICE_ID_MODE` defaults to `name` in the simulator (device id =
