@@ -18,8 +18,10 @@ FIXTURE_SCHEMAS = (
 
 
 def scenario_events(name='import_v1'):
-    """Reset ``name``, release the first discharge order and return the events."""
+    """Reset ``name``, move the visit to InOperation (discharge planning creates
+    the orders, TCL-010b), release the first order and return the events."""
     reset_scenario(name)
+    run_step(name, 'visit-in-operation')
     run_step(name, 'release-discharge')
     events = {}
     for event in IntegrationOutbox.objects.filter(schema__in=FIXTURE_SCHEMAS).order_by('created_at'):

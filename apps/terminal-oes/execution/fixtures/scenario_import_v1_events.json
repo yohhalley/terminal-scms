@@ -44,11 +44,11 @@
        "status": "planned"
       },
       {
-       "destination_inventory_position_id": 109,
-       "destination_latitude": 17.956294002210523,
-       "destination_longitude": -102.16102124217535,
-       "destination_position_code": "BLOCK01.10.1.01",
-       "end_position": 109,
+       "destination_inventory_position_id": 79,
+       "destination_latitude": 17.956343193955483,
+       "destination_longitude": -102.16120419294056,
+       "destination_position_code": "BLOCK01.7.3.01",
+       "end_position": 79,
        "equipment_type": 3,
        "id": 3,
        "leg_kind": "handle",
@@ -69,9 +69,9 @@
       "from_position": 124,
       "id": 1,
       "priority": 10,
-      "released_at": "2026-11-16T23:26:13.206569+00:00",
+      "released_at": "2026-11-21T16:19:35.910708+00:00",
       "status": "released",
-      "to_position": 109
+      "to_position": 79
      }
     },
     "enterprise": {
@@ -79,8 +79,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "7421a9cc-03f1-45de-a591-f687ae17c4ac",
-    "occurred_at": "2026-11-16T23:26:13.206569+00:00",
+    "event_id": "96574b1f-c2b2-48cf-8944-f3905bba1ee8",
+    "occurred_at": "2026-11-21T16:19:35.910708+00:00",
     "schema": "scms.order.released.v1",
     "site": {
      "code": "test-terminal",
@@ -104,7 +104,7 @@
      "layout_version_id": 1,
      "lifecycle_status": "published",
      "simulation_enabled": true,
-     "snapshot_checksum": "8f319a16a7cc56199f18d3bfb44a996e6189cafb8832d061cf634c3ad07dcad7",
+     "snapshot_checksum": "57d1e1be5093f6850ad0e25fe5c33a70dfee406a0a7374898ee45ca8f6ad1bd5",
      "snapshot_path": "/minitos_core/sites/2ae1455e-25a2-575c-88f3-d4b918b0def1/execution-snapshot/?revision=1",
      "snapshot_schema": "scms.site.execution-snapshot.v1"
     },
@@ -113,8 +113,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "c9751b74-bd75-4264-a693-9da9025e5bb1",
-    "occurred_at": "2026-11-16T23:26:13.203823+00:00",
+    "event_id": "978a5b16-24ce-42a3-930a-b684e7b0611c",
+    "occurred_at": "2026-11-21T16:19:35.877968+00:00",
     "schema": "scms.site.configuration.published.v1",
     "site": {
      "code": "test-terminal",
@@ -138,8 +138,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "4e7a8a3e-4309-4721-9523-eaeba2f9de63",
-    "occurred_at": "2026-11-16T23:26:12.798627+00:00",
+    "event_id": "4d0ea04c-c895-49e0-b56f-21502efd1ce3",
+    "occurred_at": "2026-11-21T16:19:35.465091+00:00",
     "schema": "scms.site.created.v1",
     "site": {
      "code": "test-terminal",
@@ -153,7 +153,7 @@
   }
  },
  "snapshot_document": {
-  "checksum": "8f319a16a7cc56199f18d3bfb44a996e6189cafb8832d061cf634c3ad07dcad7",
+  "checksum": "57d1e1be5093f6850ad0e25fe5c33a70dfee406a0a7374898ee45ca8f6ad1bd5",
   "layout_version": 1,
   "payload": {
    "enterprise": {
@@ -179,7 +179,7 @@
       "name": "QC01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:26:12.985462+00:00",
+      "state_updated_at": "2026-11-21T16:19:35.655845+00:00",
       "working": false
      },
      {
@@ -197,7 +197,7 @@
       "name": "TT01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:26:13.033456+00:00",
+      "state_updated_at": "2026-11-21T16:19:35.712255+00:00",
       "working": false
      },
      {
@@ -215,7 +215,7 @@
       "name": "TT02",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:26:13.072021+00:00",
+      "state_updated_at": "2026-11-21T16:19:35.750215+00:00",
       "working": false
      },
      {
@@ -233,7 +233,7 @@
       "name": "RTG01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:26:13.110242+00:00",
+      "state_updated_at": "2026-11-21T16:19:35.788389+00:00",
       "working": false
      }
     ],
@@ -1766,7 +1766,7 @@
      }
     ]
    },
-   "generated_at": "2026-11-16T23:26:13.179599+00:00",
+   "generated_at": "2026-11-21T16:19:35.855818+00:00",
    "layout": {
     "access_policies": [
      {
@@ -5072,7 +5072,7 @@
       "asset_id": 5,
       "axis_id": 2,
       "chainage_m": null,
-      "code": "V001.0340682",
+      "code": "V001.0330682",
       "elevation_m": 0.0,
       "id": 124,
       "interface_position_id": null,
@@ -5080,14 +5080,15 @@
       "latitude": 17.95711848496144,
       "layout_version_id": 1,
       "logical_address": {
-       "bay": 34,
+       "bay": 33,
        "carrier_visit": "V001",
+       "container_visit_id": 1,
        "row": 6,
-       "stow": "0340682",
+       "stow": "0330682",
        "tier": 82
       },
       "longitude": -102.16112654646548,
-      "name": "V001 slot 0340682",
+      "name": "V001 slot 0330682",
       "position_kind": "vessel_slot",
       "stack_position_id": null
      }
@@ -6832,7 +6833,7 @@
       "id": 109,
       "is_occupied": false,
       "is_powered": false,
-      "is_reserved": true,
+      "is_reserved": false,
       "pile_id": 37,
       "tier": 1
      },
@@ -7948,16 +7949,16 @@
     ],
     "version": {
      "based_on_id": null,
-     "created_at": "2026-11-16T23:26:12.800537+00:00",
+     "created_at": "2026-11-21T16:19:35.466979+00:00",
      "created_by_id": null,
      "id": 1,
      "is_current": true,
      "location_id": 1,
      "name": "Working layout",
      "notes": "",
-     "published_at": "2026-11-16T23:26:13.176040+00:00",
+     "published_at": "2026-11-21T16:19:35.852225+00:00",
      "status": "published",
-     "updated_at": "2026-11-16T23:26:13.176091+00:00",
+     "updated_at": "2026-11-21T16:19:35.852279+00:00",
      "version": 1
     }
    },
