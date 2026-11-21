@@ -9,7 +9,7 @@
        "destination_inventory_position_id": null,
        "destination_latitude": 17.956866956681885,
        "destination_longitude": -102.16112654646548,
-       "destination_position_code": "QC01.LANE.01",
+       "destination_position_code": "QC01-L1.01",
        "end_position": 123,
        "equipment_type": 1,
        "id": 1,
@@ -28,7 +28,7 @@
        "destination_inventory_position_id": null,
        "destination_latitude": 17.95620220337164,
        "destination_longitude": -102.16138622961347,
-       "destination_position_code": "BLOCK01.TL.01",
+       "destination_position_code": "BLOCK01-TL.01",
        "end_position": 121,
        "equipment_type": 2,
        "id": 2,
@@ -69,7 +69,7 @@
       "from_position": 124,
       "id": 1,
       "priority": 10,
-      "released_at": "2026-11-16T23:03:03.039999+00:00",
+      "released_at": "2026-11-21T16:21:37.853136+00:00",
       "status": "released",
       "to_position": 79
      }
@@ -79,8 +79,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "add7d0cd-500f-4f2d-bdb6-b4874e9b48d5",
-    "occurred_at": "2026-11-16T23:03:03.039999+00:00",
+    "event_id": "6fea2ae2-84b3-464a-9d8f-5766524aed3a",
+    "occurred_at": "2026-11-21T16:21:37.853136+00:00",
     "schema": "scms.order.released.v1",
     "site": {
      "code": "test-terminal",
@@ -104,7 +104,7 @@
      "layout_version_id": 1,
      "lifecycle_status": "published",
      "simulation_enabled": true,
-     "snapshot_checksum": "7d54496d75986586993d4b3b171efea1105d6d0a7f0b77b7f25e2c55a70298ea",
+     "snapshot_checksum": "ddd8a2d38c012f5b0d89363a4cfc6b55e49369e4932240e382bcc7bf8687ef7f",
      "snapshot_path": "/minitos_core/sites/2ae1455e-25a2-575c-88f3-d4b918b0def1/execution-snapshot/?revision=1",
      "snapshot_schema": "scms.site.execution-snapshot.v1"
     },
@@ -113,8 +113,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "08889e0d-7e10-4bb2-a6d0-e4ab4856a436",
-    "occurred_at": "2026-11-16T23:03:03.007784+00:00",
+    "event_id": "79ac9cbd-a1b3-43fb-a208-9e968734b06c",
+    "occurred_at": "2026-11-21T16:21:37.820665+00:00",
     "schema": "scms.site.configuration.published.v1",
     "site": {
      "code": "test-terminal",
@@ -138,8 +138,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "071a08af-0058-4883-98f6-08e213ab2263",
-    "occurred_at": "2026-11-16T23:03:02.596469+00:00",
+    "event_id": "146a349e-c4f8-476a-95ee-ee8f9f8b581e",
+    "occurred_at": "2026-11-21T16:21:37.417647+00:00",
     "schema": "scms.site.created.v1",
     "site": {
      "code": "test-terminal",
@@ -153,7 +153,7 @@
   }
  },
  "snapshot_document": {
-  "checksum": "7d54496d75986586993d4b3b171efea1105d6d0a7f0b77b7f25e2c55a70298ea",
+  "checksum": "ddd8a2d38c012f5b0d89363a4cfc6b55e49369e4932240e382bcc7bf8687ef7f",
   "layout_version": 1,
   "payload": {
    "enterprise": {
@@ -179,7 +179,7 @@
       "name": "QC01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:03:02.787773+00:00",
+      "state_updated_at": "2026-11-21T16:21:37.606994+00:00",
       "working": false
      },
      {
@@ -197,7 +197,7 @@
       "name": "TT01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:03:02.841040+00:00",
+      "state_updated_at": "2026-11-21T16:21:37.655877+00:00",
       "working": false
      },
      {
@@ -215,7 +215,7 @@
       "name": "TT02",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:03:02.879463+00:00",
+      "state_updated_at": "2026-11-21T16:21:37.694156+00:00",
       "working": false
      },
      {
@@ -233,7 +233,7 @@
       "name": "RTG01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:03:02.917495+00:00",
+      "state_updated_at": "2026-11-21T16:21:37.732373+00:00",
       "working": false
      }
     ],
@@ -1766,7 +1766,7 @@
      }
     ]
    },
-   "generated_at": "2026-11-16T23:03:02.984432+00:00",
+   "generated_at": "2026-11-21T16:21:37.797973+00:00",
    "layout": {
     "access_policies": [
      {
@@ -2044,7 +2044,7 @@
     "interface_positions": [
      {
       "capacity": 1,
-      "code": "BLOCK01.TL.01",
+      "code": "BLOCK01-TL.01",
       "heading_deg": 0.0,
       "id": 1,
       "is_enabled": true,
@@ -2058,7 +2058,7 @@
      },
      {
       "capacity": 1,
-      "code": "BLOCK01.TL.02",
+      "code": "BLOCK01-TL.02",
       "heading_deg": 0.0,
       "id": 2,
       "is_enabled": true,
@@ -2072,7 +2072,7 @@
      },
      {
       "capacity": 1,
-      "code": "QC01.LANE.01",
+      "code": "QC01-L1.01",
       "heading_deg": 0.0,
       "id": 3,
       "is_enabled": true,
@@ -5009,7 +5009,7 @@
       "asset_id": 6,
       "axis_id": 1,
       "chainage_m": null,
-      "code": "BLOCK01.TL.01",
+      "code": "BLOCK01-TL.01",
       "elevation_m": 0.0,
       "id": 121,
       "interface_position_id": 1,
@@ -5017,7 +5017,7 @@
       "latitude": 17.95620220337164,
       "layout_version_id": 1,
       "logical_address": {
-       "interface": "BLOCK01.TL",
+       "interface": "BLOCK01-TL",
        "lane": 1,
        "position": 1
       },
@@ -5030,7 +5030,7 @@
       "asset_id": 6,
       "axis_id": 1,
       "chainage_m": null,
-      "code": "BLOCK01.TL.02",
+      "code": "BLOCK01-TL.02",
       "elevation_m": 0.0,
       "id": 122,
       "interface_position_id": 2,
@@ -5038,7 +5038,7 @@
       "latitude": 17.95620220337164,
       "layout_version_id": 1,
       "logical_address": {
-       "interface": "BLOCK01.TL",
+       "interface": "BLOCK01-TL",
        "lane": 1,
        "position": 2
       },
@@ -5051,7 +5051,7 @@
       "asset_id": 5,
       "axis_id": 2,
       "chainage_m": null,
-      "code": "QC01.LANE.01",
+      "code": "QC01-L1.01",
       "elevation_m": 0.0,
       "id": 123,
       "interface_position_id": 3,
@@ -5059,7 +5059,7 @@
       "latitude": 17.956866956681885,
       "layout_version_id": 1,
       "logical_address": {
-       "interface": "QC01.LANE",
+       "interface": "QC01-L1",
        "lane": 1,
        "position": 1
       },
@@ -7109,7 +7109,7 @@
        "operational_axis_id": 1
       },
       "movement_mode": "crane",
-      "name": "BLOCK01 to BLOCK01.TL",
+      "name": "BLOCK01 to BLOCK01-TL",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 10
@@ -7132,7 +7132,7 @@
        "operational_axis_id": 1
       },
       "movement_mode": "crane",
-      "name": "BLOCK01 to BLOCK01.TL",
+      "name": "BLOCK01 to BLOCK01-TL",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 9
@@ -7155,7 +7155,7 @@
        "interface_position_id": 1
       },
       "movement_mode": "static",
-      "name": "BLOCK01.TL position access",
+      "name": "BLOCK01-TL position access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 7
@@ -7178,7 +7178,7 @@
        "interface_position_id": 1
       },
       "movement_mode": "static",
-      "name": "BLOCK01.TL position access",
+      "name": "BLOCK01-TL position access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 10
@@ -7201,7 +7201,7 @@
        "interface_position_id": 2
       },
       "movement_mode": "static",
-      "name": "BLOCK01.TL position access",
+      "name": "BLOCK01-TL position access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 8
@@ -7224,7 +7224,7 @@
        "interface_position_id": 2
       },
       "movement_mode": "static",
-      "name": "BLOCK01.TL position access",
+      "name": "BLOCK01-TL position access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 10
@@ -7247,7 +7247,7 @@
        "road_axis_id": 1
       },
       "movement_mode": "road",
-      "name": "BLOCK01.TL road access",
+      "name": "BLOCK01-TL road access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 2
@@ -7270,7 +7270,7 @@
        "road_axis_id": 1
       },
       "movement_mode": "road",
-      "name": "BLOCK01.TL road access",
+      "name": "BLOCK01-TL road access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 10
@@ -7279,7 +7279,7 @@
       "access_policy_id": 1,
       "base_cost": 1.0,
       "capacity": 1,
-      "code": "BLOCK01.TL.01.IN",
+      "code": "BLOCK01-TL.01.IN",
       "distance_m": 23.711707721717232,
       "edge_kind": "handoff",
       "from_node_id": 2,
@@ -7289,7 +7289,7 @@
       "layout_version_id": 1,
       "metadata": {},
       "movement_mode": "road",
-      "name": "BLOCK01.TL transfer in",
+      "name": "BLOCK01-TL transfer in",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 7
@@ -7298,7 +7298,7 @@
       "access_policy_id": 1,
       "base_cost": 1.0,
       "capacity": 1,
-      "code": "BLOCK01.TL.01.OUT",
+      "code": "BLOCK01-TL.01.OUT",
       "distance_m": 23.711707721717232,
       "edge_kind": "handoff",
       "from_node_id": 7,
@@ -7308,7 +7308,7 @@
       "layout_version_id": 1,
       "metadata": {},
       "movement_mode": "road",
-      "name": "BLOCK01.TL transfer out",
+      "name": "BLOCK01-TL transfer out",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 2
@@ -7317,7 +7317,7 @@
       "access_policy_id": 1,
       "base_cost": 1.0,
       "capacity": 1,
-      "code": "BLOCK01.TL.02.IN",
+      "code": "BLOCK01-TL.02.IN",
       "distance_m": 31.815685726416618,
       "edge_kind": "handoff",
       "from_node_id": 2,
@@ -7327,7 +7327,7 @@
       "layout_version_id": 1,
       "metadata": {},
       "movement_mode": "road",
-      "name": "BLOCK01.TL transfer in",
+      "name": "BLOCK01-TL transfer in",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 8
@@ -7336,7 +7336,7 @@
       "access_policy_id": 1,
       "base_cost": 1.0,
       "capacity": 1,
-      "code": "BLOCK01.TL.02.OUT",
+      "code": "BLOCK01-TL.02.OUT",
       "distance_m": 31.815685726416618,
       "edge_kind": "handoff",
       "from_node_id": 8,
@@ -7346,7 +7346,7 @@
       "layout_version_id": 1,
       "metadata": {},
       "movement_mode": "road",
-      "name": "BLOCK01.TL transfer out",
+      "name": "BLOCK01-TL transfer out",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 2
@@ -7369,7 +7369,7 @@
        "operational_axis_id": 2
       },
       "movement_mode": "crane",
-      "name": "QUAY-01 to QC01.LANE",
+      "name": "QUAY-01 to QC01-L1",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 13
@@ -7392,7 +7392,7 @@
        "operational_axis_id": 2
       },
       "movement_mode": "crane",
-      "name": "QUAY-01 to QC01.LANE",
+      "name": "QUAY-01 to QC01-L1",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 12
@@ -7415,7 +7415,7 @@
        "interface_position_id": 3
       },
       "movement_mode": "static",
-      "name": "QC01.LANE position access",
+      "name": "QC01-L1 position access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 11
@@ -7438,7 +7438,7 @@
        "interface_position_id": 3
       },
       "movement_mode": "static",
-      "name": "QC01.LANE position access",
+      "name": "QC01-L1 position access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 13
@@ -7461,7 +7461,7 @@
        "road_axis_id": 1
       },
       "movement_mode": "road",
-      "name": "QC01.LANE road access",
+      "name": "QC01-L1 road access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 2
@@ -7484,7 +7484,7 @@
        "road_axis_id": 1
       },
       "movement_mode": "road",
-      "name": "QC01.LANE road access",
+      "name": "QC01-L1 road access",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 13
@@ -7493,7 +7493,7 @@
       "access_policy_id": 1,
       "base_cost": 1.0,
       "capacity": 1,
-      "code": "QC01.LANE.01.IN",
+      "code": "QC01-L1.01.IN",
       "distance_m": 90.55384044007117,
       "edge_kind": "handoff",
       "from_node_id": 2,
@@ -7503,7 +7503,7 @@
       "layout_version_id": 1,
       "metadata": {},
       "movement_mode": "road",
-      "name": "QC01.LANE transfer in",
+      "name": "QC01-L1 transfer in",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 11
@@ -7512,7 +7512,7 @@
       "access_policy_id": 1,
       "base_cost": 1.0,
       "capacity": 1,
-      "code": "QC01.LANE.01.OUT",
+      "code": "QC01-L1.01.OUT",
       "distance_m": 90.55384044007117,
       "edge_kind": "handoff",
       "from_node_id": 11,
@@ -7522,7 +7522,7 @@
       "layout_version_id": 1,
       "metadata": {},
       "movement_mode": "road",
-      "name": "QC01.LANE transfer out",
+      "name": "QC01-L1 transfer out",
       "nominal_duration_seconds": null,
       "source_axis_id": null,
       "to_node_id": 2
@@ -7669,7 +7669,7 @@
      },
      {
       "asset_id": 6,
-      "code": "BLOCK01.TL.01.NODE",
+      "code": "BLOCK01-TL.01.NODE",
       "id": 7,
       "is_enabled": true,
       "is_generated": true,
@@ -7692,7 +7692,7 @@
      },
      {
       "asset_id": 6,
-      "code": "BLOCK01.TL.02.NODE",
+      "code": "BLOCK01-TL.02.NODE",
       "id": 8,
       "is_enabled": true,
       "is_generated": true,
@@ -7748,7 +7748,7 @@
        "asset_id": 6,
        "interface_id": 1
       },
-      "name": "BLOCK01.TL interface",
+      "name": "BLOCK01-TL interface",
       "node_kind": "interface",
       "operational_position_id": null,
       "point": {
@@ -7762,7 +7762,7 @@
      },
      {
       "asset_id": 5,
-      "code": "QC01.LANE.01.NODE",
+      "code": "QC01-L1.01.NODE",
       "id": 11,
       "is_enabled": true,
       "is_generated": true,
@@ -7818,7 +7818,7 @@
        "asset_id": 5,
        "interface_id": 2
       },
-      "name": "QC01.LANE interface",
+      "name": "QC01-L1 interface",
       "node_kind": "interface",
       "operational_position_id": null,
       "point": {
@@ -7872,7 +7872,7 @@
       "bay_start": null,
       "capacity": 2,
       "cargo_may_rest": false,
-      "code": "BLOCK01.TL",
+      "code": "BLOCK01-TL",
       "geometry": {
        "coordinates": [
         [
@@ -7913,7 +7913,7 @@
       "bay_start": null,
       "capacity": 1,
       "cargo_may_rest": false,
-      "code": "QC01.LANE",
+      "code": "QC01-L1",
       "geometry": {
        "coordinates": [
         [
@@ -7949,16 +7949,16 @@
     ],
     "version": {
      "based_on_id": null,
-     "created_at": "2026-11-16T23:03:02.598385+00:00",
+     "created_at": "2026-11-21T16:21:37.419548+00:00",
      "created_by_id": null,
      "id": 1,
      "is_current": true,
      "location_id": 1,
      "name": "Working layout",
      "notes": "",
-     "published_at": "2026-11-16T23:03:02.980595+00:00",
+     "published_at": "2026-11-21T16:21:37.794269+00:00",
      "status": "published",
-     "updated_at": "2026-11-16T23:03:02.980655+00:00",
+     "updated_at": "2026-11-21T16:21:37.794326+00:00",
      "version": 1
     }
    },
