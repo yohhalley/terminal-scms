@@ -3350,13 +3350,26 @@ class ScenarioSeed(models.Model):
     e.g. the yard slot of a discharge order, from the same seed (D-016). No row
     (normal operation, no scenario reset) means the default planning seed.
     No timestamps on purpose: the two-resets test compares this table too.
+
+    At most one row (BE review N-2/N-3 on #38): ``key`` is always
+    ``SINGLETON_KEY`` and unique, so a second row is refused by the database
+    and ``set_scenario_seed`` upserts on it instead of inserting.
     """
 
+    SINGLETON_KEY = 'current'
+
+    key = models.CharField(max_length=16, default=SINGLETON_KEY, editable=False)
     scenario = models.CharField(max_length=40)
     seed = models.BigIntegerField()
 
     class Meta:
         ordering = ['pk']
+        constraints = [
+            models.UniqueConstraint(fields=['key'], name='scenario_seed_singleton'),
+            models.CheckConstraint(
+                check=models.Q(key='current'), name='scenario_seed_key_is_singleton',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.scenario} seed {self.seed}'
