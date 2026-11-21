@@ -72,6 +72,10 @@ SCENARIO_EPOCH = datetime.fromtimestamp(SIMULATOR_START_EPOCH_MS / 1000, tz=dt_t
 # BBBRRTT). The seeded boxes are 20' (22G1), and 20' boxes stow in odd bays;
 # even bays denote 40' slots (SME review of #26, BL-26b).
 VESSEL_BAY, VESSEL_ROW, VESSEL_FIRST_TIER = 33, 6, 82
+# D-031 demo screens: the seeded "discharge list received" time is this lead
+# before the vessel berths (``ata`` = SCENARIO_EPOCH), one time per vessel call.
+# Placeholder until Yael answers board-7 card Q3 / spec Q27 (SME: 24-72 h).
+DISCHARGE_LIST_LEAD_TIME = timedelta(hours=48)
 
 
 def _coordinate(location, x_m, y_m):
@@ -308,6 +312,7 @@ def _seed_discharge(location, types, site_layout, rng, containers):
         location=location, vessel_name='TV PIONEER', voyage_number='001I',
         carrier='Terminal Velocity Line', berth='BERTH-01', planned_berth=site_layout['berth'],
         eta=SCENARIO_EPOCH, ata=SCENARIO_EPOCH, etd=SCENARIO_EPOCH + timedelta(hours=12),
+        discharge_list_received_at=SCENARIO_EPOCH - DISCHARGE_LIST_LEAD_TIME,
         moves_in=containers, moves_import=containers, total_moves=containers,
         primary_equipment_type=types['STS'],
     )

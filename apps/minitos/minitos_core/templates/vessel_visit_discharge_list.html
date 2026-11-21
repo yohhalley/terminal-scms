@@ -1,0 +1,67 @@
+{% load demo_display_tags %}<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discharge List - {{ visit.name }} - {{ location.name }} - MiniTOS</title>
+    <style>
+        * { box-sizing: border-box; }
+        :root { --ink: #17333a; --muted: #66777c; --line: #d9e1e3; --paper: #f4f7f7; --accent: #e85d2a; --teal: #0f766e; }
+        body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--paper); font-family: Inter, "Segoe UI", sans-serif; }
+        .topbar { height: 60px; display: flex; align-items: center; gap: 12px; padding: 0 24px; background: #fff; border-bottom: 1px solid var(--line); }
+        .topbar strong { margin-right: auto; font-size: 18px; }
+        .button { display: inline-flex; align-items: center; min-height: 36px; padding: 8px 13px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: #fff; font: inherit; font-size: 13px; font-weight: 650; text-decoration: none; }
+        .button:hover { color: var(--accent); border-color: var(--accent); }
+        main { width: min(1120px, calc(100% - 40px)); margin: 30px auto; }
+        h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+        .heading p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+        .facts { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: 16px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 6px; background: #fff; font-size: 13px; }
+        .facts b { display: block; color: var(--muted); font-size: 11px; font-weight: 750; text-transform: uppercase; }
+        table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: 6px; background: #fff; font-size: 13px; }
+        th { padding: 10px 12px; color: var(--muted); background: #edf2f2; font-size: 11px; font-weight: 750; text-align: left; text-transform: uppercase; }
+        td { padding: 11px 12px; border-top: 1px solid var(--line); }
+        .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+        .empty { padding: 50px 20px; color: var(--muted); text-align: center; }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <strong>MiniTOS</strong>
+        <a class="button" href="{% url 'vessel_visit_panel' location.id %}">Vessel Visits</a>
+        <a class="button" href="{% url 'berth_plan' location.id %}">Berth Plan</a>
+    </header>
+    <main>
+        <div class="heading">
+            <h1>Discharge list · {{ visit.name }}</h1>
+            <p>{{ location.name }} · times in {{ timezone_name }} · read-only</p>
+        </div>
+        <section class="facts" aria-label="Vessel visit">
+            <div><b>Vessel / voyage</b> <span data-field="vessel">{{ visit.vessel_name|default:missing }}{% if visit.voyage_number %} · {{ visit.voyage_number }}{% endif %}</span></div>
+            <div><b>Status</b> <span data-field="visit-status">{{ visit.get_status_display }}</span></div>
+            <div><b>Discharge list received</b> <span data-field="discharge-list-received">{{ visit.discharge_list_received_at|demo_time:location }}</span>{% if visit.discharge_list_received_at %} <span data-field="timezone">{{ timezone_name }}</span>{% endif %}</div>
+            <div><b>Berthed</b> <span data-field="ata">{{ visit.ata|demo_time:location }}</span>{% if visit.ata %} <span>{{ timezone_name }}</span>{% endif %}</div>
+            <div><b>Containers</b> <span data-field="container-count">{{ rows|length }}</span></div>
+        </section>
+        <table aria-label="Discharge list">
+            <thead>
+                <tr><th>Container number</th><th>Size-type</th><th>Vessel slot</th><th>Status</th><th>Discharge order</th><th>Planned yard slot</th><th>Current CHE</th></tr>
+            </thead>
+            <tbody>
+            {% for row in rows %}
+                <tr data-container-visit="{{ row.container_visit.pk }}">
+                    <td class="mono" data-field="container-number">{{ row.container_number }}</td>
+                    <td data-field="iso-type">{{ row.iso_type }}</td>
+                    <td class="mono" data-field="vessel-slot"{% if not row.has_vessel_slot %} title="no stowage slot"{% endif %}>{{ row.vessel_slot }}</td>
+                    <td data-field="status">{{ row.status }}</td>
+                    <td data-field="order-status">{{ row.order_status }}</td>
+                    <td class="mono" data-field="planned-yard-slot">{{ row.planned_yard_slot }}</td>
+                    <td data-field="current-che">{{ row.current_che }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7" class="empty">No inbound containers on this visit's discharge list.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </main>
+</body>
+</html>
