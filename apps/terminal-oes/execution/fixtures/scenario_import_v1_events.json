@@ -45,8 +45,8 @@
       },
       {
        "destination_inventory_position_id": 79,
-       "destination_latitude": 17.956658340923457,
-       "destination_longitude": -102.16153547603876,
+       "destination_latitude": 17.956343193955483,
+       "destination_longitude": -102.16120419294056,
        "destination_position_code": "BLOCK01.7.3.01",
        "end_position": 79,
        "equipment_type": 3,
@@ -69,7 +69,7 @@
       "from_position": 124,
       "id": 1,
       "priority": 10,
-      "released_at": "2026-11-16T23:03:03.039999+00:00",
+      "released_at": "2026-11-21T16:19:35.910708+00:00",
       "status": "released",
       "to_position": 79
      }
@@ -79,8 +79,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "add7d0cd-500f-4f2d-bdb6-b4874e9b48d5",
-    "occurred_at": "2026-11-16T23:03:03.039999+00:00",
+    "event_id": "96574b1f-c2b2-48cf-8944-f3905bba1ee8",
+    "occurred_at": "2026-11-21T16:19:35.910708+00:00",
     "schema": "scms.order.released.v1",
     "site": {
      "code": "test-terminal",
@@ -104,7 +104,7 @@
      "layout_version_id": 1,
      "lifecycle_status": "published",
      "simulation_enabled": true,
-     "snapshot_checksum": "7d54496d75986586993d4b3b171efea1105d6d0a7f0b77b7f25e2c55a70298ea",
+     "snapshot_checksum": "57d1e1be5093f6850ad0e25fe5c33a70dfee406a0a7374898ee45ca8f6ad1bd5",
      "snapshot_path": "/minitos_core/sites/2ae1455e-25a2-575c-88f3-d4b918b0def1/execution-snapshot/?revision=1",
      "snapshot_schema": "scms.site.execution-snapshot.v1"
     },
@@ -113,8 +113,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "08889e0d-7e10-4bb2-a6d0-e4ab4856a436",
-    "occurred_at": "2026-11-16T23:03:03.007784+00:00",
+    "event_id": "978a5b16-24ce-42a3-930a-b684e7b0611c",
+    "occurred_at": "2026-11-21T16:19:35.877968+00:00",
     "schema": "scms.site.configuration.published.v1",
     "site": {
      "code": "test-terminal",
@@ -138,8 +138,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "071a08af-0058-4883-98f6-08e213ab2263",
-    "occurred_at": "2026-11-16T23:03:02.596469+00:00",
+    "event_id": "4d0ea04c-c895-49e0-b56f-21502efd1ce3",
+    "occurred_at": "2026-11-21T16:19:35.465091+00:00",
     "schema": "scms.site.created.v1",
     "site": {
      "code": "test-terminal",
@@ -153,7 +153,7 @@
   }
  },
  "snapshot_document": {
-  "checksum": "7d54496d75986586993d4b3b171efea1105d6d0a7f0b77b7f25e2c55a70298ea",
+  "checksum": "57d1e1be5093f6850ad0e25fe5c33a70dfee406a0a7374898ee45ca8f6ad1bd5",
   "layout_version": 1,
   "payload": {
    "enterprise": {
@@ -179,7 +179,7 @@
       "name": "QC01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:03:02.787773+00:00",
+      "state_updated_at": "2026-11-21T16:19:35.655845+00:00",
       "working": false
      },
      {
@@ -197,7 +197,7 @@
       "name": "TT01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:03:02.841040+00:00",
+      "state_updated_at": "2026-11-21T16:19:35.712255+00:00",
       "working": false
      },
      {
@@ -215,7 +215,7 @@
       "name": "TT02",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:03:02.879463+00:00",
+      "state_updated_at": "2026-11-21T16:19:35.750215+00:00",
       "working": false
      },
      {
@@ -233,7 +233,7 @@
       "name": "RTG01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-16T23:03:02.917495+00:00",
+      "state_updated_at": "2026-11-21T16:19:35.788389+00:00",
       "working": false
      }
     ],
@@ -1766,7 +1766,7 @@
      }
     ]
    },
-   "generated_at": "2026-11-16T23:03:02.984432+00:00",
+   "generated_at": "2026-11-21T16:19:35.855818+00:00",
    "layout": {
     "access_policies": [
      {
@@ -1954,29 +1954,29 @@
         [
          [
           -102.16207084882183,
-          17.95673220938927
-         ],
-         [
-          -102.1592379417528,
-          17.95673220938927
+          17.957046619738712
          ],
          [
           -102.1592379417528,
           17.957046619738712
          ],
          [
-          -102.16207084882183,
-          17.957046619738712
+          -102.1592379417528,
+          17.95673220938927
          ],
          [
           -102.16207084882183,
           17.95673220938927
+         ],
+         [
+          -102.16207084882183,
+          17.957046619738712
          ]
         ]
        ],
        "type": "Polygon"
       },
-      "heading_deg": 0.0,
+      "heading_deg": 90.0,
       "id": 5,
       "is_active": true,
       "is_visible": true,
@@ -2073,7 +2073,7 @@
      {
       "capacity": 1,
       "code": "QC01.LANE.01",
-      "heading_deg": 0.0,
+      "heading_deg": 90.0,
       "id": 3,
       "is_enabled": true,
       "lane_index": 1,
@@ -2374,7 +2374,7 @@
       "id": 1,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2382,7 +2382,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 1
@@ -2396,7 +2396,7 @@
       "id": 2,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2404,7 +2404,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 2
@@ -2418,7 +2418,7 @@
       "id": 3,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2426,7 +2426,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 3
@@ -2440,7 +2440,7 @@
       "id": 4,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2448,7 +2448,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 4
@@ -2462,7 +2462,7 @@
       "id": 5,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2470,7 +2470,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 5
@@ -2484,7 +2484,7 @@
       "id": 6,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2492,7 +2492,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 6
@@ -2506,7 +2506,7 @@
       "id": 7,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2514,7 +2514,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 7
@@ -2528,7 +2528,7 @@
       "id": 8,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2536,7 +2536,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 8
@@ -2550,7 +2550,7 @@
       "id": 9,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2558,7 +2558,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 9
@@ -2572,7 +2572,7 @@
       "id": 10,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2580,7 +2580,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 10
@@ -2594,7 +2594,7 @@
       "id": 11,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2602,7 +2602,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 11
@@ -2616,7 +2616,7 @@
       "id": 12,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956310261717167,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "1",
@@ -2624,7 +2624,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16157009447096,
       "name": "BLOCK01.1.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 12
@@ -2638,7 +2638,7 @@
       "id": 13,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2646,7 +2646,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 13
@@ -2660,7 +2660,7 @@
       "id": 14,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2668,7 +2668,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 14
@@ -2682,7 +2682,7 @@
       "id": 15,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2690,7 +2690,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 15
@@ -2704,7 +2704,7 @@
       "id": 16,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2712,7 +2712,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 16
@@ -2726,7 +2726,7 @@
       "id": 17,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2734,7 +2734,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 17
@@ -2748,7 +2748,7 @@
       "id": 18,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2756,7 +2756,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 18
@@ -2770,7 +2770,7 @@
       "id": 19,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2778,7 +2778,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 19
@@ -2792,7 +2792,7 @@
       "id": 20,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2800,7 +2800,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 20
@@ -2814,7 +2814,7 @@
       "id": 21,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2822,7 +2822,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 21
@@ -2836,7 +2836,7 @@
       "id": 22,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2844,7 +2844,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 22
@@ -2858,7 +2858,7 @@
       "id": 23,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2866,7 +2866,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 23
@@ -2880,7 +2880,7 @@
       "id": 24,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956368274918216,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "2",
@@ -2888,7 +2888,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16150911088256,
       "name": "BLOCK01.2.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 24
@@ -2902,7 +2902,7 @@
       "id": 25,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -2910,7 +2910,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 25
@@ -2924,7 +2924,7 @@
       "id": 26,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -2932,7 +2932,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 26
@@ -2946,7 +2946,7 @@
       "id": 27,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -2954,7 +2954,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 27
@@ -2968,7 +2968,7 @@
       "id": 28,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -2976,7 +2976,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 28
@@ -2990,7 +2990,7 @@
       "id": 29,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -2998,7 +2998,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 29
@@ -3012,7 +3012,7 @@
       "id": 30,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -3020,7 +3020,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 30
@@ -3034,7 +3034,7 @@
       "id": 31,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -3042,7 +3042,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 31
@@ -3056,7 +3056,7 @@
       "id": 32,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -3064,7 +3064,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 32
@@ -3078,7 +3078,7 @@
       "id": 33,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -3086,7 +3086,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 33
@@ -3100,7 +3100,7 @@
       "id": 34,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -3108,7 +3108,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 34
@@ -3122,7 +3122,7 @@
       "id": 35,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -3130,7 +3130,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 35
@@ -3144,7 +3144,7 @@
       "id": 36,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956426288119264,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "3",
@@ -3152,7 +3152,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16144812729415,
       "name": "BLOCK01.3.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 36
@@ -3166,7 +3166,7 @@
       "id": 37,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3174,7 +3174,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 37
@@ -3188,7 +3188,7 @@
       "id": 38,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3196,7 +3196,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 38
@@ -3210,7 +3210,7 @@
       "id": 39,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3218,7 +3218,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 39
@@ -3232,7 +3232,7 @@
       "id": 40,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3240,7 +3240,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 40
@@ -3254,7 +3254,7 @@
       "id": 41,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3262,7 +3262,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 41
@@ -3276,7 +3276,7 @@
       "id": 42,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3284,7 +3284,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 42
@@ -3298,7 +3298,7 @@
       "id": 43,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3306,7 +3306,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 43
@@ -3320,7 +3320,7 @@
       "id": 44,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3328,7 +3328,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 44
@@ -3342,7 +3342,7 @@
       "id": 45,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3350,7 +3350,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 45
@@ -3364,7 +3364,7 @@
       "id": 46,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3372,7 +3372,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 46
@@ -3386,7 +3386,7 @@
       "id": 47,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3394,7 +3394,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 47
@@ -3408,7 +3408,7 @@
       "id": 48,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956484301320312,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "4",
@@ -3416,7 +3416,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16138714370575,
       "name": "BLOCK01.4.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 48
@@ -3430,7 +3430,7 @@
       "id": 49,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3438,7 +3438,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 49
@@ -3452,7 +3452,7 @@
       "id": 50,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3460,7 +3460,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 50
@@ -3474,7 +3474,7 @@
       "id": 51,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3482,7 +3482,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 51
@@ -3496,7 +3496,7 @@
       "id": 52,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3504,7 +3504,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 52
@@ -3518,7 +3518,7 @@
       "id": 53,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3526,7 +3526,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 53
@@ -3540,7 +3540,7 @@
       "id": 54,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3548,7 +3548,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 54
@@ -3562,7 +3562,7 @@
       "id": 55,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3570,7 +3570,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 55
@@ -3584,7 +3584,7 @@
       "id": 56,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3592,7 +3592,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 56
@@ -3606,7 +3606,7 @@
       "id": 57,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3614,7 +3614,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 57
@@ -3628,7 +3628,7 @@
       "id": 58,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3636,7 +3636,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 58
@@ -3650,7 +3650,7 @@
       "id": 59,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3658,7 +3658,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 59
@@ -3672,7 +3672,7 @@
       "id": 60,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95654231452136,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "5",
@@ -3680,7 +3680,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16132616011735,
       "name": "BLOCK01.5.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 60
@@ -3694,7 +3694,7 @@
       "id": 61,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3702,7 +3702,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 61
@@ -3716,7 +3716,7 @@
       "id": 62,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3724,7 +3724,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 62
@@ -3738,7 +3738,7 @@
       "id": 63,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3746,7 +3746,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 63
@@ -3760,7 +3760,7 @@
       "id": 64,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3768,7 +3768,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 64
@@ -3782,7 +3782,7 @@
       "id": 65,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3790,7 +3790,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 65
@@ -3804,7 +3804,7 @@
       "id": 66,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3812,7 +3812,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 66
@@ -3826,7 +3826,7 @@
       "id": 67,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3834,7 +3834,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 67
@@ -3848,7 +3848,7 @@
       "id": 68,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3856,7 +3856,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 68
@@ -3870,7 +3870,7 @@
       "id": 69,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3878,7 +3878,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 69
@@ -3892,7 +3892,7 @@
       "id": 70,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3900,7 +3900,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 70
@@ -3914,7 +3914,7 @@
       "id": 71,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3922,7 +3922,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 71
@@ -3936,7 +3936,7 @@
       "id": 72,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.95660032772241,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "6",
@@ -3944,7 +3944,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16126517652896,
       "name": "BLOCK01.6.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 72
@@ -3958,7 +3958,7 @@
       "id": 73,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -3966,7 +3966,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 73
@@ -3980,7 +3980,7 @@
       "id": 74,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -3988,7 +3988,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 74
@@ -4002,7 +4002,7 @@
       "id": 75,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4010,7 +4010,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 75
@@ -4024,7 +4024,7 @@
       "id": 76,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4032,7 +4032,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 76
@@ -4046,7 +4046,7 @@
       "id": 77,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4054,7 +4054,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 77
@@ -4068,7 +4068,7 @@
       "id": 78,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4076,7 +4076,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 78
@@ -4090,7 +4090,7 @@
       "id": 79,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4098,7 +4098,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 79
@@ -4112,7 +4112,7 @@
       "id": 80,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4120,7 +4120,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 80
@@ -4134,7 +4134,7 @@
       "id": 81,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4142,7 +4142,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 81
@@ -4156,7 +4156,7 @@
       "id": 82,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4164,7 +4164,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 82
@@ -4178,7 +4178,7 @@
       "id": 83,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4186,7 +4186,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 83
@@ -4200,7 +4200,7 @@
       "id": 84,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956658340923457,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "7",
@@ -4208,7 +4208,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16120419294056,
       "name": "BLOCK01.7.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 84
@@ -4222,7 +4222,7 @@
       "id": 85,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4230,7 +4230,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 85
@@ -4244,7 +4244,7 @@
       "id": 86,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4252,7 +4252,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 86
@@ -4266,7 +4266,7 @@
       "id": 87,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4274,7 +4274,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 87
@@ -4288,7 +4288,7 @@
       "id": 88,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4296,7 +4296,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 88
@@ -4310,7 +4310,7 @@
       "id": 89,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4318,7 +4318,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 89
@@ -4332,7 +4332,7 @@
       "id": 90,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4340,7 +4340,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 90
@@ -4354,7 +4354,7 @@
       "id": 91,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4362,7 +4362,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 91
@@ -4376,7 +4376,7 @@
       "id": 92,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4384,7 +4384,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 92
@@ -4398,7 +4398,7 @@
       "id": 93,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4406,7 +4406,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 93
@@ -4420,7 +4420,7 @@
       "id": 94,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4428,7 +4428,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 94
@@ -4442,7 +4442,7 @@
       "id": 95,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4450,7 +4450,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 95
@@ -4464,7 +4464,7 @@
       "id": 96,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956716354124506,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "8",
@@ -4472,7 +4472,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16114320935215,
       "name": "BLOCK01.8.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 96
@@ -4486,7 +4486,7 @@
       "id": 97,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4494,7 +4494,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 97
@@ -4508,7 +4508,7 @@
       "id": 98,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4516,7 +4516,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 98
@@ -4530,7 +4530,7 @@
       "id": 99,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4538,7 +4538,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 99
@@ -4552,7 +4552,7 @@
       "id": 100,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4560,7 +4560,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 100
@@ -4574,7 +4574,7 @@
       "id": 101,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4582,7 +4582,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 101
@@ -4596,7 +4596,7 @@
       "id": 102,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4604,7 +4604,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 102
@@ -4618,7 +4618,7 @@
       "id": 103,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4626,7 +4626,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 103
@@ -4640,7 +4640,7 @@
       "id": 104,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4648,7 +4648,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 104
@@ -4662,7 +4662,7 @@
       "id": 105,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4670,7 +4670,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 105
@@ -4684,7 +4684,7 @@
       "id": 106,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4692,7 +4692,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 106
@@ -4706,7 +4706,7 @@
       "id": 107,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4714,7 +4714,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 107
@@ -4728,7 +4728,7 @@
       "id": 108,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956774367325554,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "9",
@@ -4736,7 +4736,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16108222576375,
       "name": "BLOCK01.9.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 108
@@ -4750,7 +4750,7 @@
       "id": 109,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4758,7 +4758,7 @@
        "row": "1",
        "tier": 1
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.1.01",
       "position_kind": "yard_slot",
       "stack_position_id": 109
@@ -4772,7 +4772,7 @@
       "id": 110,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4780,7 +4780,7 @@
        "row": "1",
        "tier": 2
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.1.02",
       "position_kind": "yard_slot",
       "stack_position_id": 110
@@ -4794,7 +4794,7 @@
       "id": 111,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956294002210523,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4802,7 +4802,7 @@
        "row": "1",
        "tier": 3
       },
-      "longitude": -102.16158718649558,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.1.03",
       "position_kind": "yard_slot",
       "stack_position_id": 111
@@ -4816,7 +4816,7 @@
       "id": 112,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4824,7 +4824,7 @@
        "row": "2",
        "tier": 1
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.2.01",
       "position_kind": "yard_slot",
       "stack_position_id": 112
@@ -4838,7 +4838,7 @@
       "id": 113,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4846,7 +4846,7 @@
        "row": "2",
        "tier": 2
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.2.02",
       "position_kind": "yard_slot",
       "stack_position_id": 113
@@ -4860,7 +4860,7 @@
       "id": 114,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956318598083,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4868,7 +4868,7 @@
        "row": "2",
        "tier": 3
       },
-      "longitude": -102.16156133126718,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.2.03",
       "position_kind": "yard_slot",
       "stack_position_id": 114
@@ -4882,7 +4882,7 @@
       "id": 115,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4890,7 +4890,7 @@
        "row": "3",
        "tier": 1
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.3.01",
       "position_kind": "yard_slot",
       "stack_position_id": 115
@@ -4904,7 +4904,7 @@
       "id": 116,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4912,7 +4912,7 @@
        "row": "3",
        "tier": 2
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.3.02",
       "position_kind": "yard_slot",
       "stack_position_id": 116
@@ -4926,7 +4926,7 @@
       "id": 117,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.956343193955483,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4934,7 +4934,7 @@
        "row": "3",
        "tier": 3
       },
-      "longitude": -102.16153547603876,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.3.03",
       "position_kind": "yard_slot",
       "stack_position_id": 117
@@ -4948,7 +4948,7 @@
       "id": 118,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4956,7 +4956,7 @@
        "row": "4",
        "tier": 1
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.4.01",
       "position_kind": "yard_slot",
       "stack_position_id": 118
@@ -4970,7 +4970,7 @@
       "id": 119,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -4978,7 +4978,7 @@
        "row": "4",
        "tier": 2
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.4.02",
       "position_kind": "yard_slot",
       "stack_position_id": 119
@@ -4992,7 +4992,7 @@
       "id": 120,
       "interface_position_id": null,
       "is_active": true,
-      "latitude": 17.956832380526603,
+      "latitude": 17.95636778982796,
       "layout_version_id": 1,
       "logical_address": {
        "bay": "10",
@@ -5000,7 +5000,7 @@
        "row": "4",
        "tier": 3
       },
-      "longitude": -102.16150962081036,
+      "longitude": -102.16102124217535,
       "name": "BLOCK01.10.4.03",
       "position_kind": "yard_slot",
       "stack_position_id": 120
@@ -5103,8 +5103,8 @@
       "bay": 1,
       "id": 1,
       "is_restricted": false,
-      "latitude": 17.956310261717167,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16157009447096,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5122,8 +5122,8 @@
       "bay": 1,
       "id": 2,
       "is_restricted": false,
-      "latitude": 17.956310261717167,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16157009447096,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5141,8 +5141,8 @@
       "bay": 1,
       "id": 3,
       "is_restricted": false,
-      "latitude": 17.956310261717167,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16157009447096,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5160,8 +5160,8 @@
       "bay": 1,
       "id": 4,
       "is_restricted": false,
-      "latitude": 17.956310261717167,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16157009447096,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5179,8 +5179,8 @@
       "bay": 2,
       "id": 5,
       "is_restricted": false,
-      "latitude": 17.956368274918216,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16150911088256,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5198,8 +5198,8 @@
       "bay": 2,
       "id": 6,
       "is_restricted": false,
-      "latitude": 17.956368274918216,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16150911088256,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5217,8 +5217,8 @@
       "bay": 2,
       "id": 7,
       "is_restricted": false,
-      "latitude": 17.956368274918216,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16150911088256,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5236,8 +5236,8 @@
       "bay": 2,
       "id": 8,
       "is_restricted": false,
-      "latitude": 17.956368274918216,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16150911088256,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5255,8 +5255,8 @@
       "bay": 3,
       "id": 9,
       "is_restricted": false,
-      "latitude": 17.956426288119264,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16144812729415,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5274,8 +5274,8 @@
       "bay": 3,
       "id": 10,
       "is_restricted": false,
-      "latitude": 17.956426288119264,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16144812729415,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5293,8 +5293,8 @@
       "bay": 3,
       "id": 11,
       "is_restricted": false,
-      "latitude": 17.956426288119264,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16144812729415,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5312,8 +5312,8 @@
       "bay": 3,
       "id": 12,
       "is_restricted": false,
-      "latitude": 17.956426288119264,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16144812729415,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5331,8 +5331,8 @@
       "bay": 4,
       "id": 13,
       "is_restricted": false,
-      "latitude": 17.956484301320312,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16138714370575,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5350,8 +5350,8 @@
       "bay": 4,
       "id": 14,
       "is_restricted": false,
-      "latitude": 17.956484301320312,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16138714370575,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5369,8 +5369,8 @@
       "bay": 4,
       "id": 15,
       "is_restricted": false,
-      "latitude": 17.956484301320312,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16138714370575,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5388,8 +5388,8 @@
       "bay": 4,
       "id": 16,
       "is_restricted": false,
-      "latitude": 17.956484301320312,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16138714370575,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5407,8 +5407,8 @@
       "bay": 5,
       "id": 17,
       "is_restricted": false,
-      "latitude": 17.95654231452136,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16132616011735,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5426,8 +5426,8 @@
       "bay": 5,
       "id": 18,
       "is_restricted": false,
-      "latitude": 17.95654231452136,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16132616011735,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5445,8 +5445,8 @@
       "bay": 5,
       "id": 19,
       "is_restricted": false,
-      "latitude": 17.95654231452136,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16132616011735,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5464,8 +5464,8 @@
       "bay": 5,
       "id": 20,
       "is_restricted": false,
-      "latitude": 17.95654231452136,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16132616011735,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5483,8 +5483,8 @@
       "bay": 6,
       "id": 21,
       "is_restricted": false,
-      "latitude": 17.95660032772241,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16126517652896,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5502,8 +5502,8 @@
       "bay": 6,
       "id": 22,
       "is_restricted": false,
-      "latitude": 17.95660032772241,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16126517652896,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5521,8 +5521,8 @@
       "bay": 6,
       "id": 23,
       "is_restricted": false,
-      "latitude": 17.95660032772241,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16126517652896,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5540,8 +5540,8 @@
       "bay": 6,
       "id": 24,
       "is_restricted": false,
-      "latitude": 17.95660032772241,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16126517652896,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5559,8 +5559,8 @@
       "bay": 7,
       "id": 25,
       "is_restricted": false,
-      "latitude": 17.956658340923457,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16120419294056,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5578,8 +5578,8 @@
       "bay": 7,
       "id": 26,
       "is_restricted": false,
-      "latitude": 17.956658340923457,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16120419294056,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5597,8 +5597,8 @@
       "bay": 7,
       "id": 27,
       "is_restricted": false,
-      "latitude": 17.956658340923457,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16120419294056,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5616,8 +5616,8 @@
       "bay": 7,
       "id": 28,
       "is_restricted": false,
-      "latitude": 17.956658340923457,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16120419294056,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5635,8 +5635,8 @@
       "bay": 8,
       "id": 29,
       "is_restricted": false,
-      "latitude": 17.956716354124506,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16114320935215,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5654,8 +5654,8 @@
       "bay": 8,
       "id": 30,
       "is_restricted": false,
-      "latitude": 17.956716354124506,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16114320935215,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5673,8 +5673,8 @@
       "bay": 8,
       "id": 31,
       "is_restricted": false,
-      "latitude": 17.956716354124506,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16114320935215,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5692,8 +5692,8 @@
       "bay": 8,
       "id": 32,
       "is_restricted": false,
-      "latitude": 17.956716354124506,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16114320935215,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5711,8 +5711,8 @@
       "bay": 9,
       "id": 33,
       "is_restricted": false,
-      "latitude": 17.956774367325554,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16108222576375,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5730,8 +5730,8 @@
       "bay": 9,
       "id": 34,
       "is_restricted": false,
-      "latitude": 17.956774367325554,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16108222576375,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5749,8 +5749,8 @@
       "bay": 9,
       "id": 35,
       "is_restricted": false,
-      "latitude": 17.956774367325554,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16108222576375,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5768,8 +5768,8 @@
       "bay": 9,
       "id": 36,
       "is_restricted": false,
-      "latitude": 17.956774367325554,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16108222576375,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5787,8 +5787,8 @@
       "bay": 10,
       "id": 37,
       "is_restricted": false,
-      "latitude": 17.956832380526603,
-      "longitude": -102.16158718649558,
+      "latitude": 17.956294002210523,
+      "longitude": -102.16102124217535,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5806,8 +5806,8 @@
       "bay": 10,
       "id": 38,
       "is_restricted": false,
-      "latitude": 17.956832380526603,
-      "longitude": -102.16156133126718,
+      "latitude": 17.956318598083,
+      "longitude": -102.16102124217535,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5825,8 +5825,8 @@
       "bay": 10,
       "id": 39,
       "is_restricted": false,
-      "latitude": 17.956832380526603,
-      "longitude": -102.16153547603876,
+      "latitude": 17.956343193955483,
+      "longitude": -102.16102124217535,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -5844,8 +5844,8 @@
       "bay": 10,
       "id": 40,
       "is_restricted": false,
-      "latitude": 17.956832380526603,
-      "longitude": -102.16150962081036,
+      "latitude": 17.95636778982796,
+      "longitude": -102.16102124217535,
       "margin_bottom_m": 0.0,
       "margin_left_m": 0.0,
       "margin_right_m": 0.0,
@@ -7836,7 +7836,7 @@
       "bay_naming": "1,2,3...",
       "bay_order": "forward",
       "bay_spacing_m": 0.4,
-      "bay_use_heading_axis": true,
+      "bay_use_heading_axis": false,
       "grid_kind": "manual",
       "heading_deg": 0.0,
       "id": 1,
@@ -7949,16 +7949,16 @@
     ],
     "version": {
      "based_on_id": null,
-     "created_at": "2026-11-16T23:03:02.598385+00:00",
+     "created_at": "2026-11-21T16:19:35.466979+00:00",
      "created_by_id": null,
      "id": 1,
      "is_current": true,
      "location_id": 1,
      "name": "Working layout",
      "notes": "",
-     "published_at": "2026-11-16T23:03:02.980595+00:00",
+     "published_at": "2026-11-21T16:19:35.852225+00:00",
      "status": "published",
-     "updated_at": "2026-11-16T23:03:02.980655+00:00",
+     "updated_at": "2026-11-21T16:19:35.852279+00:00",
      "version": 1
     }
    },
