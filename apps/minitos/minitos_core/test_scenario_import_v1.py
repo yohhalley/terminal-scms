@@ -27,7 +27,8 @@ from django.test import SimpleTestCase, TestCase
 
 from minitos_core.models import (
     CarrierVisit, Che, ContainerVisit, Enterprise, EquipmentType, IntegrationOutbox,
-    LayoutAsset, LayoutVersion, Order, OrderLeg, Position, Site, SiteConfigurationSnapshot,
+    LayoutAsset, LayoutVersion, OperationalPosition, Order, OrderLeg, OrderRoutePlan, Position,
+    Site, SiteConfigurationSnapshot,
 )
 from minitos_core.scenarios import import_v1, reset_scenario, run_step
 from minitos_core.scenarios.base import (
@@ -69,6 +70,7 @@ class ImportV1ResetDeterminismTests(TestCase):
     def test_reset_after_release_returns_to_the_seeded_state(self):
         reset_scenario('import_v1')
         seeded = canonical_checksum(canonical_dump())
+        run_step('import_v1', 'visit-in-operation')
         run_step('import_v1', 'release-discharge')
         self.assertNotEqual(seeded, canonical_checksum(canonical_dump()))
 
@@ -92,22 +94,25 @@ class ImportV1ResetDeterminismTests(TestCase):
         self.assertNotEqual(before, canonical_checksum(canonical_dump()))
 
     def test_ids_are_stable_across_resets(self):
+        def ids(result):
+            return (
+                result['site'].pk, result['site'].enterprise_id, result['layout'].pk,
+                [cv.pk for cv in result['container_visits']],
+                {name: che.pk for name, che in result['ches'].items()},
+                result['container_visits'][0].container_number_id,
+            )
+
         first = reset_scenario('import_v1')
-        first_ids = (
-            first['site'].pk, first['site'].enterprise_id, first['layout'].pk,
-            [order.pk for order in first['orders']],
-            {name: che.pk for name, che in first['ches'].items()},
-            first['orders'][0].container_number.container_number_id,
-        )
+        first_ids = ids(first)
+        run_step('import_v1', 'visit-in-operation')
+        first_order = Order.objects.get().pk
         second = reset_scenario('import_v1')
-        second_ids = (
-            second['site'].pk, second['site'].enterprise_id, second['layout'].pk,
-            [order.pk for order in second['orders']],
-            {name: che.pk for name, che in second['ches'].items()},
-            second['orders'][0].container_number.container_number_id,
-        )
-        self.assertEqual(first_ids, second_ids)
-        self.assertEqual(first['orders'][0].pk, 1)
+        self.assertEqual(first_ids, ids(second))
+        run_step('import_v1', 'visit-in-operation')
+        # TCL-010b: the order planned at InOperation is order 1 in every run,
+        # so a stale run-1 event for order 1 still needs the M2 epoch fence.
+        self.assertEqual(Order.objects.get().pk, first_order)
+        self.assertEqual(first_order, 1)
         self.assertEqual(first['layout'].pk, 1)
 
     def test_site_and_enterprise_use_uuid5_from_the_fixed_namespace(self):
@@ -120,18 +125,16 @@ class ImportV1ResetDeterminismTests(TestCase):
 
     def test_seed_changes_rng_choices_but_not_identities(self):
         default = reset_scenario('import_v1')
-        default_order = default['orders'][0]
-        default_number = default_order.container_number.container_number_id
-        default_choices = (default_order.container_number.weight, default_order.to_position_id)
+        default_visit = default['container_visits'][0]
+        default_number = default_visit.container_number_id
         default_site = default['site'].pk
         other = reset_scenario('import_v1', seed=12345)
-        other_order = other['orders'][0]
+        other_visit = other['container_visits'][0]
         self.assertEqual(other['site'].pk, default_site)
-        # The demo fixture number is fixed; weight and yard slot come from the RNG.
-        self.assertEqual(other_order.container_number.container_number_id, default_number)
-        self.assertNotEqual(
-            (other_order.container_number.weight, other_order.to_position_id), default_choices,
-        )
+        # The demo fixture number is fixed; the weight comes from the seed RNG.
+        # TCL-010b: the yard slot is no longer a seed choice (planning draws it).
+        self.assertEqual(other_visit.container_number_id, default_number)
+        self.assertNotEqual(other_visit.weight, default_visit.weight)
 
     def test_reset_keeps_auth_users(self):
         get_user_model().objects.create_user('planner', password='not-a-real-password')
@@ -190,10 +193,8 @@ class ScenarioDumpBusinessTimesTests(TestCase):
             visit = CarrierVisit.objects.get(name='V001')
             CarrierVisit.objects.filter(pk=visit.pk).update(**{field: getattr(visit, field) + shift})
             self.assertNotEqual(seeded, canonical_checksum(canonical_dump()), field)
-        reset_scenario('import_v1')
-        order = Order.objects.order_by('pk').first()
-        Order.objects.filter(pk=order.pk).update(etc=order.etc + shift)
-        self.assertNotEqual(seeded, canonical_checksum(canonical_dump()), 'etc')
+        # TCL-010b: no seeded order, so no seeded Order.etc to shift.
+        self.assertFalse(Order.objects.exists())
         reset_scenario('import_v1')
         visit = CarrierVisit.objects.get(name='V001')
         CarrierVisit.objects.filter(pk=visit.pk).update(etd=visit.etd + shift)
@@ -215,10 +216,12 @@ class ScenarioDumpBusinessTimesTests(TestCase):
         VOLATILE_FIELDS (or seed it from SCENARIO_EPOCH) and say why.
         """
         reset_scenario('import_v1')
+        run_step('import_v1', 'visit-in-operation')
         run_step('import_v1', 'release-discharge')
         first = canonical_dump()
         with wall_clock_shifted(3):
             reset_scenario('import_v1')
+            run_step('import_v1', 'visit-in-operation')
             run_step('import_v1', 'release-discharge')
         self.assertSameDump(first, canonical_dump())
 
@@ -236,6 +239,7 @@ class ScenarioDumpBusinessTimesTests(TestCase):
         from minitos_core.models import Order
 
         reset_scenario('import_v1')
+        run_step('import_v1', 'visit-in-operation')
         before = canonical_checksum(canonical_dump())
         Order.objects.update(released_at=timezone.now())
         self.assertNotEqual(before, canonical_checksum(canonical_dump()))
@@ -289,26 +293,40 @@ class ImportV1SeedContentTests(TestCase):
         number = container.container_number_id
         self.assertEqual(number, 'MSCU1234566')
         self.assertEqual(int(number[-1]), iso6346_check_digit(number[:10]))
+        self.assertEqual(visit.status, CarrierVisit.ARRIVED)
         # The K6 / step 3 planned-order precondition is asserted after InOperation
         # (test_k6_planned_discharge_order_exists_after_inoperation; D-048, TCL-010).
 
-    def test_seed_still_precreates_the_planned_order_until_tcl010b(self):
-        # G7 residual: the seed still pre-creates the planned discharge order.
-        # TCL-010b will stop this; visit-in-operation currently adopts it.
-        order = Order.objects.get()
-        self.assertEqual((order.order_type, order.status), (Order.MOVE_IN, Order.PLANNED))
+    def test_seed_creates_no_discharge_orders(self):
+        # TCL-010b / D-048: planning at InOperation is the only creation path.
+        self.assertFalse(Order.objects.exists())
+        self.assertFalse(OrderLeg.objects.exists())
+        self.assertFalse(OrderRoutePlan.objects.exists())
+        # Nothing in the yard is reserved by the seed, so the seed cannot put a
+        # 20' box in an even (40'/45') yard bay; planning picks the slot.
+        self.assertFalse(Position.objects.filter(is_reserved=True).exists())
+        self.assertFalse(Position.objects.filter(container_visit__isnull=False).exists())
+
+    def test_vessel_slot_is_an_odd_bay_for_the_20ft_box(self):
+        # BL-26b (SME review of #26): BBBRRTT, 20' boxes stow in odd bays.
+        container = ContainerVisit.objects.get()
+        self.assertEqual(container.container_number.iso_type.length, '20')
+        slot = OperationalPosition.objects.get(position_kind=OperationalPosition.VESSEL_SLOT)
+        self.assertEqual(slot.logical_address['stow'], '0330682')
+        self.assertEqual(slot.logical_address['bay'] % 2, 1)
+        self.assertEqual(slot.logical_address['container_visit_id'], container.pk)
 
     def test_k6_planned_discharge_order_exists_after_inoperation(self):
-        # #25's K6 precondition, aligned with D-048 / TCL-010: the 3-leg planned
-        # discharge order is the step 3 precondition after InOperation, not at seed.
+        # #25's K6 precondition, aligned with D-048 / TCL-010 / TCL-010b: the
+        # 3-leg planned discharge order is created at InOperation, not at seed.
         result = run_step('import_v1', 'visit-in-operation')
         self.assertEqual(result.visit.status, CarrierVisit.IN_OPERATION)
         order = Order.objects.get()
         self.assertEqual((order.order_type, order.status), (Order.MOVE_IN, Order.PLANNED))
-        self.assertEqual(order.from_position.logical_address['stow'], '0340682')
+        self.assertEqual(order.from_position.logical_address['stow'], '0330682')
         self.assertEqual(order.to_position.stack_position.pile.storage_grid.name, 'BLOCK01')
-        self.assertTrue(result.planned)
-        self.assertTrue(any(not item.created for item in result.planned))
+        self.assertEqual([item.created for item in result.planned], [True])
+        self.assertIn('(1 created, 0 adopted)', result.summary())
 
     def test_block_has_room_for_five_imports(self):
         free = Position.objects.filter(
@@ -349,6 +367,49 @@ class ImportV1SeedContentTests(TestCase):
             (PUBLISHED_SCHEMA, 'scms/v2/terminal-velocity/test-terminal/tos/configuration/published'),
         ])
         self.assertFalse(IntegrationOutbox.objects.filter(retain=True).exists())
+
+
+class ImportV1PlanningAtInOperationTests(TestCase):
+    """TCL-010b: reset -> visit-in-operation creates the orders (1 created, 0 adopted)."""
+
+    def test_visit_in_operation_creates_one_order_and_three_legs_per_container(self):
+        reset_scenario('import_v1', containers=3)
+        result = run_step('import_v1', 'visit-in-operation')
+        self.assertEqual([item.created for item in result.planned], [True, True, True])
+        self.assertIn('(3 created, 0 adopted)', result.summary())
+        for container_visit in ContainerVisit.objects.order_by('pk'):
+            order = Order.objects.get(container_number=container_visit)
+            self.assertEqual((order.order_type, order.status), (Order.MOVE_IN, Order.PLANNED))
+            # The seeded BBBRRTT vessel slot is the origin, not a CV<id> placeholder.
+            self.assertEqual(
+                order.from_position.logical_address['container_visit_id'], container_visit.pk,
+            )
+            self.assertRegex(order.from_position.logical_address['stow'], r'^03306\d\d$')
+            legs = list(order.order_legs.order_by('sequence'))
+            self.assertEqual(len(legs), 3)
+            self.assertEqual(legs[2].end_position, order.to_position)
+            slot = order.to_position.stack_position
+            self.assertEqual(slot.pile.storage_grid.name, 'BLOCK01')
+            self.assertTrue(slot.is_reserved)
+
+    def test_rerun_adopts_and_creates_nothing(self):
+        reset_scenario('import_v1')
+        run_step('import_v1', 'visit-in-operation')
+        result = run_step('import_v1', 'visit-in-operation')
+        self.assertIn('(0 created, 1 adopted)', result.summary())
+        self.assertEqual(Order.objects.count(), 1)
+
+    def test_release_before_visit_in_operation_says_which_step_to_run(self):
+        reset_scenario('import_v1')
+        with self.assertRaisesMessage(CommandError, 'run the visit-in-operation step first'):
+            call_command('scenario_step', 'import_v1', 'release-discharge', stdout=io.StringIO())
+        self.assertFalse(IntegrationOutbox.objects.filter(schema=RELEASED_SCHEMA).exists())
+
+    def test_reset_command_reports_containers_not_orders(self):
+        out = io.StringIO()
+        call_command('scenario_reset', 'import_v1', '--noinput', stdout=out)
+        self.assertIn('visit V001 (Arrived) with 1 pre-advised import container(s): MSCU1234566', out.getvalue())
+        self.assertIn('visit-in-operation', out.getvalue())
 
 
 class ImportV1ReleaseStepTests(TestCase):

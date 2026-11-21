@@ -97,15 +97,19 @@ func _initialize():
 	_test_device_id_mapping()
 	_test_mqtt_packet_id_wraps()
 	_test_rtg_state_machine()
+	_test_w4_starts_at_ready_to_pick()
+	_test_rtg_positioning_before_w4_d058()
 	_test_chain_happy_path_d016()
 	_test_rtg_commanded_slot()
 	_test_chain_late_tt_at_rtg()
 	_test_chain_rtg_cancel()
 	_test_chain_determinism()
 	_test_chain_wrong_handoff_id()
-	_test_rtg_no_show_always_on()
+	_test_no_show_switch_default_on()
 	_test_rtg_rules_and_config()
 	# TCL-034: timing profiles, W2/W3 no-shows, leg stall clock, margins.
+	_test_hold_derived_from_cycle()
+	_test_import_spec_cycle_matches_constants()
 	_test_timing_profiles_and_precedence()
 	_test_timing_env_precedence()
 	_test_fast_profile_steps_capped()
@@ -126,6 +130,12 @@ func _initialize():
 	_test_stall_paused_in_no_show_waits()
 	_test_stall_closes_pending_handoff()
 	_test_retired_rtg_key_only_warns()
+	# TCL-034e (D-053): one global no-show switch, one clock per waiting period.
+	_test_no_show_switch_parsing()
+	_test_no_show_switch_off_all_waits()
+	_test_no_show_clock_restarts_per_period()
+	_test_no_show_repeats_while_waiting()
+	_test_margins_skip_no_show_when_off()
 	_cleanup_state_file()
 	if not _failed:
 		print("Headless simulation checks passed")
@@ -257,7 +267,7 @@ func _test_qc_state_machine_no_show_and_cancel():
 	var events = QcDischarge.step(command, 310000, 0)
 	_assert(_names(events) == ["handoff_timed_out"], "D-013: handoff_timed_out after 300 s sim time in waiting_for_tt")
 	_assert(command.work_state == QcDischarge.WAITING_FOR_TT and int(command.load_container_visit_id) == 101, "QC keeps the container after the time-out")
-	_assert(QcDischarge.step(command, 400000, 0).is_empty(), "handoff_timed_out is published once")
+	_assert(QcDischarge.step(command, 400000, 0).is_empty(), "QcDischarge alone emits handoff_timed_out once (D-059 repeats come from the simulator)")
 	_assert(QcDischarge.step(command, 410000, 9).is_empty(), "A TT arriving after the time-out gets no transfer")
 	events = QcDischarge.cancel(command)
 	_assert(_names(events) == ["cancelled"] and str(events[0].work_state) == QcDischarge.IDLE, "Cancel emits cancelled in idle")
@@ -722,7 +732,7 @@ func _test_configurable_qc_waits():
 	var command = simulator._active_commands[QC_ID]
 	_assert(int(command.hold_wait_ms) == 4000 and int(command.wait_until_ms) == 4000, "Configured hold wait applies from receipt")
 	var defaults = HeadlessSimulator.new()
-	_assert(defaults._qc_wait_s.hold == [90, 120] and defaults._rtg_wait_s.hold == [60, 120], "TCL-034: built-in default profile realistic (D-039)")
+	_assert(defaults._qc_wait_s.hold == _realistic_hold("qc") and defaults._rtg_wait_s.hold == _realistic_hold("rtg"), "TCL-034: built-in default profile realistic (D-039)")
 	defaults._mqtt.free()
 	defaults._bootstrap.free()
 	defaults.free()
@@ -946,6 +956,8 @@ func _test_node_birth_metrics():
 		by_name[str(metric.name)] = metric
 	_assert(by_name.has("Contract/Version") and str(by_name["Contract/Version"].value) == HeadlessSimulator.CONTRACT_VERSION, "NBIRTH has Contract/Version")
 	_assert(str(by_name["Contract/Version"].value).begins_with("tcl-002."), "Contract/Version is tcl-002.<minor>")
+	_assert(HeadlessSimulator.CONTRACT_VERSION == "tcl-002.4", "TCL-034e: Contract/Version is tcl-002.4 (RtgPositioningS added, D-058)")
+	_assert(by_name.has("Sim/Timing/NoShowTimeoutEnabled") and str(by_name["Sim/Timing/NoShowTimeoutEnabled"].type) == "Boolean" and by_name["Sim/Timing/NoShowTimeoutEnabled"].value == true, "NBIRTH has Sim/Timing/NoShowTimeoutEnabled (Boolean, default true)")
 	_assert(by_name.has("Sim/ScenarioId") and str(by_name["Sim/ScenarioId"].value) == "import-discharge-ci" and str(by_name["Sim/ScenarioId"].type) == "String", "NBIRTH has Sim/ScenarioId")
 	_assert(str(by_name["Sim/StartEpochMs"].type) == "Int64" and int(by_name["Sim/StartEpochMs"].value) == 1764583200000, "Sim/StartEpochMs is Int64 epoch ms")
 	for name in ["Session/Id", "Sim/Seed", "Sim/TimeScale", "Sim/Timing/TtNoShowTimeoutS"]:
@@ -1057,6 +1069,77 @@ func _test_rtg_state_machine():
 	_assert(_names(RtgStack.step(command, 300000, 0)) == ["handoff_timed_out"], "RTG times out after 300 s")
 	_assert(RtgStack.step(command, 300100, TT_ID).is_empty(), "A TT after the time-out gets no transfer")
 	_assert(_names(RtgStack.cancel(command)) == ["cancelled"] and str(command.work_state) == "idle", "Cancel clears the RTG")
+
+
+## TCL-034e (D-058): the RTG positions for RtgPositioningS (realistic 30 s)
+## from its command before it is ready to pick; it cannot pick meanwhile, and
+## the W4 no-show clock starts only when positioning ends (D-052 moment).
+func _test_rtg_positioning_before_w4_d058():
+	var slot = {"position_id": 0, "position_code": "BLOCK01-DUMMY-01"}
+	var command = _rtg_command()
+	RtgStack.start(command, 30000, slot, 300000, 30000, 1000)
+	_assert(int(command.positioned_at_ms) == 31000, "D-058: positioned at command + 30 s")
+	_assert(RtgStack.step(command, 30999, TT_ID).is_empty() and str(command.work_state) == "gantry_to_bay", "D-058: no pick while positioning, even with the TT at the lane")
+	_assert(int(command.ready_to_pick_at_ms) == -1 and int(command.waiting_since_ms) == 0, "D-058: no W4 clock while positioning")
+	_assert(_names(RtgStack.step(command, 31000, 0)) == ["waiting_for_handoff"] and int(command.waiting_since_ms) == 31000, "D-058: W4 starts when positioning ends")
+	_assert(RtgStack.step(command, 330999, 0).is_empty(), "D-058: no W4 time-out before positioned + 300 s")
+	_assert(_names(RtgStack.step(command, 331000, 0)) == ["handoff_timed_out"], "D-058: W4 times out at positioned + 300 s")
+	command = _rtg_command()
+	RtgStack.start(command, 30000, slot, 300000, 30000, 1000)
+	_assert(_names(RtgStack.step(command, 31000, TT_ID)) == ["handoff_completed"] and int(command.wait_until_ms) == 61000, "D-058: TT waiting -> pick when positioned; cycle 30 + 30 = 60 s")
+	# Simulator, realistic: the RTG's ready-to-pick is 30 s after its command.
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	simulator.configure_timing_profile("realistic")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 3000), "D-058 setup: H1 completes")
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	var commanded_ms = int(simulator._clock.now_ms)
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	_assert(_run_until(simulator, func(): return int(simulator._active_commands.get(RTG_ID, {}).get("ready_to_pick_at_ms", -1)) >= 0, 1000), "D-058: the RTG becomes ready to pick")
+	var ready_ms = int(simulator._active_commands[RTG_ID].ready_to_pick_at_ms)
+	_assert(ready_ms >= commanded_ms + 30000 and ready_ms < commanded_ms + 30000 + 1000, "D-058: ready to pick 30 s after the command (%s -> %s)" % [commanded_ms, ready_ms])
+	_assert(_run_until(simulator, func(): return simulator._active_commands.is_empty(), 6000), "D-058: realistic chain finishes")
+	var results = _results(simulator)
+	var picked = _find(results, "RTG01", "handoff_completed")
+	var dropped = _find(results, "RTG01", "container_dropped")
+	_assert(int(dropped["Sim/TimeMs"]) - int(picked["Sim/TimeMs"]) == 30000, "D-058: RTG hold after the pick is 30 s")
+	_assert(not _events_of(results, "RTG01").has("handoff_timed_out"), "D-058: positioning is not a no-show")
+	_free_simulator(simulator)
+
+
+## TCL-034e (D-052): W4 starts when the RTG leaves gantry_to_bay (at the bay,
+## ready to pick), never at the command; a TT already at the lane means no W4.
+func _test_w4_starts_at_ready_to_pick():
+	var slot = {"position_id": 0, "position_code": "BLOCK01-DUMMY-01"}
+	var command = _rtg_command()
+	RtgStack.start(command, 10000, slot, 30000)
+	_assert(int(command.ready_to_pick_at_ms) == -1 and int(command.waiting_since_ms) == 0, "D-052: no ready-to-pick time at the command")
+	_assert(_names(RtgStack.step(command, 4000, 0)) == ["waiting_for_handoff"], "D-052: RTG at the bay with no TT waits")
+	_assert(int(command.ready_to_pick_at_ms) == 4000 and int(command.waiting_since_ms) == 4000, "D-052: W4 starts at ready-to-pick")
+	_assert(RtgStack.step(command, 33999, 0).is_empty(), "D-052: no W4 time-out before ready-to-pick + 30 s")
+	_assert(_names(RtgStack.step(command, 34000, 0)) == ["handoff_timed_out"], "D-052: W4 times out at ready-to-pick + 30 s")
+	command = _rtg_command()
+	RtgStack.start(command, 10000, slot, 30000)
+	var picked = RtgStack.step(command, 2500, TT_ID)
+	_assert(_names(picked) == ["handoff_completed"] and int(command.ready_to_pick_at_ms) == 2500, "D-052: TT already at the lane -> pick at ready-to-pick")
+	_assert(int(command.waiting_since_ms) == 0 and str(command.work_state) == "holding", "D-052: no W4 opens when the TT is ready")
+	# Simulator: the RTG is commanded while the loaded TT still drives to the block.
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 2000), "D-052 setup: H1 completes")
+	_send(simulator, TT_ID, _command(TT_ID, _assign_metrics()))
+	var commanded_ms = int(simulator._clock.now_ms)
+	_send(simulator, RTG_ID, _command(RTG_ID, _rtg_metrics()))
+	_assert(_run_until(simulator, func(): return str(simulator._active_commands.get(RTG_ID, {}).get("work_state", "")) == "waiting_for_tt", 50), "D-052: RTG waits for the driving TT")
+	var rtg: Dictionary = simulator._active_commands[RTG_ID]
+	var waiting = _find(_results(simulator), "RTG01", "waiting_for_handoff")
+	_assert(int(rtg.ready_to_pick_at_ms) > commanded_ms, "D-052: ready-to-pick is the first step after the command (0 s gantry)")
+	_assert(int(rtg.waiting_since_ms) == int(rtg.ready_to_pick_at_ms) and int(waiting["Sim/TimeMs"]) == int(rtg.ready_to_pick_at_ms), "D-052: W4 clock and waiting_for_handoff carry the ready-to-pick time")
+	_assert(_run_until(simulator, func(): return simulator._active_commands.is_empty(), 3000), "D-052: the chain still finishes")
+	_assert(not _events_of(_results(simulator), "RTG01").has("handoff_timed_out"), "D-052: a normal TT drive is not a W4 no-show")
+	_free_simulator(simulator)
 
 
 func _new_chain_simulator(run_seed: int, tt_lat: float) -> HeadlessSimulator:
@@ -1332,10 +1415,12 @@ func _test_chain_wrong_handoff_id():
 	_free_simulator(simulator)
 
 
-## TCL-034: the RTG no-show (W4) is always on with Sim/Timing/TtNoShowTimeoutS;
-## the retired switch is gone from NBIRTH. RtgStack keeps "0 = never" internally.
-func _test_rtg_no_show_always_on():
+## TCL-034e (D-053): the global no-show switch is on by default, W4 uses
+## Sim/Timing/TtNoShowTimeoutS; the retired W4-only switch stays gone from
+## NBIRTH. RtgStack keeps "0 = never" internally.
+func _test_no_show_switch_default_on():
 	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator._no_show_timeout_enabled == true and _birth_metric(simulator, "Sim/Timing/NoShowTimeoutEnabled") == true, "D-053: the no-show switch defaults to on")
 	_assert(simulator.rtg_no_show_timeout_ms() == 300000, "W4 uses Sim/Timing/TtNoShowTimeoutS (300 s)")
 	_assert(simulator.configure_tt_no_show_timeout("120") and simulator.rtg_no_show_timeout_ms() == 120000, "W4 follows TtNoShowTimeoutS")
 	_assert(_birth_metric(simulator, "Sim/Timing/RtgNoShowTimeoutEnabled") == null, "NBIRTH no longer has RtgNoShowTimeoutEnabled")
@@ -1388,7 +1473,7 @@ const TIMING_ENV_KEYS := [
 	"SIMULATOR_QC_HOLD_WAIT_MIN_S", "SIMULATOR_QC_HOLD_WAIT_MAX_S", "SIMULATOR_RTG_WAIT_MIN_S",
 	"SIMULATOR_RTG_WAIT_MAX_S", "SIMULATOR_RTG_HOLD_WAIT_MIN_S", "SIMULATOR_RTG_HOLD_WAIT_MAX_S",
 	"SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "SIMULATOR_QC_NO_SHOW_TIMEOUT_S", "SIMULATOR_RTG_NO_SHOW_TIMEOUT_S",
-	"SIMULATOR_LEG_STALL_TIMEOUT_S",
+	"SIMULATOR_LEG_STALL_TIMEOUT_S", "SIMULATOR_NO_SHOW_TIMEOUT_ENABLED",
 ]
 
 
@@ -1398,9 +1483,53 @@ func _clear_timing_env():
 		OS.unset_environment(key.replace("SIMULATOR_", "SIM_"))
 
 
+## D-051: the realistic hold the profile implies (cycle - simulated motion).
+func _realistic_hold(che_kind: String) -> Array:
+	return SimTiming.hold_range("realistic", che_kind)
+
+
+## TCL-034e (D-051): realistic is a full cycle; hold = max(0, cycle - motion).
+func _test_hold_derived_from_cycle():
+	_assert(SimTiming.PROFILES.realistic.has("qc_cycle") and SimTiming.PROFILES.realistic.has("rtg_cycle"), "realistic stores the crane cycle (D-051)")
+	_assert(SimTiming.QC_SIMULATED_MOTION_S == 0, "No QC motion is simulated today")
+	_assert(SimTiming.RTG_SIMULATED_MOTION_S == SimTiming.REALISTIC_RTG_POSITIONING_S and SimTiming.REALISTIC_RTG_POSITIONING_S == 30, "D-058: the RTG's simulated motion is its ~30 s positioning")
+	_assert(SimTiming.hold_range("realistic", "qc") == SimTiming.hold_from_cycle(SimTiming.REALISTIC_QC_CYCLE_S, SimTiming.QC_SIMULATED_MOTION_S), "QC hold = cycle - motion")
+	_assert(SimTiming.hold_range("realistic", "rtg") == SimTiming.hold_from_cycle(SimTiming.REALISTIC_RTG_CYCLE_S, SimTiming.RTG_SIMULATED_MOTION_S), "RTG hold = cycle - motion")
+	_assert(SimTiming.REALISTIC_QC_CYCLE_S == [60, 60] and SimTiming.REALISTIC_RTG_CYCLE_S == [60, 60], "Realistic cycle is 60 s for QC and RTG (D-054)")
+	_assert(SimTiming.hold_from_cycle([60, 70], 15) == [45, 55], "Simulated motion shrinks the hold")
+	_assert(SimTiming.hold_from_cycle([60, 70], 65) == [0, 5], "The hold never goes below 0")
+	_assert(SimTiming.hold_range("fast", "qc") == [2, 5] and SimTiming.hold_range("fast", "rtg") == [2, 5], "fast keeps its 2..5 s holds as is")
+
+
+## TCL-034e drift check: docs/scenarios/import_v1.md states the realistic
+## cycle as "`SimTiming.REALISTIC_{QC,RTG}_CYCLE_S` ..., currently N s" (or
+## "N–M s"); every such figure must equal the constant. Skipped (with a note)
+## when the repo docs are not next to the project (e.g. the Docker image).
+func _test_import_spec_cycle_matches_constants():
+	var path = ProjectSettings.globalize_path("res://").path_join("../../docs/scenarios/import_v1.md").simplify_path()
+	if not FileAccess.file_exists(path):
+		print("SKIP import_v1.md drift check: %s not found" % path)
+		return
+	var text = FileAccess.get_file_as_string(path)
+	var pattern = RegEx.new()
+	pattern.compile("currently (\\d+)(?:\\D(\\d+))? s")
+	var checked := {"QC": 0, "RTG": 0}
+	for found in pattern.search_all(text):
+		var window = text.substr(maxi(0, found.get_start() - 160), mini(160, found.get_start()))
+		var low = int(found.get_string(1))
+		var high = int(found.get_string(2)) if not found.get_string(2).is_empty() else low
+		for kind in ["QC", "RTG"]:
+			if not window.contains("REALISTIC_%s_CYCLE_S" % kind):
+				continue
+			var cycle: Array = SimTiming.REALISTIC_QC_CYCLE_S if kind == "QC" else SimTiming.REALISTIC_RTG_CYCLE_S
+			_assert([low, high] == [int(cycle[0]), int(cycle[1])], "import_v1.md says the realistic %s cycle is %s..%s s but SimTiming has %s" % [kind, low, high, cycle])
+			checked[kind] += 1
+	_assert(checked.QC >= 1 and checked.RTG >= 1, "import_v1.md names both realistic cycle constants with their figure (%s)" % [checked])
+
+
 func _test_timing_profiles_and_precedence():
 	var plain = HeadlessSimulator.new()
-	_assert(plain._timing_profile == "realistic" and plain._qc_wait_s.hold == [90, 120] and plain._rtg_wait_s.hold == [60, 120], "Built-in default Sim/Timing/Profile is realistic (D-039)")
+	_assert(plain._timing_profile == "realistic" and plain._qc_wait_s.hold == _realistic_hold("qc") and plain._rtg_wait_s.hold == _realistic_hold("rtg"), "Built-in default Sim/Timing/Profile is realistic (D-039)")
 	plain._mqtt.free()
 	plain._bootstrap.free()
 	plain.free()
@@ -1411,10 +1540,14 @@ func _test_timing_profiles_and_precedence():
 		_assert(_birth_metric(simulator, name) == 300, "NBIRTH %s defaults to 300" % name)
 	_assert(_birth_metric(simulator, "Sim/Timing/LegStallTimeoutS") == 600, "NBIRTH LegStallTimeoutS defaults to 600")
 	_assert(simulator.configure_timing_profile("REALISTIC"), "realistic profile applies (case-insensitive)")
-	_assert(simulator._qc_wait_s.hold == [90, 120] and simulator._rtg_wait_s.hold == [60, 120], "realistic: QC 90..120 s, RTG 60..120 s hold (D-039)")
-	_assert(_birth_metric(simulator, "Sim/Timing/QcHoldMinS") == 90 and _birth_metric(simulator, "Sim/Timing/RtgHoldMaxS") == 120, "NBIRTH reports the actual hold values")
+	_assert(simulator._qc_wait_s.hold == _realistic_hold("qc") and simulator._rtg_wait_s.hold == _realistic_hold("rtg"), "realistic: QC and RTG hold = cycle - simulated motion (D-051)")
+	_assert(simulator._qc_wait_s.hold == [60, 60], "realistic: QC 60 s cycle, 0 s motion -> 60 s hold (D-054)")
+	_assert(simulator._rtg_wait_s.hold == [30, 30] and simulator._rtg_positioning_s == 30, "realistic: RTG 60 s cycle = 30 s positioning + 30 s hold (D-054, D-058)")
+	_assert(_birth_metric(simulator, "Sim/Timing/RtgPositioningS") == 30, "NBIRTH reports Sim/Timing/RtgPositioningS (realistic 30)")
+	_assert(_birth_metric(simulator, "Sim/Timing/QcHoldMinS") == _realistic_hold("qc")[0] and _birth_metric(simulator, "Sim/Timing/RtgHoldMaxS") == _realistic_hold("rtg")[1], "NBIRTH reports the actual (effective) hold values")
 	_assert(not simulator.configure_timing_profile("turbo") and simulator._timing_profile == "realistic", "Unknown profile keeps the current one")
 	_assert(simulator.configure_timing_profile("fast") and simulator._qc_wait_s.hold == [2, 5], "fast: hold 2..5 s")
+	_assert(simulator._rtg_positioning_s == 0 and _birth_metric(simulator, "Sim/Timing/RtgPositioningS") == 0, "fast: no RTG positioning (D-058)")
 	_assert(not simulator.configure_qc_no_show_timeout("0") and not simulator.configure_rtg_no_show_timeout("x") and not simulator.configure_leg_stall_timeout("-5"), "Invalid time-outs are refused")
 	_assert(simulator._qc_no_show_timeout_s == 300 and simulator._rtg_no_show_timeout_s == 300 and simulator._leg_stall_timeout_s == 600, "Refused values keep the defaults")
 	_free_simulator(simulator)
@@ -1425,23 +1558,25 @@ func _test_timing_env_precedence():
 	_clear_timing_env()
 	var simulator = _new_chain_simulator(42, QC_LAT)
 	simulator._configure_timing()
-	_assert(simulator._timing_profile == "realistic" and simulator._qc_wait_s.hold == [90, 120], "No env: built-in default profile realistic")
+	var qc_real = _realistic_hold("qc")
+	var rtg_real = _realistic_hold("rtg")
+	_assert(simulator._timing_profile == "realistic" and simulator._qc_wait_s.hold == qc_real, "No env: built-in default profile realistic")
 	OS.set_environment("SIMULATOR_TIMING_PROFILE", "fast")
 	simulator._configure_timing()
 	_assert(simulator._timing_profile == "fast" and simulator._qc_wait_s.hold == [2, 5] and simulator._rtg_wait_s.hold == [2, 5], "env fast beats the default")
 	OS.set_environment("SIMULATOR_TIMING_PROFILE", "realistic")
-	OS.set_environment("SIMULATOR_RTG_HOLD_WAIT_MAX_S", "100")
-	OS.set_environment("SIMULATOR_QC_WAIT_MIN_S", "95")
+	OS.set_environment("SIMULATOR_RTG_HOLD_WAIT_MAX_S", str(rtg_real[1] + 40))
+	OS.set_environment("SIMULATOR_QC_WAIT_MIN_S", str(qc_real[1] - 5))
 	simulator._configure_timing()
-	_assert(simulator._qc_wait_s.hold == [95, 120], "Generic QC wait key overrides the profile (%s)" % [simulator._qc_wait_s.hold])
-	_assert(simulator._rtg_wait_s.hold == [60, 100], "RTG hold key overrides the profile (%s)" % [simulator._rtg_wait_s.hold])
-	OS.set_environment("SIMULATOR_QC_HOLD_WAIT_MIN_S", "99")
+	_assert(simulator._qc_wait_s.hold == [qc_real[1] - 5, qc_real[1]], "Generic QC wait key overrides the profile (%s)" % [simulator._qc_wait_s.hold])
+	_assert(simulator._rtg_wait_s.hold == [rtg_real[0], rtg_real[1] + 40], "RTG hold key overrides the profile (%s)" % [simulator._rtg_wait_s.hold])
+	OS.set_environment("SIMULATOR_QC_HOLD_WAIT_MIN_S", str(qc_real[1] - 1))
 	OS.set_environment("SIMULATOR_QC_NO_SHOW_TIMEOUT_S", "301")
 	OS.set_environment("SIMULATOR_RTG_NO_SHOW_TIMEOUT_S", "302")
 	OS.set_environment("SIMULATOR_TT_NO_SHOW_TIMEOUT_S", "303")
 	OS.set_environment("SIMULATOR_LEG_STALL_TIMEOUT_S", "900")
 	simulator._configure_timing()
-	_assert(simulator._qc_wait_s.hold == [99, 120], "The hold key wins over the generic key")
+	_assert(simulator._qc_wait_s.hold == [qc_real[1] - 1, qc_real[1]], "The hold key wins over the generic key")
 	_assert(simulator._qc_no_show_timeout_s == 301 and simulator._rtg_no_show_timeout_s == 302 and simulator._tt_no_show_timeout_s == 303, "No-show time-outs come from env")
 	_assert(simulator._leg_stall_timeout_s == 900 and _birth_metric(simulator, "Sim/Timing/LegStallTimeoutS") == 900, "Leg stall time-out comes from env and is on NBIRTH")
 	_clear_timing_env()
@@ -1500,7 +1635,13 @@ func _test_profile_determinism():
 	_assert(not fast_a.is_empty() and fast_a == fast_b, "fast: deterministic per seed")
 	_assert(not real_a.is_empty() and real_a == real_b, "realistic: deterministic per seed")
 	_assert(fast_a != real_a, "The profile changes the run")
-	_assert(_profile_trace(77, "realistic") != real_a, "realistic: another seed changes the run")
+	# A fixed realistic cycle (TCL-034e default [60, 60]) draws no randomness, so
+	# another seed only changes the run when the cycle is a range (D-054 fixed it at 60 s).
+	if _realistic_hold("qc")[0] < _realistic_hold("qc")[1] or _realistic_hold("rtg")[0] < _realistic_hold("rtg")[1]:
+		_assert(_profile_trace(77, "realistic") != real_a, "realistic: another seed changes the run")
+	else:
+		_assert(_profile_trace(77, "realistic") == real_a, "realistic with a fixed cycle: the seed does not change the hold")
+	_assert(_profile_trace(77, "fast") != fast_a, "fast: another seed changes the run")
 	var qc_hold := 0
 	var picked := -1
 	for row in real_a:
@@ -1508,7 +1649,7 @@ func _test_profile_determinism():
 			picked = row[3]
 		if row[0] == "QC01" and row[1] == "handoff_completed":
 			qc_hold = row[3] - picked
-	_assert(qc_hold >= 90000, "realistic: the QC holds >= 90 s (%s ms)" % qc_hold)
+	_assert(qc_hold >= _realistic_hold("qc")[0] * 1000, "realistic: the QC holds >= the cycle minimum (%s ms)" % qc_hold)
 
 
 ## TCL-011 §8(g): every time-out >= 2 x the profile's worst normal wait.
@@ -1518,16 +1659,17 @@ func _test_timing_margins_both_profiles():
 		_assert(simulator.configure_timing_profile(profile), "%s applies" % profile)
 		var violations = simulator.timing_margin_violations()
 		_assert(violations.is_empty(), "%s: time-outs >= 2 x worst normal wait (%s)" % [profile, violations])
-		var waits = SimTiming.worst_normal_waits_s(simulator._qc_wait_s.hold, simulator._rtg_wait_s.hold, simulator._default_speed_mps)
+		var waits = SimTiming.worst_normal_waits_s(simulator._qc_wait_s.hold, simulator._rtg_wait_s.hold, simulator._default_speed_mps, simulator._rtg_positioning_s)
 		for key in waits:
 			var timeout = simulator._tt_no_show_timeout_s if key in ["W1", "W4"] else (simulator._qc_no_show_timeout_s if key == "W2" else simulator._rtg_no_show_timeout_s)
 			_assert(timeout >= 2 * int(waits[key]), "%s %s: %s s >= 2 x %s s" % [profile, key, timeout, waits[key]])
-		var phase_s = SimTiming.longest_motion_or_work_s(simulator._qc_wait_s.hold, simulator._rtg_wait_s.hold, simulator._default_speed_mps)
+		var phase_s = SimTiming.longest_motion_or_work_s(simulator._qc_wait_s.hold, simulator._rtg_wait_s.hold, simulator._default_speed_mps, simulator._rtg_positioning_s)
 		_assert(simulator._leg_stall_timeout_s >= 2 * phase_s, "%s: stall %s s >= 2 x longest motion/work phase %s s (N2)" % [profile, simulator._leg_stall_timeout_s, phase_s])
 		_free_simulator(simulator)
 	var tight = _new_chain_simulator(42, QC_LAT)
 	tight.configure_timing_profile("realistic")
-	tight.configure_qc_no_show_timeout("200")
+	# W2 worst = realistic QC hold max; one second under 2 x that must be reported.
+	tight.configure_qc_no_show_timeout(str(2 * _realistic_hold("qc")[1] - 1))
 	_assert(tight.timing_margin_violations().size() == 1, "A too-short W2 time-out is reported (%s)" % [tight.timing_margin_violations()])
 	_free_simulator(tight)
 
@@ -1548,7 +1690,7 @@ func _test_tt_waits_for_qc_no_show_w2():
 	_assert(str(timed_out.get("Command/Result/HandoffRole", "")) == "receiver" and int(timed_out.get("Command/Result/CounterpartCheId", 0)) == QC_ID, "W2: TT is the receiver, the absent QC its counterpart")
 	_assert(str(timed_out.get("Command/Result/HandoffId", "")) == HANDOFF_ID, "W2 carries H1")
 	_run_steps(simulator, 600)
-	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 1, "W2 fires once")
+	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 3, "W2 repeats every 30 s while the TT keeps waiting (D-059)")
 	_assert(_tt_phase(simulator) == "at_source_waiting", "The TT waits for OES to cancel")
 	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
 	_run_steps(simulator, 200)
@@ -1567,7 +1709,8 @@ func _test_realistic_hold_is_not_a_w2_no_show():
 	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 2000), "realistic H1 completes")
 	var results = _results(simulator)
 	var waited = int(_find(results, "TT01", "handoff_completed")["Sim/TimeMs"]) - int(_find(results, "TT01", "arrived_at_source")["Sim/TimeMs"])
-	_assert(waited >= 90000 and not _events_of(results, "TT01").has("handoff_timed_out"), "TT waited %s ms through the hold without a time-out" % waited)
+	# The TT arrives one fixed step after the QC command, so it waits hold - 1 step.
+	_assert(waited >= _realistic_hold("qc")[0] * 1000 - simulator._clock.step_ms and not _events_of(results, "TT01").has("handoff_timed_out"), "TT waited %s ms through the hold without a time-out" % waited)
 	_free_simulator(simulator)
 
 
@@ -1626,7 +1769,7 @@ func _assert_same_tick_w3_w4(reversed_order: bool):
 	_assert(str(item.m.get("Command/Result/HandoffId", "")) == HANDOFF_ID_2, "S1: the report carries H2 (%s)" % label)
 	_assert(int(item.m.get("Sim/TimeMs", 0)) == start_ms + 30000, "S1: both clocks expire at wait start + 30 s (%s)" % label)
 	_assert(_events_of(_results(simulator), "RTG01").count("handoff_timed_out") == 0, "S1: the receiver (RTG / W4) does not publish (%s)" % label)
-	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 1, "S1: the giver publishes once (%s)" % label)
+	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 1, "S1: the giver alone publishes the first report (%s)" % label)
 	_assert(str(simulator._active_commands[RTG_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID_2 and bool(simulator._active_commands[RTG_ID].get("handoff_timed_out", false)), "S1: the hand-off is closed locally on the receiver too (%s)" % label)
 	_assert(not _events_of(_results(simulator), "RTG01").has("handoff_completed") and not _events_of(_results(simulator), "TT01").has("failed"), "S1: no transfer and no stall (%s)" % label)
 	# A later step must not let the closed receiver publish or complete.
@@ -1700,7 +1843,7 @@ func _assert_same_tick_w1_w2(reversed_order: bool):
 	_assert(str(item.m.get("Command/Result/HandoffId", "")) == HANDOFF_ID, "S1: the report carries H1 (%s)" % label)
 	_assert(int(item.m.get("Sim/TimeMs", 0)) == start_ms + 30000, "S1: both clocks expire at wait start + 30 s (%s)" % label)
 	_assert(_events_of(_results(simulator), "TT01").count("handoff_timed_out") == 0, "S1: the receiver (TT / W2) does not publish (%s)" % label)
-	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 1, "S1: the giver publishes once (%s)" % label)
+	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 1, "S1: the giver alone publishes the first report (%s)" % label)
 	_assert(str(simulator._active_commands[TT_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID, "S1: the hand-off is closed locally on the receiver too (%s)" % label)
 	_assert(not _events_of(_results(simulator), "QC01").has("handoff_completed") and not _events_of(_results(simulator), "TT01").has("failed"), "S1: no transfer and no stall (%s)" % label)
 	_run_steps(simulator, 20)
@@ -1729,7 +1872,8 @@ func _test_receiver_due_first_giver_not_yet():
 	_assert(str(simulator._active_commands[QC_ID].get("handoff_timed_out_id", "")) == HANDOFF_ID and bool(simulator._active_commands[QC_ID].get("handoff_timed_out", false)), "Receiver-due-first: the hand-off is closed locally on the giver too")
 	_run_until(simulator, func(): return int(simulator._clock.now_ms) >= start_ms + 60000, 1000)
 	_run_steps(simulator, 20)
-	_assert(_timeout_results(_results(simulator)).size() == before + 1, "Receiver-due-first: giver still silent after its own clock falls due")
+	var later = _timeout_results(_results(simulator)).slice(before)
+	_assert(later.size() == 2 and later.all(func(r): return r.device == "TT01"), "Receiver-due-first: giver still silent after its own clock falls due; only the receiver repeats (D-059) (%s)" % [later.size()])
 	_assert(_events_of(_results(simulator), "QC01").count("handoff_timed_out") == 0, "Receiver-due-first: QC never publishes")
 	_free_simulator(simulator)
 
@@ -1929,7 +2073,153 @@ func _test_retired_rtg_key_only_warns():
 	var simulator = _new_chain_simulator(42, QC_LAT)
 	simulator._configure_timing()
 	_assert(simulator.rtg_no_show_timeout_ms() == simulator._tt_no_show_timeout_s * 1000, "Retired key =false is ignored: W4 stays on")
+	_assert(simulator._no_show_timeout_enabled and _birth_metric(simulator, "Sim/Timing/NoShowTimeoutEnabled") == true, "Retired key =false does not turn the D-053 switch off")
+	_assert(not HeadlessSimulator.RETIRED_ENV_KEYS.has("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED"), "The new switch is not a retired key")
 	OS.unset_environment("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED")
+	_free_simulator(simulator)
+
+
+## D-053: SIMULATOR_NO_SHOW_TIMEOUT_ENABLED parsing, env path and NBIRTH.
+func _test_no_show_switch_parsing():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	for text in ["false", "0", "no", "off", " OFF "]:
+		_assert(simulator.configure_no_show_timeout_enabled(text) and not simulator._no_show_timeout_enabled, "D-053: '%s' turns the switch off" % text)
+	for text in ["true", "1", "yes", "on", "True"]:
+		simulator._no_show_timeout_enabled = false
+		_assert(simulator.configure_no_show_timeout_enabled(text) and simulator._no_show_timeout_enabled, "D-053: '%s' turns the switch on" % text)
+	_assert(not simulator.configure_no_show_timeout_enabled("maybe") and simulator._no_show_timeout_enabled, "D-053: an invalid value keeps the current value")
+	_clear_timing_env()
+	OS.set_environment("SIMULATOR_TIMING_PROFILE", _saved_profile)
+	OS.set_environment("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED", "off")
+	simulator._configure_timing()
+	_assert(not simulator._no_show_timeout_enabled and _birth_metric(simulator, "Sim/Timing/NoShowTimeoutEnabled") == false, "D-053: env off reaches NBIRTH")
+	OS.unset_environment("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED")
+	simulator._configure_timing()
+	_assert(simulator._no_show_timeout_enabled and _birth_metric(simulator, "Sim/Timing/NoShowTimeoutEnabled") == true, "D-053: no env -> default on")
+	_clear_timing_env()
+	OS.set_environment("SIMULATOR_TIMING_PROFILE", _saved_profile)
+	_free_simulator(simulator)
+
+
+## D-053 off: no handoff_timed_out ever, the waits are still reported, and
+## D-060: the leg stall clock is the backstop in hand-off waits. After
+## LegStallTimeoutS (here 60 s) without progress one waiter's leg ends with
+## failed / SIMULATOR_FAILURE; that closes the hand-off, so its counterpart
+## does not fail too and waits for OES to cancel it.
+func _test_no_show_switch_off_all_waits():
+	for harness in ["h1", "h2"]:
+		var simulator = _waiting_h1_simulator() if harness == "h1" else _waiting_h2_simulator()
+		_assert(simulator.configure_no_show_timeout_enabled("false"), "D-053 off (%s)" % harness)
+		_assert(simulator.configure_leg_stall_timeout("60"), "Short stall clock (%s)" % harness)
+		var start_ms = int(simulator._clock.now_ms)
+		_run_until(simulator, func(): return int(simulator._clock.now_ms) >= start_ms + 10 * 30000, 4000)
+		var results = _results(simulator)
+		var giver = "QC01" if harness == "h1" else "TT01"
+		var receiver = "TT01" if harness == "h1" else "RTG01"
+		_assert(_timeout_results(results).is_empty(), "D-053 off (%s): no handoff_timed_out after 10 x the time-out" % harness)
+		_assert(_events_of(results, giver).has("waiting_for_handoff") and _events_of(results, receiver).has("waiting_for_handoff"), "D-053 off (%s): the waits are still reported" % harness)
+		var failed: Array = []
+		for item in results:
+			if str(item.m["Command/Result/Event"]) == "failed":
+				failed.append(item)
+		_assert(failed.size() == 1, "D-060 (%s): the stall backstop ends exactly one waiting leg (%s)" % [harness, failed.size()])
+		if failed.size() == 1:
+			var item = failed[0]
+			_assert(str(item.m.get("Command/Result/Reason", "")) == "SIMULATOR_FAILURE", "D-060 (%s): failed with SIMULATOR_FAILURE" % harness)
+			_assert(str(item.m.get("Command/Result/Detail", "")).ends_with("within 60 s"), "D-060 (%s): detail names the stall time-out (%s)" % [harness, item.m.get("Command/Result/Detail", "")])
+			var last_ms := -1
+			for other in results:
+				if other == item:
+					break
+				if other.device == item.device:
+					last_ms = int(other.m["Sim/TimeMs"])
+			var gap_ms = int(item.m["Sim/TimeMs"]) - last_ms
+			_assert(gap_ms >= 60000 and gap_ms <= 60100, "D-060 (%s): fails 60 s (+ at most one 100 ms step) after the leg's last result (%s)" % [harness, gap_ms])
+		_assert(simulator._active_commands.size() == 1, "D-060 (%s): the counterpart keeps its leg until OES cancels it" % harness)
+		_free_simulator(simulator)
+	# Switch on: the stall clock stays paused in waits (the no-show clock owns them).
+	var on = _waiting_h1_simulator("600", "600")
+	_assert(on.configure_leg_stall_timeout("60"), "Short stall clock (on)")
+	var on_start = int(on._clock.now_ms)
+	_run_until(on, func(): return int(on._clock.now_ms) >= on_start + 5 * 60000, 4000)
+	_assert(not _events_of(_results(on), "QC01").has("failed") and not _events_of(_results(on), "TT01").has("failed"), "D-060: switch on, no stall in waits")
+	_free_simulator(on)
+
+
+## D-053: every waiting period starts its own clock. W2 ends at H1; the
+## manual-dispatch gap at the block is not a wait; W3 counts from the H2
+## assign. A second QC leg starts W1 from its own hold end.
+func _test_no_show_clock_restarts_per_period():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	_assert(simulator.configure_qc_no_show_timeout("30") and simulator.configure_rtg_no_show_timeout("30"), "Short test-only W2 and W3 time-outs")
+	_send(simulator, QC_ID, _command(QC_ID, _qc_metrics()))
+	_send(simulator, TT_ID, _command(TT_ID, _tt_metrics()))
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "driving_to_destination", 2000), "Periods: W2 ends with H1")
+	_assert(not simulator._active_commands[TT_ID].has("handoff_wait_since_ms"), "Periods: the W2 clock is cleared at H1")
+	_assert(_run_until(simulator, func(): return _tt_phase(simulator) == "at_destination_waiting", 2000), "Periods: TT at the block without H2")
+	var gap_start = int(simulator._clock.now_ms)
+	_run_until(simulator, func(): return int(simulator._clock.now_ms) >= gap_start + 60000, 1000)
+	_assert(_timeout_results(_results(simulator)).is_empty(), "Periods: the manual-dispatch gap (2 x W3) raises nothing")
+	var assign = _command(TT_ID, _assign_metrics())
+	var assign_ms = int(simulator._clock.now_ms)
+	_send(simulator, TT_ID, assign)
+	_assert(int(simulator._active_commands[TT_ID].handoff_wait_since_ms) == assign_ms, "Periods: W3 starts at the assign")
+	_assert(_run_until(simulator, func(): return not _timeout_results(_results(simulator)).is_empty(), 1000), "Periods: W3 fires")
+	var timed_out = _timeout_results(_results(simulator))[0]
+	_assert(timed_out.device == "TT01" and int(timed_out.m["Sim/TimeMs"]) == assign_ms + 30000, "Periods: W3 fires 30 s after the assign, not after the arrival or W2 (%s)" % timed_out.m["Sim/TimeMs"])
+	_free_simulator(simulator)
+	var first = _qc_command()
+	QcDischarge.start(first, 0, 5000, 30000)
+	QcDischarge.step(first, 5000, 0)
+	_assert(int(first.waiting_since_ms) == 5000, "Periods: W1 starts at the hold end")
+	QcDischarge.step(first, 20000, TT_ID)
+	var second = _qc_command()
+	QcDischarge.start(second, 100000, 5000, 30000)
+	_assert(int(second.waiting_since_ms) == 0, "Periods: a new QC leg starts with no clock")
+	QcDischarge.step(second, 105000, 0)
+	_assert(QcDischarge.step(second, 134999, 0).is_empty(), "Periods: second W1 not due before its own hold end + 30 s")
+	_assert(_names(QcDischarge.step(second, 135000, 0)) == ["handoff_timed_out"], "Periods: second W1 times out 30 s after its own hold end")
+
+
+## D-059 (replaces "one report per hand-off"): after handoff_timed_out the
+## waiter stays put until OES cancels, and the same CHE reports again every
+## time-out period (here 30 s) while it keeps waiting. Its counterpart never
+## reports. Each report has its own Command/Result/Id; OES cancel stops them.
+func _test_no_show_repeats_while_waiting():
+	for harness in ["h1", "h2"]:
+		var simulator = _waiting_h1_simulator() if harness == "h1" else _waiting_h2_simulator()
+		var start_ms = int(simulator._clock.now_ms)
+		_assert(_run_until(simulator, func(): return not _timeout_results(_results(simulator)).is_empty(), 2000), "Repeat (%s): the first report" % harness)
+		_run_until(simulator, func(): return int(simulator._clock.now_ms) >= start_ms + 6 * 30000, 3000)
+		var reports = _timeout_results(_results(simulator))
+		_assert(reports.size() >= 5, "Repeat (%s): reports keep coming every period (%s)" % [harness, reports.size()])
+		var ids := {}
+		for i in range(reports.size()):
+			ids[str(reports[i].m["Command/Result/Id"])] = true
+			_assert(reports[i].device == reports[0].device and str(reports[i].m.get("Command/Result/HandoffRole", "")) == str(reports[0].m.get("Command/Result/HandoffRole", "")), "Repeat (%s): same reporter and role" % harness)
+			_assert(str(reports[i].m["Command/Result/CommandId"]) == str(reports[0].m["Command/Result/CommandId"]), "Repeat (%s): same command id" % harness)
+			if i > 0:
+				_assert(int(reports[i].m["Sim/TimeMs"]) - int(reports[i - 1].m["Sim/TimeMs"]) == 30000, "Repeat (%s): one report per 30 s period" % harness)
+		_assert(ids.size() == reports.size(), "Repeat (%s): every report has its own Command/Result/Id" % harness)
+		var reporter_id = TT_ID if reports[0].device == "TT01" else (QC_ID if reports[0].device == "QC01" else RTG_ID)
+		var leg_id = str(simulator._active_commands[reporter_id].command_id)
+		_send(simulator, reporter_id, _cancel(reporter_id, leg_id))
+		var after_cancel = reports.size()
+		_run_steps(simulator, 900)
+		_assert(_timeout_results(_results(simulator)).size() == after_cancel, "Repeat (%s): OES cancel stops the reports" % harness)
+		_free_simulator(simulator)
+
+
+## D-053 off: no no-show can cut a wait short, so only the stall row is checked.
+func _test_margins_skip_no_show_when_off():
+	var simulator = _new_chain_simulator(42, QC_LAT)
+	simulator.configure_timing_profile("realistic")
+	simulator.configure_qc_no_show_timeout("1")
+	_assert(simulator.timing_margin_violations().size() == 1, "On: a 1 s W2 time-out breaks the margin")
+	simulator.configure_no_show_timeout_enabled("false")
+	_assert(simulator.timing_margin_violations().is_empty(), "Off: no-show margins are skipped (%s)" % [simulator.timing_margin_violations()])
+	simulator.configure_leg_stall_timeout("1")
+	_assert(simulator.timing_margin_violations().size() == 1, "Off: the stall margin is still checked")
 	_free_simulator(simulator)
 
 
