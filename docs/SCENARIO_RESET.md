@@ -10,6 +10,7 @@ states and order, not byte-identical messages).
 | What | Make | Without Make |
 | --- | --- | --- |
 | Reset and seed | `make scenario-reset` (`SCENARIO=import_v1`, `SEED=n` default 1, `CONTAINERS=1..5`, `RESET_EPOCH=` optional) | see the steps below; pass the same `--reset-epoch` to both services, **OES first** |
+| Move V001 to InOperation (plans the discharge orders, TCL-010/TCL-010b) | `make scenario-step STEP=visit-in-operation` | `docker compose exec -T minitos python manage.py scenario_step import_v1 visit-in-operation` |
 | Release the discharge order | `make scenario-step STEP=release-discharge [ORDER=id]` | `docker compose exec -T minitos python manage.py scenario_step import_v1 release-discharge` |
 | Dispatch the next step | `make scenario-step STEP=dispatch-next [ORDER=tos-id]` | `docker compose exec -T terminal-oes python manage.py scenario_step import_v1 dispatch-next` |
 | Reset, then start the simulator | `make scenario-reset SIM=1` | `simulation_stop --wait 30` before step 1, `simulation_start` after step 4 (in `terminal-oes`) |
@@ -131,7 +132,7 @@ the real target against a stub `COMPOSE` and checks the failure exit and message
 the contract tests check the stamped envelope against the
 schema and feed goldens with and without `reset_epoch` to the MiniTOS consumer.
 
-If the TT leg cannot be routed (QC01 lane to BLOCK01.TL), the MiniTOS reset
+If the TT cannot be routed from the QC01 lane to BLOCK01.TL, the MiniTOS reset
 fails with "Reset rolled back: import_v1: no road route ..." and the previous
 MiniTOS state is kept.
 
@@ -162,27 +163,40 @@ If `simulation_stop` times out, check `make logs-runner`; as a last resort run
   available and not dispatched (spec K3); work queue `QC01-WQ`. OES marks them
   available after each CHE's DBIRTH.
 - Vessel visit `V001` (Arrived), and 1 (up to 5) pre-advised import container(s)
-  owned by `MSCU` with a valid ISO 6346 check digit, in vessel slot `0340682`
-  (then `0340684`, ...). The first container is always `MSCU1234566`; any extra
-  containers get seeded serials.
-- One PLANNED discharge order per container with an active route plan:
-  QC handle (vessel slot -> QC01 lane, hand-off), TT move (QC01 lane -> BLOCK01.TL,
-  hand-off, `movement_mode` road), RTG handle (BLOCK01.TL -> yard slot).
+  owned by `MSCU` with a valid ISO 6346 check digit, all 20' (`22G1`), in vessel
+  slot `0330682` (then `0330684`, ...; BBBRRTT, odd bay because 20' boxes stow in
+  odd bays). The first container is always `MSCU1234566`; any extra containers
+  get seeded serials.
+- **No discharge orders and no yard reservations** (TCL-010b, D-048). Orders
+  are created by TCL-010 discharge planning when V001 goes InOperation
+  (`make scenario-step STEP=visit-in-operation`, or the vessel visit panel / API
+  / admin): one PLANNED order per container with an active route plan:
+  QC handle (seeded vessel slot -> QC01 lane, hand-off), TT move (QC01 lane ->
+  BLOCK01.TL, hand-off, `movement_mode` road), RTG handle (BLOCK01.TL -> yard
+  slot chosen by planning). The step prints "N created, 0 adopted"; a rerun
+  adopts. `release-discharge` before InOperation fails with "run the
+  visit-in-operation step first".
+
+Demo order: `make scenario-reset` -> `make scenario-step STEP=visit-in-operation`
+-> `make scenario-step STEP=release-discharge` -> `dispatch-next`.
 
 Determinism: auto ids restart at 1, Enterprise/Site ids are uuid5 under the
 fixed namespace `7c0e5b1a-6d1e-4c55-9a2b-0000000000c6`, and extra container
-serials, weights and yard slots come from `random.Random(SEED)` (default `1`).
+serials and weights come from `random.Random(SEED)` (default `1`). Yard slots
+are drawn at InOperation by discharge planning with its own seeded RNG, so the
+same visit gets the same slots on a rerun (D-016).
 
 Seed and clock (spec K7): `SEED` defaults to 1, the same as `SIMULATOR_SEED`, and
 `make scenario-reset SEED=n` sets both the MiniTOS scenario RNG and the simulator
 seed (OES forwards `SIMULATOR_SEED` to the runner). Seeded business times (visit
-ETA/ATA, order ETC) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
+ETA/ATA/ETD) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
 1792886400000, 2026-10-25 00:00 UTC, so the vessel's ATA is sim time 0. A plain
 `make up` recreates `terminal-oes` with `.env`'s `SIMULATOR_SEED` (default 1);
 run `make scenario-reset SEED=n` again afterwards to keep both seeds equal.
 
 Yard planning seed (TCL-012, #10): the reset also stores `SEED` in MiniTOS
-(`ScenarioSeed`, one row, wiped by the next reset). When the visit later goes
+(`ScenarioSeed`, a single row enforced by a unique key, overwritten by the next
+reset). When the visit later goes
 InOperation (TCL-010: admin panel, API, Django admin or
 `make scenario-step STEP=visit-in-operation`), each new discharge order gets a
 random free BLOCK01 slot drawn from
@@ -192,8 +206,10 @@ slots after a reset. "Free" means no container (`container_visit` empty,
 order (not complete, failed or cancelled) or of one of its legs, at any tier up
 to `StorageGrid.max_tier` (import_v1 BLOCK01 is 3). Planning fills ground
 (tier 1) first, then stacks on tier 2 and up; a higher tier is only chosen when
-every lower tier of the same pile is already held, so no floating containers
-are planned (Yael, 5 Nov 2026). A fully stacked BLOCK01 refuses InOperation with
+every lower tier of the same pile is already held (a container, occupied,
+reserved or an open-order target), so no floating containers are planned (Yael,
+5 Nov 2026). A missing lower position, or an empty one with no operational
+position, does not count as held. A fully stacked BLOCK01 refuses InOperation with
 `discharge_no_free_slot`; nothing spills into another block. The QA M2 reset
 epoch is not part of the seed (it is new on every reset). Since TCL-010b the
 seed creates no orders, so every discharge order and its slot come from this
@@ -207,7 +223,7 @@ already drained the queue.
 What the canonical dump masks (QA M1): an explicit allow-list, `VOLATILE_FIELDS`
 and `VOLATILE_JSON_KEYS` in `minitos_core/scenarios/base.py` and
 `execution/scenarios.py`. Every other value is compared literally, including the
-seeded business times `CarrierVisit.eta`/`ata`/`etd` and `Order.etc` (before M1
+seeded business times `CarrierVisit.eta`/`ata`/`etd` (before M1
 every datetime and every ISO-looking string was blanked, so moving them by three
 days went unnoticed). A masked value still shows whether it is set: `null` stays
 `null`, anything else becomes `"<volatile>"`. Only the outbox delivery
@@ -223,7 +239,7 @@ Masked JSON keys (any depth, both services): `event_id`, `occurred_at`,
 wall-clock copies `state_updated_at`, `created_at`, `updated_at`, `released_at`
 (OES also `checksum`). Tests run a reset with the wall clock moved three days
 ahead and expect the same dump, so a new wall-clock field fails the test until it
-is added to the list with a reason; shifting `eta`, `ata`, `etd` or `etc` by three
+is added to the list with a reason; shifting `eta`, `ata` or `etd` by three
 days must change the checksum.
 
 ## Event fixture for terminal-oes
