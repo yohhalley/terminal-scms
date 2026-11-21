@@ -72,7 +72,8 @@ items marked **PO** need a decision through the Tech Lead.
   - Only when none is sent, the slot is a dummy, `Command/Result/PositionCode =
     BLOCKxx-DUMMY-nn`, with nn in 1..20 drawn from the seed (per RTG and leg).
     The block comes from the lane code (`BLOCK01-TL` → `BLOCK01`).
-- D-013 analogue: an RTG in `waiting_for_tt` publishes `handoff_timed_out` once,
+- D-013 analogue: an RTG in `waiting_for_tt` publishes `handoff_timed_out` (since
+  D-059, again every period while it keeps waiting; see NOTES-TCL-034e)
   after `Sim/Timing/TtNoShowTimeoutS` (the same setting, default 300 s). After
   that, a late TT gets no transfer and OES must cancel.
 - Cancel works as for the QC: `cancelled` with `Work/State` idle, and any
