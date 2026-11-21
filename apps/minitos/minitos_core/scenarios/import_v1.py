@@ -193,6 +193,7 @@ def _seed_layout(location, types):
 
     # Anchor on the quay face at x=50, heading east (90°), water on the left
     # (north), land to the right (south), as the editor's quay footprint.
+    # The outline runs clockwise (face east, then south, west, north), as the editor draws it.
     quay_corners = [_coordinate(location, x, y) for x, y in ((50, 260), (350, 260), (350, 225), (50, 225))]
     quay = asset(
         'QUAY-01', 'Main quay', LayoutAsset.QUAY,
