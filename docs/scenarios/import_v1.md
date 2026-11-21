@@ -271,7 +271,7 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
   - (b) The released payload of a real 3-leg discharge order built by MiniTOS. The tests build the legs by hand.
   - (c) An `order.released.v1` JSON Schema and goldens (G4).
   - (d) Shared Python/GDScript golden vectors for the `qc_discharge` DCMD and the `handoff_completed` result.
-  - (e) The hold distribution across seeds (QA survey cases D012-3/4: holds stay in [10, 30] and vary with the seed).
+  - (e) *(Godot level: covered by #45 (TCL-037), bounds updated by #47 (TCL-034e))* The hold distribution across seeds (QA survey cases D012-3/4). `test_acceptance_d012_d013.gd` asserts the holds against `SimTiming.hold_range`, not [10, 30]: `fast` QC 2–5 s, spread and seed variation (D012a/b); `realistic` QC 60 s (D-051, D-054). Still missing: the hold distribution in the cross-service e2e run.
 
 ### Step 4: TT takes the container to the yard. The TT drives to the yard location, and the RTG takes the container and places it in the yard
 
@@ -359,7 +359,7 @@ These issue-level requirements apply after step 9:
 | AC3.8f, R3 KPIs | — | KPI tests once KPIs exist (S3–S4, D-038, D-042) |
 | AC3.10 custody at QC → TT | — | MiniTOS test (container status rework, D-033) |
 | AC3.11, AC4.9 timing limits | — | TCL-007 CI e2e: ≤5 s wall-clock for reaction steps; sim-time layout bounds for 3d and 4 (D-037, D-050, TCL-007b) |
-| AC3.12–3.14 waiting for TT, twistlocks, timing profile | — | OES view (D-028/D-040); telemetry (D-029); Godot tests for both profiles (Sim params, D-039) |
+| AC3.12–3.14 waiting for TT, twistlocks, timing profile | AC3.14: Godot `test_headless_sim.gd` (`_test_timing_profiles_and_precedence`, `_test_timing_margins_both_profiles` [#33]; `_test_rtg_positioning_before_w4_d058` [#47]); `requires-TCL-014a/test_acceptance_d012_d013.gd` fast and realistic arms [#45, #47] | OES view (D-028/D-040); telemetry (D-029). CI runs `fast` only. |
 | AC4.7–4.8 block no-show, time-out parameter | — | Godot + OES tests (Sim params task, D-027) |
 | AC1.5, AC4.6 rerun | OES `test_handoffs.py::test_d016_same_seed_same_states_in_the_same_order` [#13]; `execution/test_acceptance_rules.py::test_d016_rerun_produces_same_state_sequence_not_same_messages` [#14] | Full stack (needs TCL-006) |
 | Steps 5–9 | — | TCL-003b, 018, 024, 022b |
