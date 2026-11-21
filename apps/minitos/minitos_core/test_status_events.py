@@ -27,7 +27,7 @@ from minitos_core.models import (
     Location,
     Order,
 )
-from minitos_core.scenarios import reset_scenario
+from minitos_core.scenarios import reset_scenario, run_step
 from minitos_core.services import integration_events, status_events
 from minitos_core.services.status_events import SCHEMA, status_event_source
 
@@ -193,6 +193,14 @@ class VesselVisitEventTests(StatusEventTestBase):
 
 
 class ContainerVisitEventTests(StatusEventTestBase):
+    def planned_order(self):
+        """TCL-010b: the seed has no order; plan it the demo way (InOperation)
+        and drop the visit's own status event so only the container's counts."""
+        with self.captureOnCommitCallbacks(execute=True):
+            run_step('import_v1', 'visit-in-operation')
+        IntegrationOutbox.objects.filter(schema=SCHEMA).delete()
+        return Order.objects.get()
+
     def test_container_transition_publishes_d010_fields(self):
         self.save_status(self.container_visit, ContainerVisit.ARRIVED)
 
@@ -231,7 +239,7 @@ class ContainerVisitEventTests(StatusEventTestBase):
         self.assertEqual(row.payload['data']['source'], 'minitos.api')
 
     def test_oes_execution_message_tags_source_causation_and_sim_time(self):
-        order = Order.objects.get()
+        order = self.planned_order()
         event_id = uuid.uuid4()
         message = {
             'schema': 'scms.execution.event.v1',
@@ -263,7 +271,7 @@ class ContainerVisitEventTests(StatusEventTestBase):
         self.assertEqual(data['to_status'], 'OnEquipment')
 
     def test_oes_message_without_correlation_correlates_on_its_event_id(self):
-        order = Order.objects.get()
+        order = self.planned_order()
         event_id = uuid.uuid4()
         message = {
             'schema': 'scms.execution.event.v1', 'event_id': str(event_id),
@@ -285,7 +293,7 @@ class ContainerVisitEventTests(StatusEventTestBase):
         self.assertIsNone(row.payload['data']['sim_time_ms'])
 
     def test_failed_execution_message_publishes_nothing(self):
-        order = Order.objects.get()
+        order = self.planned_order()
         message = {
             'schema': 'scms.execution.event.v1', 'event_id': str(uuid.uuid4()),
             'terminal': {'id': self.visit.location_id},

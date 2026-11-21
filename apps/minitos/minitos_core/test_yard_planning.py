@@ -172,8 +172,10 @@ class FreeSlotTests(TestCase):
         )
 
     def test_a_slot_that_only_a_live_leg_ends_on_is_not_free(self):
-        # Seeded order: keep only its leg 3 pointing at the slot (no flag,
-        # no order target). It is still taken.
+        # A planned order: keep only its leg 3 pointing at the slot (no flag,
+        # no order target). It is still taken. TCL-010b: the seed no longer
+        # pre-creates the order, so plan one here.
+        plan_visit_discharge(self.visit)
         order = Order.objects.order_by('pk').first()
         slot = order.to_position.stack_position
         Position.objects.filter(pk=slot.pk).update(is_reserved=False)
@@ -182,6 +184,7 @@ class FreeSlotTests(TestCase):
         self.assertNotIn(slot.pk, [item.pk for item in yard_planning.free_yard_slots(self.grid)])
 
     def test_closed_orders_do_not_hold_their_slot(self):
+        plan_visit_discharge(self.visit)  # TCL-010b: the seed plans no order
         order = Order.objects.order_by('pk').first()
         slot = order.to_position.stack_position
         Position.objects.filter(pk=slot.pk).update(is_reserved=False)
