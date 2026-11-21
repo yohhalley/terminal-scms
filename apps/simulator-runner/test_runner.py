@@ -135,6 +135,7 @@ class GodotAllowlistTests(unittest.TestCase):
     def test_every_key_godot_reads_is_allowlisted(self):
         keys = godot_simulator_keys()
         self.assertIn("SIMULATOR_LEG_STALL_TIMEOUT_S", keys)
+        self.assertIn("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED", keys)  # TCL-034e (D-053)
         self.assertLessEqual(keys, ALLOWED_ENVIRONMENT)
 
     def test_every_allowlisted_simulator_key_is_read_by_godot(self):
@@ -147,6 +148,11 @@ class GodotAllowlistTests(unittest.TestCase):
         with open(path, encoding="utf-8") as handle:
             source = handle.read()
         self.assertIn('RETIRED_ENV_KEYS := ["SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED"', source)
+
+    def test_the_global_no_show_switch_is_allowlisted(self):
+        """TCL-034e (D-053): the new switch is a live key, not a retired one."""
+        self.assertIn("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED", ALLOWED_ENVIRONMENT)
+        self.assertNotIn("SIMULATOR_NO_SHOW_TIMEOUT_ENABLED", RETIRED)
 
 
 class RunnerTests(unittest.TestCase):
