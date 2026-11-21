@@ -79,16 +79,18 @@ admin.site.register(BusinessProcessExecution)
 # discharge list was received (terminal local time, zone named). Formats and
 # the missing value are the demo_display placeholders.
 class VesselSlotColumnMixin:
-    """Look up the vessel slots of a changelist page in one query."""
+    """Look up the vessel slots of a changelist page in two queries (current layouts, slots)."""
 
-    vessel_slot_visit_attr = None  # attribute holding the ContainerVisit id
+    def vessel_slot_container_visit(self, obj):  # the ContainerVisit whose slot to show
+        raise NotImplementedError
 
     def get_changelist_instance(self, request):
         changelist = super().get_changelist_instance(request)
         objects = list(changelist.result_list)
-        slots = vessel_slots_for([getattr(obj, self.vessel_slot_visit_attr) for obj in objects])
-        for obj in objects:
-            obj._demo_vessel_slot = slots.get(getattr(obj, self.vessel_slot_visit_attr))
+        visits = [self.vessel_slot_container_visit(obj) for obj in objects]
+        slots = vessel_slots_for(visits)
+        for obj, visit in zip(objects, visits):
+            obj._demo_vessel_slot = slots.get(visit.pk) if visit is not None else None
         return changelist
 
     @admin.display(description='Vessel slot')
@@ -96,15 +98,17 @@ class VesselSlotColumnMixin:
         if hasattr(obj, '_demo_vessel_slot'):
             stow = obj._demo_vessel_slot
         else:
-            stow = vessel_slot_for(getattr(obj, self.vessel_slot_visit_attr))
+            stow = vessel_slot_for(self.vessel_slot_container_visit(obj))
         return demo_display.format_vessel_slot(stow)
 
 
 @admin.register(ContainerVisit)
 class ContainerVisitAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
-    vessel_slot_visit_attr = 'pk'
     list_display = ('__str__', 'container_number_display', 'vessel_slot', 'status', 'category', 'ib_carrier')
     list_select_related = ('container_number', 'ib_carrier')
+
+    def vessel_slot_container_visit(self, obj):
+        return obj
 
     @admin.display(description='Container number', ordering='container_number')
     def container_number_display(self, obj):
@@ -113,9 +117,11 @@ class ContainerVisitAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
 
 @admin.register(Order)
 class OrderAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
-    vessel_slot_visit_attr = 'container_number_id'
     list_display = ('__str__', 'order_type', 'status', 'container_number_display', 'vessel_slot', 'work_queue')
-    list_select_related = ('container_number', 'work_queue')
+    list_select_related = ('container_number__ib_carrier', 'work_queue')
+
+    def vessel_slot_container_visit(self, obj):
+        return obj.container_number
 
     @admin.display(description='Container number', ordering='container_number__container_number')
     def container_number_display(self, obj):
@@ -125,8 +131,14 @@ class OrderAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
 
 @admin.register(CarrierVisit)
 class CarrierVisitAdmin(admin.ModelAdmin):
-    list_display = ('name', 'visit_type', 'status', 'vessel_name', 'ata', 'discharge_list_received')
+    # QA review of #54, S2: ata goes through the same helper and display zone
+    # as the received time, so one row never mixes UTC and terminal time.
+    list_display = ('name', 'visit_type', 'status', 'vessel_name', 'ata_display', 'discharge_list_received')
     list_select_related = ('location',)
+
+    @admin.display(description='Berthed (ATA)', ordering='ata')
+    def ata_display(self, obj):
+        return demo_display.format_local_time(obj.ata, obj.location, with_zone=True)
 
     @admin.display(description='Discharge list received', ordering='discharge_list_received_at')
     def discharge_list_received(self, obj):

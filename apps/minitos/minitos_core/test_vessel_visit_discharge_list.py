@@ -68,9 +68,9 @@ class DemoScreenTestCase(TestCase):
             category=ContainerVisit.IMPORT, **extra,
         )
 
-    def make_slot(self, container_visit, stow, code=None):
+    def make_slot(self, container_visit, stow, code=None, layout=None):
         return OperationalPosition.objects.create(
-            layout_version=self.layout, code=code or f'DEMO-V1.{stow or container_visit.pk}',
+            layout_version=layout or self.layout, code=code or f'DEMO-V1.{stow or container_visit.pk}',
             name='slot', position_kind=OperationalPosition.VESSEL_SLOT,
             logical_address={'carrier_visit': 'DEMO-V1', 'container_visit_id': container_visit.pk, 'stow': stow},
         )
@@ -91,15 +91,40 @@ class VesselSlotHelperTests(DemoScreenTestCase):
         self.assertIsNone(vessel_slot_for(bare))
         self.assertIsNone(vessel_slot_for(None))
 
-    def test_real_slot_wins_over_a_placeholder_and_bulk_is_one_query(self):
+    def test_first_slot_by_code_as_planning_and_bulk_is_two_queries(self):
         first = self.make_container('MSCU1234566')
         second = self.make_container('MSCU1234571')
         self.make_slot(first, None, code=f'DEMO-V1.CV{first.pk}')
         self.make_slot(first, '0330682')
         self.make_slot(second, '0330684')
-        with self.assertNumQueries(1):
-            slots = vessel_slots_for([first.pk, second.pk, 999999])
-        self.assertEqual(slots, {first.pk: '0330682', second.pk: '0330684', 999999: None})
+        with self.assertNumQueries(2):
+            slots = vessel_slots_for([first, second])
+        self.assertEqual(slots, {first.pk: '0330682', second.pk: '0330684'})
+        self.assertEqual(vessel_slots_for([]), {})
+
+    def test_a_placeholder_that_sorts_first_shows_missing_like_planning_uses_it(self):
+        visit = self.make_container('MSCU1234566')
+        self.make_slot(visit, None, code='A-PLACEHOLDER')
+        self.make_slot(visit, '0330682')
+        self.assertIsNone(vessel_slot_for(visit))
+
+    def test_only_the_current_layout_of_the_visits_terminal_counts(self):
+        # QA review of #54, S4: the same scope as discharge_planning._layout.
+        visit = self.make_container('MSCU1234566')
+        old_layout = LayoutVersion.objects.create(location=self.location, version=0, is_current=False)
+        self.make_slot(visit, '0330682', code='OLD.0330682', layout=old_layout)
+        other_location = make_location('Other Slot Terminal')
+        other_layout = LayoutVersion.objects.create(location=other_location, version=1)
+        self.make_slot(visit, '0330684', code='OTHER.0330684', layout=other_layout)
+        self.assertIsNone(vessel_slot_for(visit))
+        self.make_slot(visit, '0330686')
+        self.assertEqual(vessel_slot_for(visit), '0330686')
+
+    def test_terminal_without_a_current_layout_has_no_slot(self):
+        visit = self.make_container('MSCU1234566')
+        self.make_slot(visit, '0330682')
+        LayoutVersion.objects.filter(pk=self.layout.pk).update(is_current=False)
+        self.assertIsNone(vessel_slot_for(visit))
 
     def test_other_position_kinds_and_malformed_stow_are_ignored(self):
         visit = self.make_container('MSCU1234566')
@@ -168,7 +193,9 @@ class DischargeListPageTests(DemoScreenTestCase):
         )
         html = self.client.get(list_url(self.location, self.visit)).content.decode()
         self.assertEqual(field_values(html, 'order-status'), ['Planned'])
-        self.assertEqual(field_values(html, 'yard-slot'), ['BLOCK01.01.01.1'])
+        self.assertEqual(field_values(html, 'planned-yard-slot'), ['BLOCK01.01.01.1'])
+        self.assertIn('<th>Planned yard slot</th>', html)
+        self.assertNotIn('<th>Yard slot</th>', html)
         self.assertEqual(field_values(html, 'vessel-slot'), ['0330682'])
 
     def test_empty_visit(self):
@@ -201,10 +228,22 @@ class DischargeListAccessTests(DemoScreenTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse('admin:login'), response['Location'])
 
-    def test_403_without_berth_plan_capability(self):
-        capabilities = {'can_view_terminal': True, 'can_edit_terminal': False, 'can_manage_berth_plan': False}
+    def test_403_without_view_capability(self):
+        capabilities = {'can_view_terminal': False, 'can_edit_terminal': False, 'can_manage_berth_plan': False}
         with mock.patch('minitos_core.views.terminal_capabilities', return_value=capabilities):
             self.assertEqual(self.client.get(list_url(self.location, self.visit)).status_code, 403)
+
+    def test_view_capability_is_enough_for_the_read_only_page(self):
+        # TL call (b) on QA review of #54, N1: can_view_terminal, not can_manage_berth_plan.
+        capabilities = {'can_view_terminal': True, 'can_edit_terminal': False, 'can_manage_berth_plan': False}
+        with mock.patch('minitos_core.views.terminal_capabilities', return_value=capabilities):
+            self.assertEqual(self.client.get(list_url(self.location, self.visit)).status_code, 200)
+            # The panel (it changes statuses) still needs can_manage_berth_plan.
+            panel = self.client.get(reverse('vessel_visit_panel', args=[self.location.pk]))
+            self.assertEqual(panel.status_code, 403)
+
+    def test_head_is_allowed(self):
+        self.assertEqual(self.client.head(list_url(self.location, self.visit)).status_code, 200)
 
     def test_404_for_other_terminal_non_vessel_or_unknown_visit(self):
         other = make_location('Other Terminal')
@@ -233,6 +272,13 @@ class PanelDischargeListTests(DemoScreenTestCase):
         html = self.client.get(reverse('vessel_visit_panel', args=[self.location.pk])).content.decode()
         self.assertEqual(field_values(html, 'discharge-list-received'), ['—'])
 
+    def test_panel_received_time_in_a_non_utc_terminal(self):
+        self.location.timezone = 'America/Mexico_City'
+        self.location.save()
+        html = self.client.get(reverse('vessel_visit_panel', args=[self.location.pk])).content.decode()
+        self.assertEqual(field_values(html, 'discharge-list-received'), ['2026-11-01 00:00'])
+        self.assertIn('times in America/Mexico_City', html)
+
 
 class PlaceholderConstantTests(TestCase):
     """Each board-7 answer is a one-constant change in demo_display.py."""
@@ -258,6 +304,47 @@ class PlaceholderConstantTests(TestCase):
             self.assertEqual(demo_display.format_local_time(value, location, with_zone=True), '2026-10-23 00:00 UTC')
         with mock.patch.object(demo_display, 'MISSING_VALUE', 'n/a'):
             self.assertEqual(demo_display.format_vessel_slot(None), 'n/a')
+
+
+class PlaceholderSwitchRenderTests(DemoScreenTestCase):
+    """QA review of #54, S1: TIME_FORMAT and MISSING_VALUE drive every time cell."""
+
+    def setUp(self):
+        super().setUp()
+        self.visit.eta = datetime(2026, 11, 3, 5, 0, tzinfo=UTC)
+        self.visit.save()
+        self.make_container('MSCU1234566')
+
+    def panel_html(self):
+        return self.client.get(reverse('vessel_visit_panel', args=[self.location.pk])).content.decode()
+
+    def test_time_format_drives_s2_and_every_panel_time(self):
+        with mock.patch.object(demo_display, 'TIME_FORMAT', '%d/%m/%Y %H:%M'):
+            s2 = self.client.get(list_url(self.location, self.visit)).content.decode()
+            panel = self.panel_html()
+        self.assertEqual(field_values(s2, 'discharge-list-received'), ['01/11/2026 06:00'])
+        self.assertEqual(field_values(s2, 'ata'), ['03/11/2026 06:00'])
+        self.assertEqual(field_values(panel, 'ata'), ['03/11/2026 06:00'])
+        self.assertEqual(field_values(panel, 'discharge-list-received'), ['01/11/2026 06:00'])
+        self.assertIn('<b>ETA</b> 03/11/2026 05:00', panel)
+        self.assertNotIn('2026-11-0', s2 + panel)
+
+    def test_missing_value_drives_s2_and_every_panel_cell(self):
+        self.visit.eta = self.visit.ata = self.visit.discharge_list_received_at = None
+        self.visit.save()
+        with mock.patch.object(demo_display, 'MISSING_VALUE', 'n/a'):
+            s2 = self.client.get(list_url(self.location, self.visit)).content.decode()
+            panel = self.panel_html()
+        self.assertEqual(field_values(s2, 'discharge-list-received'), ['n/a'])
+        self.assertEqual(field_values(s2, 'ata'), ['n/a'])
+        self.assertEqual(field_values(s2, 'vessel-slot'), ['n/a'])
+        self.assertEqual(field_values(s2, 'planned-yard-slot'), ['n/a'])
+        self.assertEqual(field_values(panel, 'ata'), ['n/a'])
+        self.assertEqual(field_values(panel, 'atd'), ['n/a'])
+        self.assertEqual(field_values(panel, 'discharge-list-received'), ['n/a'])
+        self.assertIn('<b>ETA</b> n/a', panel)
+        self.assertIn('<b>ETD</b> n/a', panel)
+        self.assertNotIn('—', s2 + panel)
 
 
 class AdminChangelistTests(DemoScreenTestCase):
@@ -292,6 +379,16 @@ class AdminChangelistTests(DemoScreenTestCase):
         self.location.save()
         html = self.client.get(reverse('admin:minitos_core_carriervisit_changelist')).content.decode()
         self.assertIn('<td class="field-discharge_list_received">2026-11-01 00:00 America/Mexico_City</td>', html)
+        # QA review of #54, S2: ata in the same display zone and format.
+        self.assertIn('<td class="field-ata_display">2026-11-03 00:00 America/Mexico_City</td>', html)
+        self.assertIn('Berthed (ATA)', html)
+        self.assertNotIn('field-ata"', html)
+
+    def test_carrier_visit_changelist_missing_ata(self):
+        self.visit.ata = None
+        self.visit.save()
+        html = self.client.get(reverse('admin:minitos_core_carriervisit_changelist')).content.decode()
+        self.assertIn('<td class="field-ata_display">—</td>', html)
 
     def test_change_forms_still_render(self):
         for name, obj in (('containervisit', self.container_visit), ('carriervisit', self.visit)):
@@ -326,12 +423,24 @@ class SeededDischargeListTests(TestCase):
         self.assertEqual(field_values(html, 'discharge-list-received'), ['2026-10-22 18:00'])
         self.assertEqual(field_values(html, 'timezone'), ['America/Mexico_City'])
         self.assertEqual(field_values(html, 'order-status'), ['—'])
+        self.assertEqual(field_values(html, 'planned-yard-slot'), ['—'])
+        seeded_slot = OperationalPosition.objects.get(position_kind=OperationalPosition.VESSEL_SLOT)
+        self.assertEqual(seeded_slot.code, 'V001.0330682')
+        self.assertEqual(seeded_slot.logical_address['stow'], '0330682')
         self.visit.status = CarrierVisit.IN_OPERATION
         self.visit.save()
         html = self.client.get(url).content.decode()
+        order = Order.objects.get()
+        # QA review of #54, S5: exact values, one row.
+        self.assertEqual(len(field_values(html, 'container-number')), 1)
+        self.assertEqual(field_values(html, 'container-number'), ['MSCU1234566'])
+        self.assertEqual(field_values(html, 'status'), ['Preadvised'])
+        self.assertEqual(field_values(html, 'order-status'), ['Planned'])
+        self.assertEqual(field_values(html, 'planned-yard-slot'), [order.to_position.code])
+        # S4: S2 shows the slot planning used as the order's origin, V001.0330682.
+        self.assertEqual(order.from_position.code, 'V001.0330682')
+        self.assertEqual(field_values(html, 'vessel-slot'), [order.from_position.logical_address['stow']])
         self.assertEqual(field_values(html, 'vessel-slot'), ['0330682'])
-        self.assertNotEqual(field_values(html, 'order-status'), ['—'])
-        self.assertNotEqual(field_values(html, 'yard-slot'), ['—'])
 
     def test_seeded_admin_changelists(self):
         html = self.client.get(reverse('admin:minitos_core_containervisit_changelist')).content.decode()

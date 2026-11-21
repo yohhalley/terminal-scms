@@ -1,4 +1,4 @@
-{% load tz %}<!DOCTYPE html>
+{% load demo_display_tags %}<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -35,18 +35,16 @@
             <h1>Discharge list · {{ visit.name }}</h1>
             <p>{{ location.name }} · times in {{ timezone_name }} · read-only</p>
         </div>
-        {% timezone timezone_name %}
         <section class="facts" aria-label="Vessel visit">
             <div><b>Vessel / voyage</b> <span data-field="vessel">{{ visit.vessel_name|default:missing }}{% if visit.voyage_number %} · {{ visit.voyage_number }}{% endif %}</span></div>
             <div><b>Status</b> <span data-field="visit-status">{{ visit.get_status_display }}</span></div>
-            <div><b>Discharge list received</b> <span data-field="discharge-list-received">{{ visit.discharge_list_received_at|date:"Y-m-d H:i"|default:missing }}</span>{% if visit.discharge_list_received_at %} <span data-field="timezone">{{ timezone_name }}</span>{% endif %}</div>
-            <div><b>Berthed</b> <span data-field="ata">{{ visit.ata|date:"Y-m-d H:i"|default:missing }}</span>{% if visit.ata %} <span>{{ timezone_name }}</span>{% endif %}</div>
+            <div><b>Discharge list received</b> <span data-field="discharge-list-received">{{ visit.discharge_list_received_at|demo_time:location }}</span>{% if visit.discharge_list_received_at %} <span data-field="timezone">{{ timezone_name }}</span>{% endif %}</div>
+            <div><b>Berthed</b> <span data-field="ata">{{ visit.ata|demo_time:location }}</span>{% if visit.ata %} <span>{{ timezone_name }}</span>{% endif %}</div>
             <div><b>Containers</b> <span data-field="container-count">{{ rows|length }}</span></div>
         </section>
-        {% endtimezone %}
         <table aria-label="Discharge list">
             <thead>
-                <tr><th>Container number</th><th>Size-type</th><th>Vessel slot</th><th>Status</th><th>Discharge order</th><th>Yard slot</th><th>Current CHE</th></tr>
+                <tr><th>Container number</th><th>Size-type</th><th>Vessel slot</th><th>Status</th><th>Discharge order</th><th>Planned yard slot</th><th>Current CHE</th></tr>
             </thead>
             <tbody>
             {% for row in rows %}
@@ -56,7 +54,7 @@
                     <td class="mono" data-field="vessel-slot"{% if not row.has_vessel_slot %} title="no stowage slot"{% endif %}>{{ row.vessel_slot }}</td>
                     <td data-field="status">{{ row.status }}</td>
                     <td data-field="order-status">{{ row.order_status }}</td>
-                    <td class="mono" data-field="yard-slot">{{ row.yard_slot }}</td>
+                    <td class="mono" data-field="planned-yard-slot">{{ row.planned_yard_slot }}</td>
                     <td data-field="current-che">{{ row.current_che }}</td>
                 </tr>
             {% empty %}

@@ -247,6 +247,13 @@ def _panel_location(request, location_id):
     return location
 
 
+def _view_location(request, location_id):
+    location = get_object_or_404(Location, pk=location_id, location_type__in=['TL', 'ID'])
+    if not terminal_capabilities(request.user, location)['can_view_terminal']:
+        raise PermissionDenied
+    return location
+
+
 @login_required(login_url='admin:login')
 def vessel_visit_panel_view(request, location_id):
     """TCL-009: list vessel visits with status, ata/atd and the allowed next statuses."""
@@ -255,16 +262,15 @@ def vessel_visit_panel_view(request, location_id):
 
 
 # Demo screens S2 (D-041, D-031; TCL-demo-screens): read-only discharge list
-# for one vessel visit. Same access rules as the panel (login, then
-# can_manage_berth_plan, then 404 for another terminal's or a non-vessel
-# visit). One row per inbound container visit (ib_carrier = the visit) with
+# for one vessel visit. Login, then can_view_terminal (read-only page), then
+# 404 for another terminal's or a non-vessel visit. One row per inbound container visit (ib_carrier = the visit) with
 # its ISO number, vessel slot (services/vessel_slots.py, the
 # logical_address.container_visit_id link) and its discharge order, if
 # planning has created one. Formats are the demo_display placeholders.
 def _discharge_list_rows(visit):
     container_visits = list(
         ContainerVisit.objects.filter(ib_carrier=visit)
-        .select_related('container_number__iso_type', 'current_che')
+        .select_related('container_number__iso_type', 'current_che', 'ib_carrier')
         .prefetch_related(models.Prefetch(
             'container_visit',
             queryset=Order.objects.filter(order_type=Order.MOVE_IN)
@@ -273,7 +279,7 @@ def _discharge_list_rows(visit):
         ))
         .order_by(models.F('container_number_id').asc(nulls_last=True), 'pk')
     )
-    slots = vessel_slots_for([container_visit.pk for container_visit in container_visits])
+    slots = vessel_slots_for(container_visits)
     rows = []
     for container_visit in container_visits:
         unit = container_visit.container_number
@@ -287,7 +293,7 @@ def _discharge_list_rows(visit):
             'status': container_visit.get_status_display(),
             'current_che': container_visit.current_che.name if container_visit.current_che_id else demo_display.MISSING_VALUE,
             'order_status': order.get_status_display() if order else demo_display.MISSING_VALUE,
-            'yard_slot': order.to_position.code if order and order.to_position_id else demo_display.MISSING_VALUE,
+            'planned_yard_slot': order.to_position.code if order and order.to_position_id else demo_display.MISSING_VALUE,
         })
     return rows
 
@@ -295,8 +301,12 @@ def _discharge_list_rows(visit):
 @login_required(login_url='admin:login')
 @require_safe
 def vessel_visit_discharge_list_view(request, location_id, visit_id):
-    """Demo screen S2: the discharge list of one vessel visit (read-only)."""
-    location = _panel_location(request, location_id)
+    """Demo screen S2: the discharge list of one vessel visit (read-only).
+
+    Read-only, so it is gated by ``can_view_terminal`` (TL call on QA review
+    of #54, N1), not the panel's ``can_manage_berth_plan``.
+    """
+    location = _view_location(request, location_id)
     visit = get_object_or_404(
         CarrierVisit.objects.select_related('planned_berth'),
         pk=visit_id, location=location, visit_type__in=VESSEL_VISIT_PANEL_TYPES,

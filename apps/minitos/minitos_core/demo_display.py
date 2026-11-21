@@ -13,7 +13,13 @@ visit panel and the Django admin changelists.
   ``Location.timezone`` (the Test Terminal is America/Mexico_City), the same
   as the vessel visit panel; 'UTC' -> UTC. Screens always name the zone.
 - MISSING_VALUE (card Q6): what a missing container number, vessel slot or
-  time shows.
+  time shows (every time cell on S2, the vessel visit panel and the admin).
+- TIME_FORMAT: the ``strftime`` format of every time on S2, the vessel visit
+  panel (ETA/ETD/ATA/ATD and the received time) and the admin columns. Templates
+  use it through ``{{ value|demo_time:location }}`` (templatetags/demo_display_tags.py).
+
+The compact slot ``0330682`` reads Bay 033 · Row 06 · Tier 82 (3-digit bay,
+2-digit row, 2-digit tier), never "Bay 03 / Row 30".
 
 The other two placeholders are not display choices: one received time per
 vessel call is the model choice (``CarrierVisit.discharge_list_received_at``,
