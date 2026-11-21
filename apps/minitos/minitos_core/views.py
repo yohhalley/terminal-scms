@@ -3,7 +3,7 @@ import django_filters
 from django.db import models, transaction
 from django.template import loader
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_safe
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib import messages as django_messages
 from django.contrib.auth.decorators import login_required
@@ -57,6 +57,8 @@ from .serializers import (
     WorkQueueSerializer,
 )
 from .services.discharge_planning import DischargePlanningError
+from .services.vessel_slots import vessel_slots_for
+from . import demo_display
 from .permissions import IsMESService, IsOESServiceOrAuthenticated
 from .services import (
     EXECUTION_EVENTS, accessible_terminals, apply_execution_event, create_site,
@@ -228,7 +230,8 @@ def _vessel_visit_rows(location):
 def _render_vessel_visit_panel(request, location, *, error=None, status_code=200):
     return render(request, 'vessel_visit_panel.html', {
         'location': location,
-        'timezone_name': location.timezone or 'UTC',
+        'timezone_name': demo_display.display_timezone_name(location),
+        'missing': demo_display.MISSING_VALUE,
         'rows': _vessel_visit_rows(location),
         'status_order': [
             dict(CarrierVisit.STATUS_CHOICES).get(value, value) for value in CarrierVisit.STATUS_ORDER
@@ -249,6 +252,62 @@ def vessel_visit_panel_view(request, location_id):
     """TCL-009: list vessel visits with status, ata/atd and the allowed next statuses."""
     location = _panel_location(request, location_id)
     return _render_vessel_visit_panel(request, location)
+
+
+# Demo screens S2 (D-041, D-031; TCL-demo-screens): read-only discharge list
+# for one vessel visit. Same access rules as the panel (login, then
+# can_manage_berth_plan, then 404 for another terminal's or a non-vessel
+# visit). One row per inbound container visit (ib_carrier = the visit) with
+# its ISO number, vessel slot (services/vessel_slots.py, the
+# logical_address.container_visit_id link) and its discharge order, if
+# planning has created one. Formats are the demo_display placeholders.
+def _discharge_list_rows(visit):
+    container_visits = list(
+        ContainerVisit.objects.filter(ib_carrier=visit)
+        .select_related('container_number__iso_type', 'current_che')
+        .prefetch_related(models.Prefetch(
+            'container_visit',
+            queryset=Order.objects.filter(order_type=Order.MOVE_IN)
+            .select_related('to_position').order_by('-pk'),
+            to_attr='discharge_orders',
+        ))
+        .order_by(models.F('container_number_id').asc(nulls_last=True), 'pk')
+    )
+    slots = vessel_slots_for([container_visit.pk for container_visit in container_visits])
+    rows = []
+    for container_visit in container_visits:
+        unit = container_visit.container_number
+        order = container_visit.discharge_orders[0] if container_visit.discharge_orders else None
+        rows.append({
+            'container_visit': container_visit,
+            'container_number': demo_display.format_container_number(container_visit.container_number_id),
+            'iso_type': (unit.iso_type.iso_type if unit and unit.iso_type_id else demo_display.MISSING_VALUE),
+            'vessel_slot': demo_display.format_vessel_slot(slots.get(container_visit.pk)),
+            'has_vessel_slot': slots.get(container_visit.pk) is not None,
+            'status': container_visit.get_status_display(),
+            'current_che': container_visit.current_che.name if container_visit.current_che_id else demo_display.MISSING_VALUE,
+            'order_status': order.get_status_display() if order else demo_display.MISSING_VALUE,
+            'yard_slot': order.to_position.code if order and order.to_position_id else demo_display.MISSING_VALUE,
+        })
+    return rows
+
+
+@login_required(login_url='admin:login')
+@require_safe
+def vessel_visit_discharge_list_view(request, location_id, visit_id):
+    """Demo screen S2: the discharge list of one vessel visit (read-only)."""
+    location = _panel_location(request, location_id)
+    visit = get_object_or_404(
+        CarrierVisit.objects.select_related('planned_berth'),
+        pk=visit_id, location=location, visit_type__in=VESSEL_VISIT_PANEL_TYPES,
+    )
+    return render(request, 'vessel_visit_discharge_list.html', {
+        'location': location,
+        'visit': visit,
+        'timezone_name': demo_display.display_timezone_name(location),
+        'missing': demo_display.MISSING_VALUE,
+        'rows': _discharge_list_rows(visit),
+    })
 
 
 @login_required(login_url='admin:login')

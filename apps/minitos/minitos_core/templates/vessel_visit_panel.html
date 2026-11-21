@@ -33,6 +33,7 @@
         .final { color: var(--muted); font-size: 12px; }
         .empty { padding: 60px 20px; color: var(--muted); text-align: center; }
         .order-note { margin-top: 12px; color: var(--muted); font-size: 12px; }
+        .cargo a { color: var(--teal); font-weight: 650; }
         @media (max-width: 900px) {
             .visit-header { display: none; }
             .visit-row { grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -77,6 +78,8 @@
                     <div class="cargo">
                         <div>{{ row.visit.inbound_container_count }} inbound</div>
                         <div>{{ row.visit.discharge_order_count }} discharge order{{ row.visit.discharge_order_count|pluralize }}</div>
+                        <div>Discharge list received <span data-field="discharge-list-received">{{ row.visit.discharge_list_received_at|date:"Y-m-d H:i"|default:missing }}</span></div>
+                        <div><a data-link="discharge-list" href="{% url 'vessel_visit_discharge_list' location.id row.visit.id %}">Discharge list ({{ row.visit.inbound_container_count }})</a></div>
                     </div>
                     <div class="actions">
                         {% for next in row.next_statuses %}

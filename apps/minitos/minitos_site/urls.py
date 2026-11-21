@@ -19,7 +19,8 @@ from django.urls import include, path
 from rest_framework.urlpatterns import format_suffix_patterns
 from minitos_core.views import (
     berth_plan_view, che_editor_view, landing_page, terminal_browser_view,
-    terminal_editor_view, vessel_visit_panel_view, vessel_visit_transition_view,
+    terminal_editor_view, vessel_visit_discharge_list_view, vessel_visit_panel_view,
+    vessel_visit_transition_view,
 )
 
 
@@ -37,6 +38,10 @@ urlpatterns = [
     path(
         'terminals/<int:location_id>/vessel-visits/<int:visit_id>/status/',
         vessel_visit_transition_view, name='vessel_visit_transition',
+    ),
+    path(
+        'terminals/<int:location_id>/vessel-visits/<int:visit_id>/discharge-list/',
+        vessel_visit_discharge_list_view, name='vessel_visit_discharge_list',
     ),
     path('api_auth/', include('rest_framework.urls')),
     path('minitos_core/', include('minitos_core.urls')),

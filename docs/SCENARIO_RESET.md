@@ -189,7 +189,8 @@ same visit gets the same slots on a rerun (D-016).
 Seed and clock (spec K7): `SEED` defaults to 1, the same as `SIMULATOR_SEED`, and
 `make scenario-reset SEED=n` sets both the MiniTOS scenario RNG and the simulator
 seed (OES forwards `SIMULATOR_SEED` to the runner). Seeded business times (visit
-ETA/ATA/ETD) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
+ETA/ATA/ETD, and the D-031 "discharge list received" time, 48 h before ATA:
+`import_v1.DISCHARGE_LIST_LEAD_TIME`) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
 1792886400000, 2026-10-25 00:00 UTC, so the vessel's ATA is sim time 0. A plain
 `make up` recreates `terminal-oes` with `.env`'s `SIMULATOR_SEED` (default 1);
 run `make scenario-reset SEED=n` again afterwards to keep both seeds equal.
@@ -223,7 +224,7 @@ already drained the queue.
 What the canonical dump masks (QA M1): an explicit allow-list, `VOLATILE_FIELDS`
 and `VOLATILE_JSON_KEYS` in `minitos_core/scenarios/base.py` and
 `execution/scenarios.py`. Every other value is compared literally, including the
-seeded business times `CarrierVisit.eta`/`ata`/`etd` (before M1
+seeded business times `CarrierVisit.eta`/`ata`/`etd`/`discharge_list_received_at` (before M1
 every datetime and every ISO-looking string was blanked, so moving them by three
 days went unnoticed). A masked value still shows whether it is set: `null` stays
 `null`, anything else becomes `"<volatile>"`. Only the outbox delivery
