@@ -23,7 +23,7 @@ What it does, in order:
    ``Event/TimeMs`` envelope stamp, contract §2.1) against a bound derived
    from the import_v1 layout, TT speed, and the effective crane timings
    published on the session NBIRTH (D-050; ``Sim/Timing/QcHold*``,
-   ``RtgHold*``, and after TCL-034e ``RtgPositioningS``). Their wall-clock
+   ``RtgHold*`` and ``RtgPositioningS``). Their wall-clock
    time is logged; the wait uses only a generous safety timeout, not the
    5 s limit. Step 4's second dispatch is still checked against the 5 s
    wall-clock reaction limit; the physical work after that is sim time.
@@ -168,17 +168,18 @@ def timings_from_nbirth(metrics: dict) -> dict:
     """Effective crane timings from a decoded session NBIRTH.
 
     Holds are the values the simulator actually uses (profile plus any env
-    overrides). ``RtgPositioningS`` is absent on main before TCL-034e and
-    defaults to 0. ``Sim/FixedStepMs`` is used for the 2-tick slack when
-    present.
+    overrides). ``RtgPositioningS`` is required: every simulator on main
+    publishes it since TCL-034e (``Contract/Version`` tcl-002.4, D-058), and
+    the step-4 bound needs it. ``Sim/FixedStepMs`` is used for the 2-tick
+    slack when present.
     """
     qc = (_require_metric(metrics, NBIRTH_QC_HOLD[0]), _require_metric(metrics, NBIRTH_QC_HOLD[1]))
     rtg = (_require_metric(metrics, NBIRTH_RTG_HOLD[0]), _require_metric(metrics, NBIRTH_RTG_HOLD[1]))
     if qc[1] < qc[0] or rtg[1] < rtg[0]:
         raise ValueError(f"session NBIRTH hold ranges are inverted: qc={qc}, rtg={rtg}")
-    positioning = 0.0
-    if metrics.get(NBIRTH_POSITIONING) is not None:
-        positioning = float(metrics[NBIRTH_POSITIONING])
+    positioning = _require_metric(metrics, NBIRTH_POSITIONING)
+    if positioning < 0:
+        raise ValueError(f"session NBIRTH {NBIRTH_POSITIONING} must be >= 0, got {positioning:g}")
     step_ms = None
     if metrics.get(NBIRTH_STEP_MS) is not None:
         step_ms = int(metrics[NBIRTH_STEP_MS])
@@ -370,17 +371,19 @@ class PhysicalBounds:
         h1_end: datetime | None = None,
         rtg_started: datetime | None = None,
     ) -> float:
-        """Step 4: max(drive2 + 2 ticks, (RTG start - H1) + 1 tick + P) + H_rtg.
+        """Step 4: max(drive2 + 2 ticks, (RTG start - H1) + 2 ticks + P) + H_rtg.
 
         Dispatch delay is not treated as layout work (M2). When the RTG
-        ``leg_started`` stamp is not yet known, the arrival term is 0.
+        ``leg_started`` stamp is not yet known, the arrival term is 0. Both
+        branches carry the same 2-tick slack: with one tick, a late RTG
+        (arrival branch active) gave zero margin (GD re-review F2).
         """
         drive_s = self.drive_s(self.qc_lane, self.block_tl)
         drive_term = drive_s + self.slack_s
         arrival_s = 0.0
         if h1_end is not None and rtg_started is not None:
             arrival_s = (rtg_started - h1_end).total_seconds()
-        position_term = arrival_s + self.tick_s + self.rtg_positioning_s
+        position_term = arrival_s + self.slack_s + self.rtg_positioning_s
         return max(drive_term, position_term) + self.rtg_hold[1]
 
     def sim_bound_s(
@@ -430,11 +433,11 @@ class PhysicalBounds:
         if h1_end is not None and rtg_started is not None:
             arrival_s = (rtg_started - h1_end).total_seconds()
             arrival_note = f"{arrival_s:g} s"
-        position_term = arrival_s + self.tick_s + self.rtg_positioning_s
+        position_term = arrival_s + self.slack_s + self.rtg_positioning_s
         return (
             f"max(QC01.LANE.01->BLOCK01.TL.01 drive {dist:.1f} m / {self.speed_mps:g} m/s "
             f"= {drive_s:.3f} s + {_fmt_ticks(TICKS_OF_SLACK, self.step_ms)}, "
-            f"(RTG leg_started - H1) {arrival_note} + {_fmt_ticks(1, self.step_ms)} "
+            f"(RTG leg_started - H1) {arrival_note} + {_fmt_ticks(TICKS_OF_SLACK, self.step_ms)} "
             f"+ RTG positioning {self.rtg_positioning_s:g} s = {position_term:.3f} s) "
             f"+ RTG hold <= {self.rtg_hold[1]:g} s"
         )

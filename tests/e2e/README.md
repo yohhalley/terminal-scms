@@ -66,8 +66,10 @@ The exit code is 0 only when every step passes.
     `driving_speed_empty_kmh`, which the simulator would prefer over this
     default;
   - the *effective* crane timings published on the session NBIRTH
-    (`Sim/Timing/QcHold{Min,Max}S`, `RtgHold{Min,Max}S`, and after
-    TCL-034e / D-058 `RtgPositioningS`). Those already include env
+    (`Sim/Timing/QcHold{Min,Max}S`, `RtgHold{Min,Max}S` and
+    `RtgPositioningS`, all required; the runner fails if one is missing,
+    since every simulator on main publishes them from TCL-034e /
+    `Contract/Version` tcl-002.4). Those already include env
     overrides (`SIMULATOR_{QC,RTG}_[HOLD_]WAIT_*`). The runner does not
     parse `SimTiming.gd`. Slack is `2 × Sim/FixedStepMs` (else
     `SIMULATOR_FIXED_STEP_MS`, else `SimClock.DEFAULT_STEP_MS`).
@@ -75,7 +77,9 @@ The exit code is 0 only when every step passes.
     - 3d: `max(TT drive from that TT's start to QC01.LANE.01, QC hold max) + 2Δ`
       (the deposit is `max(hold end, TT ready)`; QC hold is the NBIRTH
       value, i.e. cycle − simulated motion after TCL-034e);
-    - 4: `max(TT drive QC01.LANE.01 -> BLOCK01.TL.01 + 2Δ, (RTG leg_started − H1) + Δ + RTG positioning) + RTG hold max`.
+    - 4: `max(TT drive QC01.LANE.01 -> BLOCK01.TL.01 + 2Δ, (RTG leg_started − H1) + 2Δ + RTG positioning) + RTG hold max`.
+      Both branches carry 2Δ: with one tick, a late RTG (arrival branch
+      active) measured exactly at the bound.
       Positioning is the profile value (fast 0 s, realistic 30 s after
       TCL-034e / D-058) and must not be added on top of the drive. The
       second dispatch's wall-clock latency is not counted as sim time;

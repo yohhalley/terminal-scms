@@ -503,7 +503,7 @@ class D050BoundsTests(unittest.TestCase):
 
     def test_step_4_bound_is_max_of_drive_and_positioning_plus_hold(self):
         b = self.bounds
-        # fast, prompt dispatch, P=0: max(drive + 2 ticks, 1 tick + 0) + hold
+        # fast, prompt dispatch, P=0: max(drive + 2 ticks, 2 ticks + 0) + hold
         # = drive + 0.2 + 5, same numeric value as the pre-M2 formula.
         self.assertAlmostEqual(b.bound_4_s(), 19.736150207170596 + 0.2 + 5.0, places=5)
         self.assertIn("RTG hold <= 5 s", b.formula_4())
@@ -520,12 +520,13 @@ class D050BoundsTests(unittest.TestCase):
         self.assertAlmostEqual(safety, b.bound_3d_s("TT02") / 10 + 30.0, places=5)
 
     def test_bounds_follow_nbirth_holds_not_a_hard_coded_120(self):
-        # Main-style realistic NBIRTH (holds 90-120, no positioning). The
-        # expected bound is derived from the same metrics, so a later
-        # D-051 cycle (60 s hold) does not require a literal 120.0 here.
+        # Pre-TCL-034e hold shape (90-120 / 60-120), with RtgPositioningS 0
+        # since that metric is now required (F1). The expected bound is
+        # derived from the same metrics, so the D-051 cycle (60 s hold) does
+        # not require a literal 120.0 here.
         metrics = s1.nbirth_fixture(
             profile="realistic", qc_hold=(90.0, 120.0), rtg_hold=(60.0, 120.0),
-            include_positioning=False,
+            positioning_s=0.0,
         )
         timings = s1.timings_from_nbirth(metrics)
         realistic = s1.load_physical_bounds(
@@ -541,7 +542,7 @@ class D050BoundsTests(unittest.TestCase):
             realistic.bound_4_s(),
             max(
                 realistic.drive_s(realistic.qc_lane, realistic.block_tl) + realistic.slack_s,
-                realistic.tick_s + timings["rtg_positioning_s"],
+                realistic.slack_s + timings["rtg_positioning_s"],
             ) + timings["rtg_hold"][1],
             places=5,
         )
@@ -563,12 +564,13 @@ class D050BoundsTests(unittest.TestCase):
             places=5,
         )
         self.assertAlmostEqual(realistic.bound_3d_s("TT01"), 60.0 + 0.2, places=5)
-        # L=0: max(19.736+0.2, 0.1+30) + 30 = 60.1
+        # L=0: max(19.736+0.2, 0.2+30) + 30 = 60.2
         self.assertAlmostEqual(
             realistic.bound_4_s(),
-            max(19.736150207170596 + 0.2, 0.1 + 30.0) + 30.0,
+            max(19.736150207170596 + 0.2, 0.2 + 30.0) + 30.0,
             places=5,
         )
+        self.assertAlmostEqual(realistic.bound_4_s(), 60.2, places=5)
 
     def test_slack_is_two_configured_ticks(self):
         metrics = s1.nbirth_fixture(
@@ -593,6 +595,30 @@ class D050BoundsTests(unittest.TestCase):
     def test_timings_from_nbirth_require_hold_metrics(self):
         with self.assertRaisesRegex(ValueError, "QcHoldMaxS"):
             s1.timings_from_nbirth({"Sim/Timing/QcHoldMinS": 2})
+
+    def test_timings_from_nbirth_require_rtg_positioning(self):
+        """F1: RtgPositioningS is required (tcl-002.4), not defaulted to 0."""
+        metrics = s1.nbirth_fixture(
+            profile="fast", qc_hold=(2.0, 5.0), rtg_hold=(2.0, 5.0),
+            include_positioning=False,
+        )
+        with self.assertRaisesRegex(
+            ValueError, "missing required metric Sim/Timing/RtgPositioningS",
+        ):
+            s1.timings_from_nbirth(metrics)
+        with self.assertRaisesRegex(ValueError, "missing required metric Sim/Timing/RtgPositioningS"):
+            s1.load_physical_bounds(s1.REPO_ROOT, nbirth=metrics, profile="fast", time_scale=10)
+        metrics[s1.NBIRTH_POSITIONING] = None
+        with self.assertRaisesRegex(ValueError, "missing required metric Sim/Timing/RtgPositioningS"):
+            s1.timings_from_nbirth(metrics)
+        metrics[s1.NBIRTH_POSITIONING] = "thirty"
+        with self.assertRaisesRegex(ValueError, "RtgPositioningS is not a number"):
+            s1.timings_from_nbirth(metrics)
+        metrics[s1.NBIRTH_POSITIONING] = -1
+        with self.assertRaisesRegex(ValueError, "RtgPositioningS must be >= 0"):
+            s1.timings_from_nbirth(metrics)
+        metrics[s1.NBIRTH_POSITIONING] = 0
+        self.assertEqual(s1.timings_from_nbirth(metrics)["rtg_positioning_s"], 0.0)
 
     def test_step_3d_excludes_the_command_start_gap(self):
         """CI run 43977160552: pick 26.900, TT start 27.500, transfer 56.000.
@@ -680,9 +706,11 @@ class D050BoundsTests(unittest.TestCase):
         s1.apply_sim_time_assertions([d, four], self.bounds)
         self.assertTrue(four.passed, four.error)
         self.assertAlmostEqual(four.sim_elapsed_s, 30.1, places=3)
-        # max(19.936, 25 + 0.1 + 0) + 5 = 30.1
-        self.assertAlmostEqual(four.sim_bound_s, 30.1, places=3)
-        self.assertIn("(RTG leg_started - H1) 25 s", four.sim_bound_formula)
+        # max(19.936, 25 + 0.2 + 0) + 5 = 30.2: the RTG picks one tick after
+        # leg_started, so the 2-tick arrival slack leaves one tick of margin
+        # (F2; with one tick this case measured exactly at the bound).
+        self.assertAlmostEqual(four.sim_bound_s, 30.2, places=3)
+        self.assertIn("(RTG leg_started - H1) 25 s + 2 ticks (0.2 s)", four.sim_bound_formula)
 
     def test_step_4_dispatch_wall_over_the_limit_fails(self):
         four = s1.StepResult(
