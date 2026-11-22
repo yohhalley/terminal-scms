@@ -32,8 +32,12 @@ Content-Type: application/json
 
 Supported events are `order_started`, `leg_dispatched`, `leg_started`,
 `container_picked_up`, `container_dropped`, `leg_completed`, `leg_failed`,
-`leg_blocked`, `order_failed`, and `order_cancelled`. A drop also requires the
-destination yard `position_id`.
+`leg_blocked`, `order_failed`, `order_cancelled`, `container_transferred`,
+`handoff_exception`, and `leg_exception`. A drop also requires the
+destination yard `position_id`. `leg_exception` (TCL-034b) is a stall with no
+pending hand-off: MiniTOS relocates the box the same way as `handoff_exception`
+and completes the order by exception. Once D-047 (#39) lands, hook
+`leg_exception` into `release_reserved_slot` the same way as those events.
 
 Pickup and drop operations are transactional and idempotent. Pickup removes the
 container from its static `Position`, sets the visit to `OnEquipment`, and records

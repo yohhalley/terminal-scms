@@ -169,14 +169,18 @@ def _seed_layout(location, types):
     )
     policy.allowed_che_types.set([types['TT']])
 
-    def asset(code, name, kind, geometry, parent=None, access_policy=None):
+    def asset(code, name, kind, geometry, parent=None, access_policy=None, heading_deg=0.0):
         return LayoutAsset.objects.create(
             layout_version=layout, code=code, name=name, asset_kind=kind,
             geometry=geometry, parent=parent, access_policy=access_policy,
-            is_visible=True, is_active=True,
+            heading_deg=heading_deg, is_visible=True, is_active=True,
         )
 
     # Terminal-local meters: x east, y north; water is north of the quay face.
+    # Quays and yard blocks follow the terminal editor's convention
+    # (terminal_editor_map_tools.js): the polygon starts at the anchor and its
+    # first edge runs along the heading (quay) or the bay axis (yard block).
+    # Otherwise the editor draws the grid, water and lanes 90° off the polygon.
     terminal = asset('TERMINAL', 'Terminal boundary', LayoutAsset.TERMINAL, _rectangle(location, 0, 0, 400, 300))
     land = asset('LAND', 'Operational land', LayoutAsset.LAND, _rectangle(location, 0, 0, 400, 260), terminal)
     asset('WATER', 'Harbour water', LayoutAsset.WATER, _rectangle(location, 0, 260, 400, 40), terminal)
@@ -191,8 +195,15 @@ def _seed_layout(location, types):
     )
     sync_axis_graph(road_axis)
 
-    quay = asset('QUAY-01', 'Main quay', LayoutAsset.QUAY, _rectangle(location, 50, 225, 300, 35), land)
-    quay_points = [_coordinate(location, 50, 260), _coordinate(location, 350, 260)]
+    # Anchor on the quay face at x=50, heading east (90°), water on the left
+    # (north), land to the right (south), as the editor's quay footprint.
+    # The outline runs clockwise (face east, then south, west, north), as the editor draws it.
+    quay_corners = [_coordinate(location, x, y) for x, y in ((50, 260), (350, 260), (350, 225), (50, 225))]
+    quay = asset(
+        'QUAY-01', 'Main quay', LayoutAsset.QUAY,
+        {'type': 'Polygon', 'coordinates': [[*quay_corners, quay_corners[0]]]}, land, heading_deg=90.0,
+    )
+    quay_points = quay_corners[:2]
     quay_axis = LinearAxis.objects.create(
         asset=quay, code='QUAY-01.FACE', name='Main quay face',
         axis_kind=LinearAxis.QUAY_FACE, points=quay_points,
@@ -216,7 +227,9 @@ def _seed_layout(location, types):
         layout_asset=block, name=EXCEPTION_BLOCK_NAME, grid_kind=StorageGrid.MANUAL,
         max_bays=10, max_rows=4, max_tier=3,
         longitude=anchor[0], latitude=anchor[1], heading_deg=0,
-        bay_use_heading_axis=True, bay_naming=StorageGrid.NUMBERS,
+        # Heading north, bays along the east axis: the 10 bays run along the
+        # 90 m side of the polygon and the 4 rows across its 30 m side.
+        bay_use_heading_axis=False, bay_naming=StorageGrid.NUMBERS,
         row_naming=StorageGrid.NUMBERS, bay_spacing_m=0.4, row_spacing_m=0.3,
     )
     sync_yard_grid(grid)

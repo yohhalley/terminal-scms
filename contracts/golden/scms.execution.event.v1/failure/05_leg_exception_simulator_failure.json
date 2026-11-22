@@ -1,0 +1,39 @@
+{
+  "payload": {
+    "data": {
+      "cancelled_leg_ids": [],
+      "che_id": 21,
+      "che_name": "RTG01",
+      "container_number": "MSCU1234565",
+      "container_visit_id": 101,
+      "destination_position_id": 112,
+      "detail": "no progress on RTG01 within 600 s",
+      "event": "leg_exception",
+      "leg_id": 4103,
+      "occurred_at": "2026-09-21T14:16:40+00:00",
+      "order_id": 41,
+      "reason": "SIMULATOR_FAILURE"
+    },
+    "enterprise": {
+      "code": "enterprise-a",
+      "id": "0a0a0a0a-0000-4000-8000-000000000001",
+      "name": "Enterprise A"
+    },
+    "event_id": "1358cc43-e0a3-5c52-84aa-4a3b2edcdaf2",
+    "schema": "scms.execution.event.v1",
+    "site": {
+      "code": "site-a",
+      "configuration_revision": 1,
+      "id": "0b0b0b0b-0000-4000-8000-000000000002",
+      "name": "Site A",
+      "source_location_id": 1
+    },
+    "terminal": {
+      "code": "site-a",
+      "id": 1
+    }
+  },
+  "qos": 1,
+  "retain": false,
+  "topic": "scms/v2/enterprise-a/site-a/oes/orders/41/execution"
+}
