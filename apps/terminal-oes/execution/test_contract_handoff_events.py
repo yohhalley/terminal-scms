@@ -129,3 +129,61 @@ class HandoffEventContractTests(handoffs.HandoffTestBase):
         self.assertEqual(cancels.count(), 2, "one cancel DCMD per hand-off leg (QC and TT)")
         for cancel in cancels:
             self.assertEqual(self.dcmd_metrics(cancel)["Command/Reason"], "SIMULATOR_FAILURE")
+
+    def rtg_stall_messages(self):
+        """H2 transferred, then a stall on the RTG leg (no pending hand-off)."""
+        _tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        self.result(h2_cmd, "handoff_completed", 95_000)
+        self.result(rtg_cmd, "handoff_completed", 95_000)
+        self.result(tt_cmd, "completed", 95_000)
+        self.result(rtg_cmd, "failed", 200_000, **{"Command/Result/Reason": "SIMULATOR_FAILURE"})
+        return self.execution_messages()
+
+    def check_failure_golden(self, name, document):
+        if not contract.CONTRACTS_DIR.is_dir():
+            self.skipTest(f"{contract.CONTRACTS_DIR} is not available (app-only Docker image)")
+        path = contract.GOLDEN_DIR / "failure" / f"{name}.json"
+        if os.environ.get("SCMS_UPDATE_GOLDEN"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+        self.assertTrue(path.exists(), f"Missing {path}; run with SCMS_UPDATE_GOLDEN=1")
+        golden = json.loads(path.read_text())
+        self.assertEqual(normalise(document), normalise(golden), f"{name} drifted")
+
+    def test_leg_exception_matches_golden_and_schema(self):
+        documents = self.rtg_stall_messages()
+        exceptions = [d for d in documents if d["payload"]["data"]["event"] == "leg_exception"]
+        self.assertEqual(len(exceptions), 1)
+        self.assertEqual(exceptions[0]["payload"]["data"]["reason"], "SIMULATOR_FAILURE")
+        self.assertEqual(
+            exceptions[0]["payload"]["data"]["detail"], "no progress on RTG01 within 600 s",
+        )
+        self.check_failure_golden("05_leg_exception_simulator_failure", exceptions[0])
+        self.assert_schema_valid(documents)
+        self.assertFalse(any(d["payload"]["data"]["event"] == "leg_failed" for d in documents))
+
+    def test_schema_rejects_a_leg_exception_without_required_fields(self):
+        schema = json.loads(contract.SCHEMA_PATH.read_text())
+        path = contract.GOLDEN_DIR / "failure" / "05_leg_exception_simulator_failure.json"
+        if not path.exists():
+            self.skipTest(f"Missing {path}")
+        for field in ("reason", "detail", "leg_id"):
+            payload = json.loads(path.read_text())["payload"]
+            del payload["data"][field]
+            self.assertIn(
+                f"$.data: missing required property '{field}'",
+                contract.check_schema(payload, schema),
+            )
+
+    def test_schema_rejects_a_leg_exception_reason_outside_the_d017_list(self):
+        schema = json.loads(contract.SCHEMA_PATH.read_text())
+        path = contract.GOLDEN_DIR / "failure" / "05_leg_exception_simulator_failure.json"
+        if not path.exists():
+            self.skipTest(f"Missing {path}")
+        payload = json.loads(path.read_text())["payload"]
+        self.assertEqual(contract.check_schema(payload, schema), [])
+        payload["data"]["reason"] = "NO_TT_TIMEOUT"
+        self.assertIn(
+            "$.data.reason: 'NO_TT_TIMEOUT' not in enum",
+            contract.check_schema(payload, schema),
+        )

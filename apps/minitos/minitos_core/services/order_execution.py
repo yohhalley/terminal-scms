@@ -34,6 +34,7 @@ EXECUTION_EVENTS = {
     'order_cancelled',
     'container_transferred',
     'handoff_exception',
+    'leg_exception',
 }
 
 QUAY_CRANE_TYPES = {'STS', 'QC'}
@@ -518,6 +519,41 @@ def apply_execution_event(
                 _set_che_execution_state(
                     released, dispatched=False, working=False, available=True,
                 )
+    elif event == 'leg_exception':
+        # TCL-011 §8 d / S2: same relocation as handoff_exception, but the
+        # trigger is a stall with no pending hand-off. D-047's
+        # release_reserved_slot lives on #39 (stacked on #38); hook
+        # leg_exception into that release once both PRs have landed.
+        if not order.container_number_id:
+            raise ValidationError('leg_exception requires an order container.')
+        reason = details.get('reason')
+        if not reason:
+            raise ValidationError('leg_exception requires reason.', code='reason_required')
+        if reason not in ExceptionReason.values:
+            raise ValidationError(
+                f'Unknown leg_exception reason {reason!r}.', code='reason_unknown',
+            )
+        relocate_container_after_exception(
+            order.container_number_id, reason, details.get('destination_position_id'),
+            detail=details.get('detail') or '',
+        )
+        if order.status not in {Order.COMPLETE, Order.CANCELLED}:
+            order.status = NO_SHOW_ORDER_STATUS
+            order.completed_at = _event_time(occurred_at)
+            update_fields = ['status', 'completed_at']
+            if order.status == Order.COMPLETE:
+                order.atc = order.completed_at
+                update_fields.append('atc')
+            order.save(update_fields=update_fields)
+        if leg and leg.status not in {OrderLeg.COMPLETE, OrderLeg.CANCELLED}:
+            leg.status = OrderLeg.FAILED
+            leg.actual_end = occurred_at
+            leg.save(update_fields=['status', 'actual_end'])
+        _active_legs(order).exclude(
+            status__in=[OrderLeg.COMPLETE, OrderLeg.CANCELLED, OrderLeg.FAILED],
+        ).update(status=OrderLeg.CANCELLED, actual_end=occurred_at)
+        if che:
+            _set_che_execution_state(che, dispatched=False, working=False, available=True)
     elif event == 'leg_completed':
         if not leg:
             raise ValidationError('leg_completed requires leg_id.')
