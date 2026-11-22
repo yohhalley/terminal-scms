@@ -467,3 +467,21 @@ test("quay guides generate service, under-crane, and backreach lane centerlines"
     assert.equal(features.filter((feature) => feature.properties.role === "quay_backreach").length, 1);
     assert.ok(features.filter((feature) => String(feature.properties.role).startsWith("quay_")).every((feature) => feature.geometry.type === "LineString"));
 });
+
+test("footprints start at the anchor along the heading, the convention seeded layouts follow", () => {
+    // minitos_core/test_layout_orientation.py checks the import_v1 seed against this convention.
+    const anchor = [-102.16, 17.95];
+    const grid = { max_bays: 10, max_rows: 4, pile_length_m: 6.058, pile_width_m: 2.438, bay_spacing_m: 0.4, row_spacing_m: 0.3 };
+    const eastBays = tools.yardFootprint(anchor, 0, { ...grid, bay_use_heading_axis: false }).coordinates[0];
+    assert.ok(eastBays[1][0] > anchor[0] && Math.abs(eastBays[1][1] - anchor[1]) < 1e-9, "bays on the east axis run east at heading 0");
+    assert.ok(eastBays[2][1] > eastBays[1][1], "rows then run north (forward)");
+    const northBays = tools.yardFootprint(anchor, 0, { ...grid, bay_use_heading_axis: true }).coordinates[0];
+    assert.ok(northBays[1][1] > anchor[1] && Math.abs(northBays[1][0] - anchor[0]) < 1e-9, "bays on the heading axis run north at heading 0");
+
+    const quay = { bollard_count: 13, default_bollard_spacing_m: 25, width_m: 35, water_side: "left" };
+    const ring = tools.configuredAssetGeometry("quay", anchor, 90, quay).coordinates[0];
+    assert.ok(ring[1][0] > anchor[0] && Math.abs(ring[1][1] - anchor[1]) < 1e-9, "the quay face runs along the heading");
+    assert.ok(ring[2][1] < ring[1][1], "with water on the left the quay extends to the right (south at heading 90)");
+    const water = tools.configuredAssetGuides("quay", anchor, 90, quay).features.find((f) => f.properties.role === "water");
+    assert.ok(water.geometry.coordinates[0][1] > anchor[1], "the water guide lies outside the anchor edge (north)");
+});
