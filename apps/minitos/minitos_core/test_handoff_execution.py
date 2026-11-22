@@ -276,3 +276,60 @@ class HandoffExecutionTests(LayoutTestCase):
         self.assertEqual(self.order.status, Order.FAILED)
         self.visit.refresh_from_db()
         self.assertEqual(self.visit.current_che, self.tt)  # custody is not guessed
+
+    def test_leg_exception_relocates_to_block01_flagged(self):
+        """TCL-034b: leg_exception relocates like handoff_exception; stalled leg is failed."""
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        self.event('container_transferred', leg=self.legs[1],
+                   from_che_id=self.qc.pk, to_che_id=self.tt.pk)
+        self.event('container_transferred', leg=self.legs[2],
+                   from_che_id=self.tt.pk, to_che_id=self.rtg.pk)
+        details = {
+            'reason': 'SIMULATOR_FAILURE',
+            'detail': 'no progress on RTG01 within 600 s',
+            'destination_position_id': self.planned.pk,
+        }
+        self.event('leg_exception', leg=self.legs[2], che=self.rtg, **details)
+        self.visit.refresh_from_db()
+        self.order.refresh_from_db()
+        self.legs[2].refresh_from_db()
+        self.assertEqual(self.visit.status, ContainerVisit.AT_YARD)
+        self.assertIsNone(self.visit.current_che)
+        self.assertEqual(self.visit.exception_reason, ExceptionReason.SIMULATOR_FAILURE)
+        self.assertEqual(self.visit.exception_detail, 'no progress on RTG01 within 600 s')
+        self.assertEqual(Position.objects.get(container_visit=self.visit), self.planned)
+        self.assertEqual(self.order.status, Order.COMPLETE)
+        self.assertEqual(self.legs[2].status, OrderLeg.FAILED)
+        self.assertEqual(
+            set(OrderLeg.objects.filter(order=self.order).exclude(pk=self.legs[2].pk)
+                .values_list('status', flat=True)),
+            {OrderLeg.CANCELLED},
+        )
+        self.rtg.refresh_from_db()
+        self.assertTrue(self.rtg.is_available)
+        self.assertFalse(self.rtg.is_dispatched)
+        # Duplicate exception: no second move.
+        self.event('leg_exception', leg=self.legs[2], che=self.rtg, **details)
+        self.assertEqual(Position.objects.filter(container_visit=self.visit).count(), 1)
+
+    def test_leg_exception_without_reason_is_rejected(self):
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        for reason in (None, ''):
+            details = {}
+            if reason is not None:
+                details['reason'] = reason
+            with self.assertRaises(ValidationError) as caught:
+                self.event('leg_exception', leg=self.legs[2], che=self.rtg, **details)
+            self.assertEqual(caught.exception.code, 'reason_required')
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.current_che, self.qc)
+        self.assertEqual(self.visit.exception_reason, '')
+
+    def test_leg_exception_with_unknown_reason_is_rejected(self):
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        with self.assertRaises(ValidationError) as caught:
+            self.event('leg_exception', leg=self.legs[2], che=self.rtg, reason='NO_TT_TIMEOUT')
+        self.assertEqual(caught.exception.code, 'reason_unknown')
+        self.visit.refresh_from_db()
+        self.assertEqual(self.visit.current_che, self.qc)
+        self.assertEqual(self.visit.exception_reason, '')
