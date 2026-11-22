@@ -3,8 +3,9 @@ name: SCMS e2e (S1 slice)
 # TCL-007 (T-001, D-021): full compose stack + compose simulator-runner (Godot
 # imported in the runner image at build, #29/#35) with the TCL-034 fast timing
 # profile, reset to import_v1, visit-in-operation, run the S1 slice and assert
-# the UNS business events with a <= 5 s limit per step (D-037). Flaky runs get
-# a ticket, never a looser limit.
+# the UNS business events (D-037 / D-050: 5 s wall-clock for reaction-only
+# steps; sim-time layout bounds for 3d and 4). Flaky runs get a ticket, never
+# a looser limit.
 # Not a required check: allowed to fail until it has been green on main 3 runs in a row.
 
 on:
@@ -28,8 +29,8 @@ jobs:
     timeout-minutes: 30
     env:
       COMPOSE_PROJECT_NAME: terminal-scms
-      E2E_STEP_LIMIT_S: "5"        # D-037. Do not raise; open a flaky-run ticket instead.
-      E2E_TIME_SCALE: "10"         # CI wall-clock speed (Q24 open). ×10 because import_v1 TT drives are 20–32 sim-s (QC/RTG holds add ≤ 5 sim-s and are not why 3d missed the 5 s limit at ×1, run 43690094196). Do not raise the 5 s limit; do not tune holds (Q22) to make CI green.
+      E2E_STEP_LIMIT_S: "5"        # D-037/D-050: 5 s wall-clock for reaction-only steps (3a, 3b, 3c). Do not raise; open a flaky-run ticket instead.
+      E2E_TIME_SCALE: "10"         # CI wall-clock speed, kept under D-050. ×10 because import_v1 TT drives are 20–32 sim-s (QC/RTG holds add ≤ 5 sim-s and are not why 3d missed the 5 s wall limit at ×1, run 43690094196). Steps 3d and 4 are asserted in sim time against a layout-derived bound. Do not raise the 5 s reaction limit; do not tune holds (Q22) to make CI green.
       SIMULATOR_TIMING_PROFILE: fast
       E2E_REPORT_DIR: e2e-report
       E2E_RERUN: "1"               # D-016 rerun pass (M2 is on main)
