@@ -114,7 +114,11 @@ test-runner:
 # default in those files. run-godot-test.sh fails on a non-zero exit, a
 # timeout, or a SCRIPT ERROR (Godot can exit 0 after one).
 # If GODOT_BIN is set, use that host binary the way CI does, with a throwaway
-# HOME so user:// state from other Godot runs on this machine cannot leak in.
+# HOME and XDG_DATA_HOME so user:// state from other Godot runs on this
+# machine cannot leak in (a caller-set XDG_DATA_HOME would otherwise win
+# over HOME). A relative GODOT_BIN is resolved to an absolute path from the
+# repo root before the recipe cds into the Godot project; the path must
+# exist and be executable.
 # If GODOT_BIN is unset, build the godot-simulator image and run the same
 # suites inside that container, so a local Godot install is not required.
 # The profile is passed with -e so compose.yaml:207 and .env cannot override
@@ -136,14 +140,30 @@ test-godot: build-simulator
 		-v "$(CURDIR)/.github/scripts:/ci-scripts:ro" \
 		--entrypoint bash \
 		godot-simulator \
-		-c "set -e; export HOME=\$$(mktemp -d); /ci-scripts/godot-import.sh /app; $(foreach s,$(GODOT_TEST_SUITES),/ci-scripts/run-godot-test.sh 600 $(s); )"
+		-c "set -e; workdir=\$$(mktemp -d); export HOME=\$$workdir; export XDG_DATA_HOME=\$$workdir/.local/share; mkdir -p \$$XDG_DATA_HOME; /ci-scripts/godot-import.sh /app; for s in $(GODOT_TEST_SUITES); do /ci-scripts/run-godot-test.sh 600 \$$s; done"
 else
 test-godot:
 	@set -e; \
+	godot_bin="$(GODOT_BIN)"; \
+	if command -v "$$godot_bin" >/dev/null 2>&1; then \
+		godot_bin=$$(command -v "$$godot_bin"); \
+	elif [ ! -e "$$godot_bin" ]; then \
+		echo "make test-godot: GODOT_BIN is not found or not executable: $$godot_bin" >&2; \
+		exit 1; \
+	fi; \
+	godot_bin=$$(realpath "$$godot_bin"); \
+	if [ ! -x "$$godot_bin" ]; then \
+		echo "make test-godot: GODOT_BIN is not found or not executable: $$godot_bin" >&2; \
+		exit 1; \
+	fi; \
 	workdir=$$(mktemp -d); \
 	trap 'rm -rf "$$workdir"' EXIT; \
 	export HOME="$$workdir"; \
-	export GODOT_BIN="$(GODOT_BIN)"; \
+	export XDG_DATA_HOME="$$workdir/.local/share"; \
+	export XDG_CONFIG_HOME="$$workdir/.config"; \
+	export XDG_CACHE_HOME="$$workdir/.cache"; \
+	mkdir -p "$$XDG_DATA_HOME" "$$XDG_CONFIG_HOME" "$$XDG_CACHE_HOME"; \
+	export GODOT_BIN="$$godot_bin"; \
 	export SIMULATOR_TIMING_PROFILE=fast; \
 	cd clients/godot-open-terminal; \
 	../../.github/scripts/godot-import.sh .; \

@@ -11,9 +11,12 @@ RUN apt-get update \
     && install -m 0755 "/tmp/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot \
     && rm -rf /var/lib/apt/lists/* /tmp/godot /tmp/godot.zip
 
+# /app must be owned by godot: godot-import.sh (used by make test-godot's
+# Docker path) exits if the project directory is not writable. COPY --chown
+# changes the copied files but not the existing /app directory.
 RUN useradd --create-home --uid 10001 godot \
     && mkdir -p /app /data \
-    && chown godot:godot /data
+    && chown godot:godot /app /data
 
 WORKDIR /app
 COPY --chown=godot:godot . /app
