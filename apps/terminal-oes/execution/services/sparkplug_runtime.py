@@ -13,9 +13,11 @@ from execution.models import (
 )
 from execution.services.dispatch import COMMAND_CANCEL, apply_command_event
 from execution.services.handoffs import (
+    NO_SHOW_REASON,
     ResultRejected,
     apply_handoff_completed,
     apply_handoff_timed_out,
+    apply_simulator_failure,
     close_session_handoffs,
     record_conflict,
 )
@@ -202,6 +204,11 @@ def _route_result(command, event, metrics, result_id):
         return CommandResultReceipt.APPLIED
     if event == "handoff_timed_out":
         raised = apply_handoff_timed_out(command, metrics, event_ms=event_ms, sim_ms=sim_ms)
+        return CommandResultReceipt.APPLIED if raised else CommandResultReceipt.INFORMATIONAL
+    if event == "failed" and str(metrics.get("Command/Result/Reason") or "").strip() == NO_SHOW_REASON.value:
+        # TCL-011 §8 d / S2: stall SIMULATOR_FAILURE, before the generic
+        # leg_failed path and the B-2 abort.
+        raised = apply_simulator_failure(command, event_ms=event_ms, sim_ms=sim_ms)
         return CommandResultReceipt.APPLIED if raised else CommandResultReceipt.INFORMATIONAL
     if event == "container_picked_up" and operation.incoming_handoffs.exists():
         # The receiver's pick is the hand-off itself; custody moves with

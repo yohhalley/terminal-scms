@@ -798,6 +798,13 @@ def apply_command_event(
     reason = "" if reason is None else str(reason)
     if failed and not reason.strip():
         reason = DEFAULT_FAILURE_REASON
+    if failed and reason.strip() == "SIMULATOR_FAILURE":
+        # TCL-011 §8 d / S2: stall path, before leg_failed and the B-2 abort.
+        # The Sparkplug router also calls this; the REST/operator path needs it too.
+        from execution.services.handoffs import apply_simulator_failure
+
+        apply_simulator_failure(command, event_ms=event_ms)
+        return command
     if cancelled and notify_che and command.simulation_session_id:
         queue_cancel_dcmd(command, reason=reason)
     command.status = (
