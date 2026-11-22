@@ -132,9 +132,9 @@ the real target against a stub `COMPOSE` and checks the failure exit and message
 the contract tests check the stamped envelope against the
 schema and feed goldens with and without `reset_epoch` to the MiniTOS consumer.
 
-If the TT cannot be routed from the QC01 lane to BLOCK01.TL, the MiniTOS reset
-fails with "Reset rolled back: import_v1: no road route ..." and the previous
-MiniTOS state is kept.
+If the TT cannot be routed from the QC01 lane (`QC01-L1`) to `BLOCK01-TL`, the
+MiniTOS reset fails with "Reset rolled back: import_v1: no road route ..." and
+the previous MiniTOS state is kept.
 
 Each service resets only its own database through its own management command;
 nothing writes across databases. Django users (admin accounts) are kept.
@@ -157,8 +157,9 @@ If `simulation_stop` times out, check `make logs-runner`; as a last resort run
 - Location "Test Terminal", Enterprise `terminal-velocity`, Site `test-terminal`.
 - Layout v1 (published): TERMINAL, LAND, WATER; road `ROAD-01`; quay `QUAY-01`
   with `BERTH-01` and 13 bollards; yard block `BLOCK01` (10 bays x 4 rows x 3 tiers,
-  the D-017 exception block); truck hand-off lanes `QC01.LANE` (under the crane)
-  and `BLOCK01.TL`, both joined to the road.
+  the D-017 exception block); truck hand-off lanes `QC01-L1` (under the crane)
+  and `BLOCK01-TL`, both joined to the road (TCL-010c; positions `QC01-L1.01`
+  and `BLOCK01-TL.01`, `BLOCK01-TL.02`).
 - CHEs `QC01` (STS), `TT01`, `TT02` (TT), `RTG01` (RTG), all powered on,
   available and not dispatched (spec K3); work queue `QC01-WQ`. OES marks them
   available after each CHE's DBIRTH.
@@ -171,8 +172,8 @@ If `simulation_stop` times out, check `make logs-runner`; as a last resort run
   are created by TCL-010 discharge planning when V001 goes InOperation
   (`make scenario-step STEP=visit-in-operation`, or the vessel visit panel / API
   / admin): one PLANNED order per container with an active route plan:
-  QC handle (seeded vessel slot -> QC01 lane, hand-off), TT move (QC01 lane ->
-  BLOCK01.TL, hand-off, `movement_mode` road), RTG handle (BLOCK01.TL -> yard
+  QC handle (seeded vessel slot -> QC01-L1, hand-off), TT move (QC01-L1 ->
+  BLOCK01-TL, hand-off, `movement_mode` road), RTG handle (BLOCK01-TL -> yard
   slot chosen by planning). The step prints "N created, 0 adopted"; a rerun
   adopts. `release-discharge` before InOperation fails with "run the
   visit-in-operation step first".
