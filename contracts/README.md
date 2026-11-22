@@ -130,6 +130,16 @@ under strict mode. Regenerate (on a branch with
 TCL-028) with
 `SCMS_UPDATE_GOLDEN=1 python manage.py test execution.test_contract_failure_events`.
 
+TCL-034b adds `05_leg_exception_simulator_failure`: a Godot `failed` /
+`SIMULATOR_FAILURE` stall on a live leg with no pending hand-off. OES emits
+`leg_exception` (`reason` `SIMULATOR_FAILURE`, `detail` "no progress on <CHE>
+within N s", N from the session's `leg_stall_timeout_s`) instead of
+`leg_failed`. The schema requires `reason`, `detail` and `leg_id`; `reason` is
+the same D-017 enum as `handoff_exception`. Producer check
+`execution/test_contract_handoff_events.py` (`test_leg_exception_matches_golden_and_schema`);
+consumer check `minitos_core/test_contract_handoff_events.py`. Regenerate with
+`SCMS_UPDATE_GOLDEN=1 python manage.py test execution.test_contract_handoff_events`.
+
 Regenerate after an intended producer change, then review the diff:
 
     cd apps/terminal-oes

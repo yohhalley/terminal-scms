@@ -311,9 +311,10 @@ class LegMovementModeTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        from minitos_core.scenarios import reset_scenario
+        from minitos_core.scenarios import reset_scenario, run_step
 
         reset_scenario('import_v1')
+        run_step('import_v1', 'visit-in-operation')  # TCL-010b: planning creates the order
         cls.leg = OrderLeg.objects.get(sequence=2)
         cls.road_edges = list(
             RouteEdge.objects.filter(movement_mode=RouteEdge.ROAD).order_by('pk')[:4]

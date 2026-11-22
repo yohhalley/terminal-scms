@@ -1,4 +1,4 @@
-"""Hand-off record and no-show handling (T-006, T-007, TCL-011 §6.3).
+"""Hand-off record, no-show and stall handling (T-006, T-007, TCL-011 §6.3 / §8 d).
 
 OES is the single writer of the hand-off record. Godot owns the timing: it
 reports ``handoff_completed`` (both sides, Q21) and ``handoff_timed_out``
@@ -43,6 +43,8 @@ NO_SHOW_ORDER_STATUS = ExecutionOrder.COMPLETE
 NO_SHOW_REASON = Handoff.ExceptionReason.SIMULATOR_FAILURE
 # Godot's built-in no-show default (all three CHE types), the last fallback.
 DEFAULT_NO_SHOW_TIMEOUT_S = 300
+# Godot's built-in stall default (TCL-011 §8 d / Sim/Timing/LegStallTimeoutS).
+DEFAULT_LEG_STALL_TIMEOUT_S = 600
 
 # Detail / env names follow the absent CHE type (TCL-011 §6.1 / §6.3).
 # QC types come from dispatch.QC_EQUIPMENT_TYPE_CODES (STS and QC).
@@ -100,6 +102,36 @@ def no_show_detail(session=None, absent_type="TT"):
     """D-017 / TCL-011 §6.3: ``no <ABSENT_TYPE> within N s``."""
     label = _absent_type_label(absent_type)
     return f"no {label} within {no_show_timeout_s(session, absent_type=label)} s"
+
+
+def leg_stall_timeout_s(session=None):
+    """The stall clock Godot used for this session (TCL-011 §8 d).
+
+    NBIRTH ``Sim/Timing/LegStallTimeoutS``, else the ``SIMULATOR_LEG_STALL_TIMEOUT_S``
+    OES forwards to the simulator, else 600 s.
+    """
+    if session is not None and getattr(session, "leg_stall_timeout_s", None):
+        return int(session.leg_stall_timeout_s)
+    configured = getattr(settings, "SIMULATOR_SIM_SETTINGS", {}).get(
+        "SIMULATOR_LEG_STALL_TIMEOUT_S", "",
+    )
+    try:
+        seconds = int(str(configured).strip())
+    except ValueError:
+        return DEFAULT_LEG_STALL_TIMEOUT_S
+    return seconds if seconds > 0 else DEFAULT_LEG_STALL_TIMEOUT_S
+
+
+def stall_detail(session=None, equipment=None):
+    """TCL-011 §8 d: ``no progress on <CHE> within N s`` (CHE name, else type)."""
+    name = ""
+    if equipment is not None:
+        name = (getattr(equipment, "name", None) or "").strip()
+        if not name:
+            name = _absent_type_label(equipment)
+    if not name:
+        name = "CHE"
+    return f"no progress on {name} within {leg_stall_timeout_s(session)} s"
 
 
 class ResultRejected(ValidationError):
@@ -241,7 +273,9 @@ def cancel_command(command, *, reason, anchor_sim_ms=None):
 
 def _cancel_operation(operation, *, reason, event_ms, anchor_sim_ms):
     now = timezone.now()
-    if operation.status in {ExecutionOperation.COMPLETE, ExecutionOperation.CANCELLED}:
+    if operation.status in {
+        ExecutionOperation.COMPLETE, ExecutionOperation.CANCELLED, ExecutionOperation.FAILED,
+    }:
         return False
     assignment = DispatchAssignment.objects.filter(operation=operation).first()
     if assignment is not None:
@@ -273,7 +307,9 @@ def _cancel_operation(operation, *, reason, event_ms, anchor_sim_ms):
         equipment.save(update_fields=[
             "working", "is_dispatched", "is_available", "idle_since_event_ms",
         ])
-    if operation.status not in {ExecutionOperation.COMPLETE, ExecutionOperation.CANCELLED}:
+    if operation.status not in {
+        ExecutionOperation.COMPLETE, ExecutionOperation.CANCELLED, ExecutionOperation.FAILED,
+    }:
         operation.status = ExecutionOperation.CANCELLED
         operation.actual_end = now
         operation.failure_reason = reason
@@ -405,6 +441,157 @@ def apply_handoff_timed_out(command, metrics, *, event_ms, sim_ms=None):
         occurred_at=event_time(event_ms),
         event_id=derived_id("handoff_exception", handoff.handoff_id),
     )
+    finalize_outbox_event(outgoing)
+    return True
+
+
+def apply_simulator_failure(command, *, event_ms=None, sim_ms=None):
+    """TCL-011 §8 d / S2: a Godot ``failed`` / ``SIMULATOR_FAILURE`` stall.
+
+    Marks the stalled leg failed. If a hand-off is still pending (including an
+    H2 ``assign_handoff`` held by the TT), the hand-off is closed as
+    ``exception`` and one ``handoff_exception`` is emitted; otherwise a
+    ``leg_exception`` is emitted. Remaining live legs are cancelled and the
+    order is completed by exception. Godot reports the stall on the live leg
+    command id and closes the hand-off itself, so no ``handoff_timed_out``
+    follows; a late one is the existing idempotent no-op.
+
+    The detail quotes the CHE name and the session's ``leg_stall_timeout_s``
+    (else ``SIMULATOR_LEG_STALL_TIMEOUT_S``, else 600). A duplicate or late
+    result on an already-terminal command or leg is a logged no-op.
+
+    Returns ``True`` when the stall was applied, ``False`` for a no-op.
+    """
+    assignment = command.assignment
+    operation = assignment.operation
+    equipment = assignment.equipment
+    order = ExecutionOrder.objects.select_for_update().get(pk=operation.order_id)
+    if command.status in TERMINAL_COMMAND_STATES or operation.status in {
+        ExecutionOperation.COMPLETE, ExecutionOperation.CANCELLED, ExecutionOperation.FAILED,
+    }:
+        logger.info(
+            "Idempotent no-op: late or duplicate SIMULATOR_FAILURE for %s "
+            "command %s (leg %s).",
+            command.status, command.command_id, operation.tos_leg_id,
+        )
+        return False
+
+    reason = NO_SHOW_REASON.value
+    detail = stall_detail(command.simulation_session, equipment)
+    now = timezone.now()
+    command.status = EquipmentCommand.FAILED
+    command.completed_at = now
+    command.save(update_fields=["status", "completed_at"])
+    for other in assignment.commands.exclude(status__in=TERMINAL_COMMAND_STATES).exclude(
+        pk=command.pk,
+    ).order_by("created_at", "command_id"):
+        # The H2 assign_handoff is an add-on on the same assignment; Godot
+        # already closed the hand-off with the stall, so just end it in OES.
+        if other.command_type == COMMAND_CANCEL:
+            continue
+        other.status = EquipmentCommand.FAILED
+        other.completed_at = now
+        other.save(update_fields=["status", "completed_at"])
+    assignment.status = DispatchAssignment.FAILED
+    assignment.completed_at = now
+    assignment.failure_reason = reason
+    assignment.failure_detail = detail
+    assignment.save(update_fields=[
+        "status", "completed_at", "failure_reason", "failure_detail",
+    ])
+    operation.status = ExecutionOperation.FAILED
+    operation.actual_end = now
+    operation.failure_reason = reason
+    operation.failure_detail = detail
+    operation.save(update_fields=[
+        "status", "actual_end", "failure_reason", "failure_detail",
+    ])
+    equipment.working = False
+    equipment.is_dispatched = False
+    equipment.is_available = equipment.powered_on and not equipment.is_in_maintenance
+    equipment.idle_since_event_ms = session_event_ms(command.simulation_session, event_ms)
+    equipment.save(update_fields=[
+        "working", "is_dispatched", "is_available", "idle_since_event_ms",
+    ])
+
+    pending = list(
+        Handoff.objects.select_for_update().filter(
+            Q(giver_operation=operation) | Q(receiver_operation=operation),
+            status=Handoff.PENDING,
+        ).select_related(
+            "giver_operation", "receiver_operation",
+            "giver_equipment", "receiver_equipment",
+        ).order_by("created_at", "handoff_id")
+    )
+    for handoff in pending:
+        handoff.status = Handoff.EXCEPTION
+        handoff.exception_reason = reason
+        handoff.exception_detail = detail
+        handoff.exception_event_ms = int(event_ms) if event_ms is not None else None
+        handoff.save(update_fields=[
+            "status", "exception_reason", "exception_detail", "exception_event_ms", "updated_at",
+        ])
+
+    cancelled_legs = []
+    for other_operation in order.operations.select_for_update().order_by("sequence"):
+        if other_operation.pk == operation.pk:
+            continue
+        if _cancel_operation(
+            other_operation, reason=reason, event_ms=event_ms, anchor_sim_ms=sim_ms,
+        ):
+            cancelled_legs.append(other_operation.tos_leg_id)
+
+    order.status = NO_SHOW_ORDER_STATUS
+    order.failure_reason = reason
+    order.failure_detail = detail
+    order.completed_at = event_time(session_event_ms(command.simulation_session, event_ms))
+    order.save(update_fields=[
+        "status", "failure_reason", "failure_detail", "completed_at", "updated_at",
+    ])
+    last_leg = order.operations.order_by("-sequence").first()
+    destination = last_leg.destination_inventory_position_id if last_leg else None
+    if pending:
+        handoff = pending[0]
+        outgoing = queue_execution_event(
+            order,
+            "handoff_exception",
+            operation=handoff.giver_operation,
+            equipment=handoff.giver_equipment,
+            extra={
+                "handoff_id": str(handoff.handoff_id),
+                "reason": reason,
+                "detail": detail,
+                "from_che_id": handoff.giver_equipment.tos_che_id,
+                "to_che_id": handoff.receiver_equipment.tos_che_id,
+                "from_che_name": handoff.giver_equipment.name,
+                "to_che_name": handoff.receiver_equipment.name,
+                "giver_leg_id": handoff.giver_operation.tos_leg_id,
+                "receiver_leg_id": handoff.receiver_operation.tos_leg_id,
+                "cancelled_leg_ids": cancelled_legs,
+                "container_visit_id": handoff.container_visit_id,
+                "container_number": handoff.container_number or None,
+                "destination_position_id": destination,
+            },
+            occurred_at=event_time(event_ms),
+            event_id=derived_id("handoff_exception", handoff.handoff_id),
+        )
+    else:
+        outgoing = queue_execution_event(
+            order,
+            "leg_exception",
+            operation=operation,
+            equipment=equipment,
+            extra={
+                "reason": reason,
+                "detail": detail,
+                "cancelled_leg_ids": cancelled_legs,
+                "container_visit_id": order.container_visit_id,
+                "container_number": order.container_number or None,
+                "destination_position_id": destination,
+            },
+            occurred_at=event_time(event_ms),
+            event_id=derived_id("leg_exception", command.command_id),
+        )
     finalize_outbox_event(outgoing)
     return True
 
