@@ -962,6 +962,7 @@ class ClaimEnvironmentTests(HandoffTestBase):
             "SIMULATOR_RTG_WAIT_MIN_S", "SIMULATOR_RTG_WAIT_MAX_S", "SIMULATOR_RTG_HOLD_WAIT_MIN_S",
             "SIMULATOR_RTG_HOLD_WAIT_MAX_S", "SIMULATOR_TIMING_PROFILE", "SIMULATOR_QC_NO_SHOW_TIMEOUT_S",
             "SIMULATOR_RTG_NO_SHOW_TIMEOUT_S", "SIMULATOR_LEG_STALL_TIMEOUT_S",
+            "SIMULATOR_NO_SHOW_TIMEOUT_ENABLED",  # TCL-034e (D-053)
         ):
             self.assertIn(key, names)
         self.assertNotIn("SIMULATOR_RTG_NO_SHOW_TIMEOUT_ENABLED", names | allowed | godot_keys)
@@ -1365,11 +1366,15 @@ class NoShowSwitchOffStallTests(HandoffTestBase):
         self.assertEqual(self.order.operations.get(sequence=2).status, ExecutionOperation.FAILED)
         handoff = Handoff.objects.get(giver_equipment=tt)
         self.assertNotEqual(handoff.status, Handoff.PENDING)
-        self.assertEqual(handoff.status, Handoff.CANCELLED)
+        # TCL-034b (#43): a stall closes the pending hand-off as an exception.
+        self.assertEqual(handoff.status, Handoff.EXCEPTION)
+        self.assertEqual(handoff.exception_reason, "SIMULATOR_FAILURE")
         # BL-48a: counterpart cancel DCMD for the other leg of the hand-off.
         self.assertEqual(self.cancel_targets(), [str(rtg_cmd.command_id)])
         cancel = EquipmentCommand.objects.get(command_type="cancel")
-        self.assertEqual(self.dcmd_metrics(cancel)["Command/Reason"], "LEG_FAILED")
+        # Since TCL-034b (#43) the counterpart cancel carries the stall's
+        # reason (was LEG_FAILED when BL-48a was written).
+        self.assertEqual(self.dcmd_metrics(cancel)["Command/Reason"], "SIMULATOR_FAILURE")
         rtg_cmd.refresh_from_db()
         self.assertEqual(rtg_cmd.status, EquipmentCommand.CANCELLED)
         rtg_op = self.order.operations.get(sequence=3)
@@ -1387,3 +1392,124 @@ class NoShowSwitchOffStallTests(HandoffTestBase):
         self.assertEqual(last["event"], "container_transferred")
         self.assertEqual(last["to_che_id"], tt.tos_che_id)
         self.assertEqual(last["from_che_id"], 1)
+
+
+class SimulatorFailureStallTests(HandoffTestBase):
+    """TCL-034b / TCL-011 §8 d: stall ``failed``/``SIMULATOR_FAILURE`` and ``leg_exception``."""
+
+    def stall(self, command, sim_ms, **extra):
+        metrics = {"Command/Result/Reason": "SIMULATOR_FAILURE"}
+        metrics.update(extra)
+        return self.result(command, "failed", sim_ms, **metrics)
+
+    def finish_h2(self, tt, tt_cmd, h2_cmd, rtg_cmd, at_ms=95_000):
+        self.result(h2_cmd, "handoff_completed", at_ms)
+        self.result(rtg_cmd, "handoff_completed", at_ms)
+        self.result(tt_cmd, "completed", at_ms)
+
+    def test_stall_without_a_pending_handoff_emits_leg_exception(self):
+        """After H2 the RTG is on its way to the slot; no pending hand-off."""
+        self.session.leg_stall_timeout_s = 90
+        self.session.save(update_fields=["leg_stall_timeout_s"])
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        self.finish_h2(tt, tt_cmd, h2_cmd, rtg_cmd)
+        receipt = self.stall(rtg_cmd, 200_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        self.order.refresh_from_db()
+        rtg_op = self.order.operations.get(sequence=3)
+        self.assertEqual(rtg_op.status, ExecutionOperation.FAILED)
+        self.assertEqual(rtg_op.failure_reason, "SIMULATOR_FAILURE")
+        self.assertEqual(rtg_op.failure_detail, "no progress on RTG01 within 90 s")
+        self.assertEqual(self.order.status, ExecutionOrder.COMPLETE)
+        self.assertEqual(self.order.failure_reason, "SIMULATOR_FAILURE")
+        self.assertEqual(self.order.failure_detail, "no progress on RTG01 within 90 s")
+        events = self.business_events()
+        self.assertEqual(events.count("leg_exception"), 1)
+        self.assertNotIn("leg_failed", events)
+        self.assertNotIn("handoff_exception", events)
+        data = OutboxEvent.objects.get(payload__data__event="leg_exception").payload["data"]
+        self.assertEqual(data["reason"], "SIMULATOR_FAILURE")
+        self.assertEqual(data["detail"], "no progress on RTG01 within 90 s")
+        self.assertEqual(data["che_id"], 21)
+        self.assertEqual(data["che_name"], "RTG01")
+        self.assertEqual(data["leg_id"], 4103)
+        self.assertEqual(data["cancelled_leg_ids"], [])
+        self.assertEqual(data["destination_position_id"], 112)
+        self.assertEqual(data["container_number"], CONTAINER)
+        self.rtg.refresh_from_db()
+        self.assertTrue(self.rtg.is_available)
+        self.assertFalse(self.rtg.is_dispatched)
+
+    def test_stall_with_h2_assigned_closes_the_handoff_and_ignores_a_late_timeout(self):
+        """Stall on the TT leg id while H2 is assigned; no handoff_timed_out follows."""
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        receipt = self.stall(tt_cmd, 200_000)
+        self.assertEqual(receipt.status, CommandResultReceipt.APPLIED)
+        handoff = Handoff.objects.get(giver_equipment=tt)
+        expected = f"no progress on {tt.name} within 600 s"
+        self.assertEqual(handoff.status, Handoff.EXCEPTION)
+        self.assertEqual(handoff.exception_reason, "SIMULATOR_FAILURE")
+        self.assertEqual(handoff.exception_detail, expected)
+        self.assertEqual(self.order.operations.get(sequence=2).status, ExecutionOperation.FAILED)
+        self.assertEqual(self.order.operations.get(sequence=3).status, ExecutionOperation.CANCELLED)
+        h2_cmd.refresh_from_db()
+        self.assertEqual(h2_cmd.status, EquipmentCommand.FAILED)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, ExecutionOrder.COMPLETE)
+        events = self.business_events()
+        self.assertEqual(events.count("handoff_exception"), 1)
+        self.assertNotIn("leg_exception", events)
+        self.assertNotIn("leg_failed", events)
+        data = OutboxEvent.objects.get(payload__data__event="handoff_exception").payload["data"]
+        self.assertEqual(data["reason"], "SIMULATOR_FAILURE")
+        self.assertEqual(data["detail"], expected)
+        self.assertIn(4103, data["cancelled_leg_ids"])
+        # Godot does not publish handoff_timed_out after a stall; a late one is a no-op.
+        with self.assertLogs("execution.services.handoffs", level="INFO") as captured:
+            late = self.result(rtg_cmd, "handoff_timed_out", 380_000)
+        self.assertEqual(late.status, CommandResultReceipt.INFORMATIONAL)
+        self.assertEqual(
+            OutboxEvent.objects.filter(payload__data__event="handoff_exception").count(), 1,
+        )
+        self.assertTrue(any("Idempotent no-op" in line for line in captured.output))
+        handoff.refresh_from_db()
+        self.assertEqual(handoff.exception_detail, expected)
+
+    def test_duplicate_stall_is_an_idempotent_noop(self):
+        _tt, tt_cmd, _h2_cmd, _rtg_cmd = self.run_h2()
+        first = self.stall(tt_cmd, 200_000)
+        self.assertEqual(first.status, CommandResultReceipt.APPLIED)
+        events = OutboxEvent.objects.filter(
+            payload__data__event__in=["handoff_exception", "leg_exception"],
+        ).count()
+        with self.assertLogs("execution.services.handoffs", level="INFO") as captured:
+            second = self.stall(tt_cmd, 201_000)
+        self.assertEqual(second.status, CommandResultReceipt.INFORMATIONAL)
+        self.assertEqual(
+            OutboxEvent.objects.filter(
+                payload__data__event__in=["handoff_exception", "leg_exception"],
+            ).count(),
+            events,
+        )
+        self.assertTrue(any("Idempotent no-op" in line for line in captured.output))
+        tt_cmd.refresh_from_db()
+        self.assertEqual(tt_cmd.status, EquipmentCommand.FAILED)
+
+    def test_stall_detail_uses_the_session_clock_over_the_env_fallback(self):
+        self.session.leg_stall_timeout_s = 75
+        self.session.save(update_fields=["leg_stall_timeout_s"])
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        self.finish_h2(tt, tt_cmd, h2_cmd, rtg_cmd)
+        with self.settings(SIMULATOR_SIM_SETTINGS={"SIMULATOR_LEG_STALL_TIMEOUT_S": "30"}):
+            self.stall(rtg_cmd, 200_000)
+        data = OutboxEvent.objects.get(payload__data__event="leg_exception").payload["data"]
+        self.assertEqual(data["detail"], "no progress on RTG01 within 75 s")
+
+    def test_stall_detail_falls_back_to_the_oes_setting(self):
+        self.assertIsNone(self.session.leg_stall_timeout_s)
+        tt, tt_cmd, h2_cmd, rtg_cmd = self.run_h2()
+        self.finish_h2(tt, tt_cmd, h2_cmd, rtg_cmd)
+        with self.settings(SIMULATOR_SIM_SETTINGS={"SIMULATOR_LEG_STALL_TIMEOUT_S": "45"}):
+            self.stall(rtg_cmd, 200_000)
+        data = OutboxEvent.objects.get(payload__data__event="leg_exception").payload["data"]
+        self.assertEqual(data["detail"], "no progress on RTG01 within 45 s")

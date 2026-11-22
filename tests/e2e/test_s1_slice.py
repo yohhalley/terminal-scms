@@ -178,6 +178,12 @@ class PlanTests(unittest.TestCase):
     def test_without_step4(self):
         self.assertEqual([s for s, *_ in s1.s1_plan(False)], ["3a", "3b", "3c", "3d"])
 
+    def test_step_3d_title_uses_the_active_profile(self):
+        titles = {step: title for step, title, *_ in s1.s1_plan(False, profile="realistic")}
+        self.assertEqual(titles["3d"], "QC01 -> TT hand-off (Godot, realistic timings)")
+        default = {step: title for step, title, *_ in s1.s1_plan(False)}
+        self.assertEqual(default["3d"], "QC01 -> TT hand-off (Godot, fast timings)")
+
     def test_default_limit_is_d037(self):
         self.assertEqual(s1.parse_args([]).step_limit, 5.0)
 
@@ -195,17 +201,22 @@ class ReportTests(unittest.TestCase):
 
 
 class ClockTests(unittest.TestCase):
-    """D-037: the clock starts when the trigger is published and stops when
-    the step's last expected event is received."""
+    """D-037 / D-050: the clock starts when the trigger is published and stops
+    when the step's last expected event is received. Reaction steps use the
+    wall-clock limit; 3d/4 are asserted in sim time."""
 
-    def make_run(self, sim_offsets, step_limit=5.0):
+    def make_run(self, sim_offsets, step_limit=5.0, sim_stamps=None):
         import argparse
         args = argparse.Namespace(
             oes_url="http://127.0.0.1:1", compose="true", include_step4=False,
             step_limit=step_limit, scenario="import_v1",
+            time_scale=10.0, timing_profile="fast",
         )
         run = s1.SliceRun(args)
         run.validator = None
+        run.nbirth_metrics = s1.nbirth_fixture(
+            profile="fast", qc_hold=(2.0, 5.0), rtg_hold=(2.0, 5.0),
+        )
         self.issued = {}
 
         def push(offset_base, offset, message):
@@ -223,11 +234,23 @@ class ClockTests(unittest.TestCase):
             t = self.issued["dispatch"] = time.monotonic()
             push(t, 0.02, execution("leg_dispatched", 11, "QC01"))
             self.dispatched_last = push(t, 0.03, execution("leg_dispatched", 12, "TT02"))
+            # Default envelope stamps: 3c at t=0, 3d ends at 28.5 s sim (TT02 drive).
+            stamps = sim_stamps or [
+                "2026-10-25T00:00:00+00:00",
+                "2026-10-25T00:00:00+00:00",
+                "2026-10-25T00:00:00+00:00",
+                "2026-10-25T00:00:28.500000+00:00",
+                "2026-10-25T00:00:28.500000+00:00",
+            ]
             events = [
-                execution("leg_started", 11, "QC01"), execution("container_picked_up", 11, "QC01"),
-                execution("leg_started", 12, "TT02"),
-                execution("container_transferred", 12, from_che_name="QC01", to_che_name="TT02"),
-                execution("leg_completed", 11, "QC01"),
+                execution("leg_started", 11, "QC01", occurred_at=stamps[0]),
+                execution("container_picked_up", 11, "QC01", occurred_at=stamps[1]),
+                execution("leg_started", 12, "TT02", occurred_at=stamps[2]),
+                execution(
+                    "container_transferred", 12,
+                    from_che_name="QC01", to_che_name="TT02", occurred_at=stamps[3],
+                ),
+                execution("leg_completed", 11, "QC01", occurred_at=stamps[4]),
             ]
             for offset, message in zip(sim_offsets, events):
                 push(t, offset, message)
@@ -262,21 +285,49 @@ class ClockTests(unittest.TestCase):
         self.assertAlmostEqual(r["3c"].last_received_at, self.dispatched_last.received_at + 0.51, delta=1e-9)
         self.assertIn("leg_dispatched(leg 2, TT02) received (end of step 3b)", r["3c"].clock_from)
 
-    def test_simulator_step_over_the_limit_fails(self):
-        # 3d's last event arrives 0.31 s after 3c ended with a 0.3 s limit.
+    def test_reaction_step_over_the_wall_limit_fails(self):
+        # 3c is reaction-only (D-050 / D-037): last event 0.32 s after 3c start, limit 0.3 s.
+        # 3c starts at the second leg_dispatched (0.03 s after dispatch).
+        run = self.make_run([0.20, 0.35, 1.00, 1.10, 1.20], step_limit=0.3)
+        run.run_steps()
+        r = self.by_id(run)
+        self.assertTrue(r["3b"].passed, r["3b"].error)
+        self.assertFalse(r["3c"].passed)
+        self.assertIn("timeout: container_picked_up", r["3c"].error)
+        self.assertIn("arrived at 0.320 s", r["3c"].error)
+        self.assertTrue(r["3d"].error.startswith("skipped"))
+
+    def test_physical_step_is_not_failed_by_the_5s_wall_limit(self):
+        # 3d's last event arrives 0.31 s after 3c ended; a 0.3 s D-037 wall
+        # limit must not fail it. The wait uses the D-050 safety timeout.
         run = self.make_run([0.05, 0.06, 0.20, 0.30, 0.37], step_limit=0.3)
         run.run_steps()
         r = self.by_id(run)
         self.assertTrue(r["3c"].passed, r["3c"].error)
-        self.assertFalse(r["3d"].passed)
-        self.assertIn("timeout: leg_completed", r["3d"].error)
-        self.assertIn("arrived at 0.310 s", r["3d"].error)
+        self.assertTrue(r["3d"].passed, r["3d"].error)
+        self.assertFalse(r["3d"].wall_asserted)
+        self.assertGreater(r["3d"].limit_s, 0.3)
+        self.assertAlmostEqual(r["3d"].sim_elapsed_s, 28.5, places=3)
+        self.assertLessEqual(r["3d"].sim_elapsed_s, r["3d"].sim_bound_s)
+
+    def test_physical_steps_use_safety_timeout_and_sim_bound(self):
+        run = self.make_run([0.53, 0.54, 1.04, 1.05, 1.06])
+        run.run_steps()
+        r = self.by_id(run)
+        self.assertEqual(r["3a"].limit_s, 5.0)
+        self.assertTrue(r["3a"].wall_asserted)
+        self.assertEqual(r["3b"].limit_s, 5.0)
+        self.assertEqual(r["3c"].limit_s, 5.0)
+        self.assertTrue(r["3c"].wall_asserted)
+        self.assertFalse(r["3d"].wall_asserted)
+        self.assertGreater(r["3d"].limit_s, 5.0)
+        self.assertAlmostEqual(r["3d"].sim_bound_s, 28.704, places=3)
 
     def test_simulator_step_without_a_passed_trigger_is_not_timed(self):
         run = self.make_run([0.53, 0.54, 1.04, 1.05, 1.06])
         plan = [p for p in s1.s1_plan(False) if p[2] not in ("minitos-release", "oes-dispatch")]
         s1_plan = s1.s1_plan
-        s1.s1_plan = lambda include_step4: plan
+        s1.s1_plan = lambda include_step4, profile="fast": plan
         try:
             run.run_steps()
         finally:
@@ -377,7 +428,9 @@ class WorstStepTests(unittest.TestCase):
         self.assertIsNone(a.sim_elapsed_s)
         self.assertIsNone(b.sim_elapsed_s)
         self.assertEqual(c.sim_elapsed_s, 0.0)
-        self.assertEqual(d.sim_elapsed_s, 29.2)
+        # 3d is the TT drive, from TT leg_started (00:00:26) to transfer
+        # (00:00:54.500) = 28.5 s, not from the QC pick 0.7 s earlier.
+        self.assertEqual(d.sim_elapsed_s, 28.5)
         self.assertEqual(four.sim_elapsed_s, 21.8)
 
         line = s1.worst_step_summary([a, b, c, d, four])
@@ -409,6 +462,300 @@ class WorstStepTests(unittest.TestCase):
         md = s1.render_markdown([ok], [])
         self.assertIn("Worst step (wall-clock): 3d H1 2.522 s / limit 5 s; sim time 28.5 s.", md)
         self.assertIn("**Overall: PASS**", md)
+
+
+class D050BoundsTests(unittest.TestCase):
+    """Layout-derived sim-time bounds for physical-work steps 3d and 4."""
+
+    def setUp(self):
+        self.fast_nbirth = s1.nbirth_fixture(
+            profile="fast", qc_hold=(2.0, 5.0), rtg_hold=(2.0, 5.0),
+        )
+        self.bounds = s1.load_physical_bounds(
+            s1.REPO_ROOT, nbirth=self.fast_nbirth, profile="fast", time_scale=10,
+        )
+
+    def test_import_v1_layout_points_and_fast_holds(self):
+        b = self.bounds
+        self.assertEqual((b.qc_lane.x, b.qc_lane.y), (150.0, 240.0))
+        self.assertEqual((b.block_tl.x, b.block_tl.y), (122.5, 166.0))
+        self.assertEqual((b.tt_starts["TT01"].x, b.tt_starts["TT01"].y), (60.0, 150.0))
+        self.assertEqual((b.tt_starts["TT02"].x, b.tt_starts["TT02"].y), (80.0, 150.0))
+        self.assertEqual(b.speed_mps, 4.0)
+        self.assertEqual(b.qc_hold, (2.0, 5.0))
+        self.assertEqual(b.rtg_hold, (2.0, 5.0))
+        self.assertEqual(b.rtg_positioning_s, 0.0)
+        self.assertEqual(b.step_ms, 100)
+        self.assertAlmostEqual(b.slack_s, 0.2, places=9)
+
+    def test_step_3d_bound_is_max_of_drive_and_qc_hold(self):
+        b = self.bounds
+        # Parallel: deposit at max(hold end, TT ready). Fast hold max 5 s is
+        # shorter than either TT drive, so the bound is drive + slack.
+        self.assertAlmostEqual(b.bound_3d_s("TT02"), 28.50438562747845 + 0.2, places=5)
+        self.assertAlmostEqual(b.bound_3d_s("TT01"), 31.81980515339464 + 0.2, places=5)
+        self.assertEqual(b.bound_3d_s(), b.bound_3d_s("TT01"))  # worst case
+        self.assertIn("TT02 drive 114.0 m", b.formula_3d("TT02"))
+        self.assertIn("QC hold <= 5 s", b.formula_3d("TT02"))
+        self.assertIn("+ 2 ticks (0.2 s)", b.formula_3d("TT02"))
+        self.assertNotIn("≤", b.formula_3d("TT02"))
+        self.assertNotIn("→", b.formula_3d("TT02"))
+
+    def test_step_4_bound_is_max_of_drive_and_positioning_plus_hold(self):
+        b = self.bounds
+        # fast, prompt dispatch, P=0: max(drive + 2 ticks, 1 tick + 0) + hold
+        # = drive + 0.2 + 5, same numeric value as the pre-M2 formula.
+        self.assertAlmostEqual(b.bound_4_s(), 19.736150207170596 + 0.2 + 5.0, places=5)
+        self.assertIn("RTG hold <= 5 s", b.formula_4())
+        self.assertIn("RTG positioning 0 s", b.formula_4())
+        self.assertIn("QC01.LANE.01->BLOCK01.TL.01", b.formula_4())
+        self.assertNotIn("gantry", b.formula_4())
+        self.assertNotIn("≤", b.formula_4())
+        self.assertNotIn("→", b.formula_4())
+
+    def test_safety_timeout_is_scaled_bound_plus_slack_not_5s(self):
+        b = self.bounds
+        safety = b.safety_wall_s("3d", "TT02")
+        self.assertGreater(safety, 5.0)
+        self.assertAlmostEqual(safety, b.bound_3d_s("TT02") / 10 + 30.0, places=5)
+
+    def test_bounds_follow_nbirth_holds_not_a_hard_coded_120(self):
+        # Main-style realistic NBIRTH (holds 90-120, no positioning). The
+        # expected bound is derived from the same metrics, so a later
+        # D-051 cycle (60 s hold) does not require a literal 120.0 here.
+        metrics = s1.nbirth_fixture(
+            profile="realistic", qc_hold=(90.0, 120.0), rtg_hold=(60.0, 120.0),
+            include_positioning=False,
+        )
+        timings = s1.timings_from_nbirth(metrics)
+        realistic = s1.load_physical_bounds(
+            s1.REPO_ROOT, nbirth=metrics, profile="realistic", time_scale=10,
+        )
+        self.assertEqual(timings["rtg_positioning_s"], 0.0)
+        self.assertAlmostEqual(
+            realistic.bound_3d_s("TT01"),
+            max(realistic.tt_drive_to_qc_s("TT01")[0], timings["qc_hold"][1]) + realistic.slack_s,
+            places=5,
+        )
+        self.assertAlmostEqual(
+            realistic.bound_4_s(),
+            max(
+                realistic.drive_s(realistic.qc_lane, realistic.block_tl) + realistic.slack_s,
+                realistic.tick_s + timings["rtg_positioning_s"],
+            ) + timings["rtg_hold"][1],
+            places=5,
+        )
+
+    def test_bounds_follow_d051_nbirth_holds_and_positioning(self):
+        # TCL-034e / D-051 / D-058: QC hold 60, RTG hold 30, positioning 30.
+        metrics = s1.nbirth_fixture(
+            profile="realistic", qc_hold=(60.0, 60.0), rtg_hold=(30.0, 30.0),
+            positioning_s=30.0,
+        )
+        timings = s1.timings_from_nbirth(metrics)
+        realistic = s1.load_physical_bounds(
+            s1.REPO_ROOT, nbirth=metrics, profile="realistic", time_scale=10,
+        )
+        # 3d: max(TT01 drive ~31.8, 60) + 2 ticks = 60.2
+        self.assertAlmostEqual(
+            realistic.bound_3d_s("TT01"),
+            max(realistic.tt_drive_to_qc_s("TT01")[0], timings["qc_hold"][1]) + realistic.slack_s,
+            places=5,
+        )
+        self.assertAlmostEqual(realistic.bound_3d_s("TT01"), 60.0 + 0.2, places=5)
+        # L=0: max(19.736+0.2, 0.1+30) + 30 = 60.1
+        self.assertAlmostEqual(
+            realistic.bound_4_s(),
+            max(19.736150207170596 + 0.2, 0.1 + 30.0) + 30.0,
+            places=5,
+        )
+
+    def test_slack_is_two_configured_ticks(self):
+        metrics = s1.nbirth_fixture(
+            profile="fast", qc_hold=(2.0, 5.0), rtg_hold=(2.0, 5.0), step_ms=200,
+        )
+        bounds = s1.load_physical_bounds(
+            s1.REPO_ROOT, nbirth=metrics, profile="fast", time_scale=10,
+        )
+        self.assertEqual(bounds.step_ms, 200)
+        self.assertAlmostEqual(bounds.slack_s, 0.4, places=9)
+        self.assertIn("+ 2 ticks (0.4 s)", bounds.formula_3d("TT02"))
+        self.assertAlmostEqual(bounds.bound_3d_s("TT02"), 28.50438562747845 + 0.4, places=5)
+
+    def test_env_speed_override_is_used(self):
+        faster = s1.load_physical_bounds(
+            s1.REPO_ROOT, nbirth=self.fast_nbirth, profile="fast", time_scale=10,
+            env={"SIMULATOR_DEFAULT_SPEED_MPS": "8"},
+        )
+        self.assertEqual(faster.speed_mps, 8.0)
+        self.assertAlmostEqual(faster.bound_3d_s("TT02"), 28.50438562747845 / 2 + 0.2, places=5)
+
+    def test_timings_from_nbirth_require_hold_metrics(self):
+        with self.assertRaisesRegex(ValueError, "QcHoldMaxS"):
+            s1.timings_from_nbirth({"Sim/Timing/QcHoldMinS": 2})
+
+    def test_step_3d_excludes_the_command_start_gap(self):
+        """CI run 43977160552: pick 26.900, TT start 27.500, transfer 56.000.
+
+        Chaining from the QC pick would be 29.1 s and fail the 28.704 s
+        drive bound. The layout bound is the drive, from TT leg_started.
+        """
+        c = s1.StepResult("3c", "QC pick", "simulator", [], passed=True)
+        s1.record_sim_time(c, sim_execution(
+            "container_picked_up", "2026-10-25T00:00:26.900000+00:00",
+        ))
+        d = s1.StepResult("3d", "H1", "simulator", [], passed=True, wall_asserted=False)
+        s1.record_sim_time(d, sim_execution(
+            "leg_started", "2026-10-25T00:00:27.500000+00:00", 12, "TT02",
+        ))
+        s1.record_sim_time(d, sim_execution(
+            "leg_completed", "2026-10-25T00:00:56+00:00", 11, "QC01",
+        ))
+        s1.apply_sim_time_assertions([c, d], self.bounds, tt_name="TT02")
+        self.assertTrue(d.passed, d.error)
+        self.assertAlmostEqual(d.sim_elapsed_s, 28.5, places=3)
+        self.assertLessEqual(d.sim_elapsed_s, d.sim_bound_s)
+
+    def test_sim_time_within_bound_passes(self):
+
+        c = s1.StepResult("3c", "QC pick", "simulator", [], elapsed_s=0.51, limit_s=5, passed=True)
+        s1.record_sim_time(c, sim_execution("container_picked_up", "2026-10-25T00:00:00+00:00"))
+        d = s1.StepResult(
+            "3d", "H1", "simulator", [], elapsed_s=2.52, limit_s=32.87,
+            passed=True, wall_asserted=False,
+        )
+        s1.record_sim_time(d, sim_execution("leg_started", "2026-10-25T00:00:00+00:00", 12, "TT02"))
+        s1.record_sim_time(d, sim_execution(
+            "leg_completed", "2026-10-25T00:00:28.500000+00:00", 11, "QC01",
+        ))
+        s1.apply_sim_time_assertions([c, d], self.bounds, tt_name="TT02")
+        self.assertTrue(d.passed, d.error)
+        self.assertAlmostEqual(d.sim_elapsed_s, 28.5, places=3)
+        self.assertTrue(any("D-050 sim time 28.5 s / bound 28.704 s" in x for x in d.checks))
+
+    def test_sim_time_over_the_bound_fails(self):
+        c = s1.StepResult("3c", "QC pick", "simulator", [], passed=True)
+        s1.record_sim_time(c, sim_execution("container_picked_up", "2026-10-25T00:00:00+00:00"))
+        d = s1.StepResult("3d", "H1", "simulator", [], passed=True, wall_asserted=False)
+        s1.record_sim_time(d, sim_execution("leg_started", "2026-10-25T00:00:00+00:00", 12, "TT02"))
+        s1.record_sim_time(d, sim_execution(
+            "leg_completed", "2026-10-25T00:00:40+00:00", 11, "QC01",
+        ))
+        s1.apply_sim_time_assertions([c, d], self.bounds, tt_name="TT02")
+        self.assertFalse(d.passed)
+        self.assertIn("sim time exceeds layout bound", d.error)
+        self.assertIn("40 s", d.error)
+        self.assertIn("28.704 s", d.error)
+
+    def test_step_4_assertion_uses_the_block_drive_plus_hold(self):
+        d = s1.StepResult("3d", "H1", "simulator", [], passed=True)
+        s1.record_sim_time(d, sim_execution(
+            "leg_completed", "2026-10-25T00:00:28.500000+00:00", 11, "QC01",
+        ))
+        four = s1.StepResult("4", "H2", "oes-dispatch", [], passed=True, wall_asserted=False)
+        s1.record_sim_time(four, sim_execution(
+            "leg_started", "2026-10-25T00:00:28.500000+00:00", 13, "RTG01",
+        ))
+        s1.record_sim_time(four, sim_execution(
+            "container_dropped", "2026-10-25T00:00:50.300000+00:00", 13, "RTG01",
+        ))
+        s1.apply_sim_time_assertions([d, four], self.bounds)
+        self.assertTrue(four.passed, four.error)
+        self.assertAlmostEqual(four.sim_elapsed_s, 21.8, places=3)
+        self.assertAlmostEqual(four.sim_bound_s, 24.936, places=3)
+
+    def test_step_4_bound_absorbs_dispatch_latency(self):
+        """A 25 s sim (2.5 s wall at x10) dispatch delay is not a layout fail."""
+        d = s1.StepResult("3d", "H1", "simulator", [], passed=True)
+        s1.record_sim_time(d, sim_execution(
+            "leg_completed", "2026-10-25T00:00:28.500000+00:00", 11, "QC01",
+        ))
+        four = s1.StepResult("4", "H2", "oes-dispatch", [], passed=True, wall_asserted=False)
+        s1.record_sim_time(four, sim_execution(
+            "leg_started", "2026-10-25T00:00:53.500000+00:00", 13, "RTG01",
+        ))
+        s1.record_sim_time(four, sim_execution(
+            "container_dropped", "2026-10-25T00:00:58.600000+00:00", 13, "RTG01",
+        ))
+        s1.apply_sim_time_assertions([d, four], self.bounds)
+        self.assertTrue(four.passed, four.error)
+        self.assertAlmostEqual(four.sim_elapsed_s, 30.1, places=3)
+        # max(19.936, 25 + 0.1 + 0) + 5 = 30.1
+        self.assertAlmostEqual(four.sim_bound_s, 30.1, places=3)
+        self.assertIn("(RTG leg_started - H1) 25 s", four.sim_bound_formula)
+
+    def test_step_4_dispatch_wall_over_the_limit_fails(self):
+        four = s1.StepResult(
+            "4", "H2", "oes-dispatch", ["leg_dispatched(leg 3, RTG01)"],
+            passed=True, wall_asserted=False,
+            dispatch_wall_s=5.2, dispatch_limit_s=5.0,
+        )
+        s1.apply_dispatch_wall_assertion(four)
+        self.assertFalse(four.passed)
+        self.assertIn("dispatch reaction exceeds 5 s wall-clock limit", four.error)
+
+    def test_step_4_dispatch_wall_within_the_limit_is_logged(self):
+        four = s1.StepResult(
+            "4", "H2", "oes-dispatch", ["leg_dispatched(leg 3, RTG01)"],
+            passed=True, wall_asserted=False,
+            dispatch_wall_s=0.35, dispatch_limit_s=5.0,
+        )
+        s1.apply_dispatch_wall_assertion(four)
+        self.assertTrue(four.passed, four.error)
+        self.assertTrue(any("dispatch reaction 0.35 s / wall limit 5 s" in c for c in four.checks))
+
+    def test_markdown_includes_sim_columns_and_physical_summary(self):
+        ok = s1.StepResult(
+            "3d", "H1", "simulator", ["x"], passed=True, elapsed_s=2.522,
+            limit_s=32.87, wall_asserted=False, sim_bound_s=28.704,
+        )
+        s1.record_sim_time(ok, sim_execution("leg_started", "2026-10-25T00:00:00+00:00", 12, "TT02"))
+        s1.record_sim_time(ok, sim_execution(
+            "leg_completed", "2026-10-25T00:00:28.500000+00:00", 11, "QC01",
+        ))
+        # record_sim_time is last-wins for last_sim_at; first then last as in production.
+        md = s1.render_markdown([ok], [])
+        self.assertIn("| Wall (s) | Wall limit (s) | Sim (s) | Sim bound (s) |", md)
+        self.assertIn("| 3d H1 | PASS | 2.522 | safety 32.87 | 28.5 | 28.704 |", md)
+        self.assertIn(
+            "Worst step (wall-clock): 3d H1 2.522 s / safety wait 32.87 s (not asserted); sim time 28.5 s.",
+            md,
+        )
+        self.assertIn("Physical steps (D-050, sim time vs layout bound): 3d 28.5 / 28.704 s.", md)
+
+
+class NbirthAndTickTests(unittest.TestCase):
+    def test_sparkplug_roundtrip_holds(self):
+        from sparkplug_codec import decode_payload, encode_payload, metrics_by_name
+
+        payload = encode_payload([
+            {"name": "Sim/Timing/QcHoldMinS", "type": "Int64", "value": 2},
+            {"name": "Sim/Timing/QcHoldMaxS", "type": "Int64", "value": 5},
+            {"name": "Sim/Timing/RtgHoldMinS", "type": "Int64", "value": 2},
+            {"name": "Sim/Timing/RtgHoldMaxS", "type": "Int64", "value": 5},
+            {"name": "Sim/Timing/RtgPositioningS", "type": "Int64", "value": 30},
+            {"name": "Sim/FixedStepMs", "type": "Int64", "value": 100},
+            {"name": "Sim/Timing/Profile", "type": "String", "value": "fast"},
+            {"name": "Sim/TimeScale", "type": "Double", "value": 10.0},
+        ], timestamp_ms=1)
+        metrics = metrics_by_name(decode_payload(payload))
+        timings = s1.timings_from_nbirth(metrics)
+        self.assertEqual(timings["qc_hold"], (2.0, 5.0))
+        self.assertEqual(timings["rtg_hold"], (2.0, 5.0))
+        self.assertEqual(timings["rtg_positioning_s"], 30.0)
+        self.assertEqual(timings["step_ms"], 100)
+        self.assertEqual(timings["profile"], "fast")
+        self.assertEqual(timings["time_scale"], 10.0)
+
+    def test_parse_fixed_step_ms_prefers_env_then_simclock(self):
+        self.assertEqual(
+            s1.parse_fixed_step_ms("", "const DEFAULT_STEP_MS := 100", env={}),
+            100,
+        )
+        self.assertEqual(
+            s1.parse_fixed_step_ms("", "const DEFAULT_STEP_MS := 100", env={"SIMULATOR_FIXED_STEP_MS": "200"}),
+            200,
+        )
 
 
 if __name__ == "__main__":
