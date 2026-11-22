@@ -106,7 +106,9 @@ Sparkplug B.
 
 To rerun the Sprint 1 demo from a known state, `make scenario-reset` wipes and
 reseeds both databases with the `import_v1` scenario and republishes the Site;
-`make scenario-step STEP=release-discharge` releases its discharge order. See
+`make scenario-step STEP=visit-in-operation` moves the vessel visit to
+InOperation, which creates its discharge order, and
+`make scenario-step STEP=release-discharge` releases it. See
 [docs/SCENARIO_RESET.md](docs/SCENARIO_RESET.md).
 
 `make down` retains named database, broker, and simulator session volumes. Do not add `--volumes`

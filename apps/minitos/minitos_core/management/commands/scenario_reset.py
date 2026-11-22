@@ -59,8 +59,11 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f'{name}: wiped {result["tables_wiped"]} tables, seed {result["seed"]}; '
             f'site {site.enterprise.code}/{site.code} ({site.pk}) revision {site.configuration_revision}; '
-            f'visit {result["visit"].name} with {len(result["orders"])} planned discharge order(s): '
-            + ', '.join(str(order.pk) for order in result['orders'])
+            f'visit {result["visit"].name} ({result["visit"].status}) with '
+            f'{len(result["container_visits"])} pre-advised import container(s): '
+            + ', '.join(cv.container_number_id for cv in result['container_visits'])
+            # TCL-010b: no orders at reset; planning creates them at InOperation.
+            + '; discharge orders are created by the visit-in-operation step.'
         ))
         self.stdout.write(f'reset epoch {result["reset_epoch"] or "none (no stale-message fence)"}')
         self.stdout.write(f'canonical-sha256 {canonical_checksum(canonical_dump())}')

@@ -11,16 +11,26 @@ extends RefCounted
 ## Contract rev 9.1 §3.4 canonical RTG states:
 ## idle -> gantry_to_bay -> [waiting_for_tt] -> picking_from_tt -> holding
 ##      -> depositing_to_stack -> idle
-## - On command receipt: acknowledged + started (gantry_to_bay). No gantry
-##   travel is modelled, so gantry_to_bay takes zero sim time.
+## - On command receipt: acknowledged + started (gantry_to_bay). D-058: the
+##   RTG positions at the bay for `positioning_ms` of sim time from the command
+##   (realistic ~30 s, SimTiming.REALISTIC_RTG_POSITIONING_S; fast 0 s). It
+##   cannot pick while positioning, even if the TT is already at the lane.
+## - D-052 (closes E22): the RTG is "at the bay and ready to pick" when it
+##   leaves gantry_to_bay (_enter_ready_to_pick, `ready_to_pick_at_ms`). That
+##   is the only W4 start: not the command, not the TT's arrival, not the H2
+##   assign. With 0 s positioning (fast) it is the first step after the
+##   command; with D-058 positioning it is the first step at or after
+##   command time + positioning_ms. Only that moment moves; W4 still starts here.
 ## - The pick from the TT happens at the first step the TT is ready. If the TT
-##   is not ready yet, the RTG enters waiting_for_tt (waiting_for_handoff).
+##   is not ready yet, the RTG enters waiting_for_tt (waiting_for_handoff)
+##   and the W4 clock starts at ready_to_pick_at_ms.
 ## - Pick = handoff_completed (receiver), then the seeded hold (whole seconds,
 ##   Sim/Timing/RtgHold*) before the container is put down in the commanded
 ##   slot (or the dummy slot when OES sent none): container_dropped
 ##   (depositing_to_stack, slot echoed) + completed (idle).
 ## - D-013 analogue: after `tt_no_show_timeout_ms` of sim time in
-##   waiting_for_tt the RTG publishes handoff_timed_out once and the HandoffId
+##   waiting_for_tt the RTG publishes handoff_timed_out (the simulator repeats it
+##   every period while the RTG keeps waiting, D-059) and the HandoffId
 ##   is no longer valid here (a late TT gets no transfer). OES cancels.
 
 const IDLE := "idle"
@@ -43,13 +53,18 @@ static func start(
 	command: Dictionary,
 	hold_wait_ms: int,
 	slot: Dictionary,
-	tt_no_show_timeout_ms: int = DEFAULT_TT_NO_SHOW_TIMEOUT_MS
+	tt_no_show_timeout_ms: int = DEFAULT_TT_NO_SHOW_TIMEOUT_MS,
+	positioning_ms: int = 0,
+	now_ms: int = 0
 ) -> Array:
 	command["work_state"] = GANTRY_TO_BAY
+	# D-058: ready to pick no earlier than this sim time.
+	command["positioned_at_ms"] = now_ms + maxi(0, positioning_ms)
 	command["rtg_finished"] = false
 	command["hold_wait_ms"] = hold_wait_ms
 	command["tt_no_show_timeout_ms"] = tt_no_show_timeout_ms
 	command["waiting_since_ms"] = 0
+	command["ready_to_pick_at_ms"] = -1
 	command["wait_until_ms"] = 0
 	command["handoff_timed_out"] = false
 	command["counterpart_che_id_actual"] = 0
@@ -72,11 +87,17 @@ static func step(command: Dictionary, now_ms: int, ready_counterpart_id: int, em
 	for _guard in range(4):
 		var state = str(command.get("work_state", IDLE))
 		if state == GANTRY_TO_BAY:
+			if now_ms < int(command.get("positioned_at_ms", 0)):
+				# D-058: still positioning; no W4, no pick yet.
+				break
+			_enter_ready_to_pick(command, now_ms)
 			if ready_counterpart_id > 0:
+				# The TT is already at the lane: pick at once, no W4 opens.
 				events.append_array(_pick(command, now_ms, ready_counterpart_id))
 			else:
+				# W4 starts here (D-052): at the bay, ready to pick, no TT.
 				command["work_state"] = WAITING_FOR_TT
-				command["waiting_since_ms"] = now_ms
+				command["waiting_since_ms"] = int(command.ready_to_pick_at_ms)
 				events.append(_event("waiting_for_handoff"))
 		elif state == WAITING_FOR_TT and bool(command.get("handoff_timed_out", false)):
 			break
@@ -91,6 +112,13 @@ static func step(command: Dictionary, now_ms: int, ready_counterpart_id: int, em
 		else:
 			break
 	return events
+
+
+## D-052: the RTG is positioned at the bay of its TransferPositionId and ready
+## to pick. Records the sim time once per leg; W4 (if any) starts from it.
+static func _enter_ready_to_pick(command: Dictionary, now_ms: int):
+	if int(command.get("ready_to_pick_at_ms", -1)) < 0:
+		command["ready_to_pick_at_ms"] = now_ms
 
 
 ## True when this RTG is in waiting_for_tt and its no-show clock has expired.

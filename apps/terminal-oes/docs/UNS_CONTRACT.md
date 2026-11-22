@@ -147,12 +147,22 @@ file preserves active commands and recent CHE state across process restart.
   by exception (D-017). A late or duplicate report on a hand-off already in
   `exception` or `cancelled` is an INFORMATIONAL no-op; a report after
   `transferred` is a contract breach (WARNING, `handoff_not_pending`,
-  flagged on the hand-off) and does not undo the transfer. `reason` is an
-  extensible enum (OES `HandoffExceptionReason`, MiniTOS
-  `ExceptionReason`); MiniTOS rejects a missing reason (`reason_required`)
-  or an unknown one (`reason_unknown`). `detail` is optional free text. A
-  rejected result is stored with a reason and logged, never rolled back
-  into the DDATA.
+  flagged on the hand-off) and does not undo the transfer. A Godot `failed`
+  result with `Command/Result/Reason` `SIMULATOR_FAILURE` is a stall
+  (TCL-011 §8 d): it arrives on the live leg command id, even while the TT
+  holds an H2 `assign_handoff`. The stalled leg is marked failed. A pending
+  hand-off is closed as `handoff_exception`; otherwise OES emits
+  `leg_exception`. Both complete the order by exception and cancel remaining
+  live legs. The stall `detail` is `"no progress on <CHE> within <N> s"`
+  (N = this session's NBIRTH `Sim/Timing/LegStallTimeoutS`, else OES
+  `SIMULATOR_LEG_STALL_TIMEOUT_S`, else 600). Godot does not follow a stall
+  with `handoff_timed_out`; a late one is an idempotent no-op (or, after
+  transfer, the S-1 conflict path above). `reason` is an extensible enum
+  (OES `HandoffExceptionReason`, MiniTOS `ExceptionReason`); MiniTOS rejects
+  a missing reason (`reason_required`) or an unknown one (`reason_unknown`).
+  `detail` is optional free text for the consumer (the schema requires it on
+  both exception events). A rejected result is stored with a reason and
+  logged, never rolled back into the DDATA.
 - **Aborted hand-offs.** A failed or cancelled leg cancels its pending
   hand-off and the counterpart leg (cancel DCMD). Stopping, a runner
   stop/failure, NDEATH after stop, or NBIRTH of a new session closes the

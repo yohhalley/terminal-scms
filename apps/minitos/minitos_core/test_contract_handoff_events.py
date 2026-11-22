@@ -139,6 +139,37 @@ class GoldenHandoffEventConsumerTests(handoff_tests.HandoffExecutionTests):
         self.assertEqual(self.visit.exception_detail, '')
         self.assertEqual(Position.objects.get(container_visit=self.visit), self.planned)
 
+    def apply_leg_exception_golden(self):
+        failure_dir = REPO_ROOT / 'contracts' / 'golden' / 'scms.execution.event.v1' / 'failure'
+        name = '05_leg_exception_simulator_failure'
+        path = failure_dir / f'{name}.json'
+        if not path.exists():
+            self.skipTest(f'{path} is not available')
+        self.event('container_picked_up', che=self.qc, source='VESSEL')
+        self.event(
+            'container_transferred', leg=self.legs[1],
+            from_che_id=self.qc.pk, to_che_id=self.tt.pk,
+        )
+        self.event(
+            'container_transferred', leg=self.legs[2],
+            from_che_id=self.tt.pk, to_che_id=self.rtg.pk,
+        )
+        topic, raw = self.rebind(json.loads(path.read_text()))
+        apply_execution_message(topic, raw)
+
+    def test_golden_leg_exception_relocates_to_block01_and_closes_the_order(self):
+        """TCL-034b: MiniTOS treats leg_exception like handoff_exception (relocation)."""
+        self.apply_leg_exception_golden()
+        self.visit.refresh_from_db()
+        self.order.refresh_from_db()
+        self.legs[2].refresh_from_db()
+        self.assertEqual(self.visit.status, ContainerVisit.AT_YARD)
+        self.assertEqual(self.visit.exception_reason, 'SIMULATOR_FAILURE')
+        self.assertEqual(self.visit.exception_detail, 'no progress on RTG01 within 600 s')
+        self.assertEqual(Position.objects.get(container_visit=self.visit), self.planned)
+        self.assertEqual(self.order.status, order_execution.NO_SHOW_ORDER_STATUS)
+        self.assertEqual(self.legs[2].status, OrderLeg.FAILED)
+
 
 # Do not re-run TCL-003a's own tests from this module.
 for _name in dir(handoff_tests.HandoffExecutionTests):
