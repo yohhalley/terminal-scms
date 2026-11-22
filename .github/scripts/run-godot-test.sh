@@ -17,8 +17,15 @@
 set -uo pipefail
 limit="$1"
 script="$2"
-log="$(mktemp "${TMPDIR:-/tmp}/godot-test-log.XXXXXX")"
-XDG_DATA_HOME="$(mktemp -d "${TMPDIR:-/tmp}/godot-userdata.XXXXXX")"
+log="$(mktemp "${TMPDIR:-/tmp}/godot-test-log.XXXXXX")" && [ -n "$log" ] || {
+  echo "run-godot-test.sh: failed to create a temp log file (TMPDIR=${TMPDIR:-/tmp})" >&2
+  exit 1
+}
+XDG_DATA_HOME="$(mktemp -d "${TMPDIR:-/tmp}/godot-userdata.XXXXXX")" && [ -n "$XDG_DATA_HOME" ] && [ -d "$XDG_DATA_HOME" ] || {
+  echo "run-godot-test.sh: failed to create a throwaway XDG_DATA_HOME (TMPDIR=${TMPDIR:-/tmp})" >&2
+  rm -f "$log"
+  exit 1
+}
 export XDG_DATA_HOME
 cleanup() {
   rm -f "$log"
