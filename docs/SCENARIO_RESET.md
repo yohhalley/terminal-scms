@@ -211,9 +211,9 @@ reserved or an open-order target), so no floating containers are planned (Yael,
 5 Nov 2026). A missing lower position, or an empty one with no operational
 position, does not count as held. A fully stacked BLOCK01 refuses InOperation with
 `discharge_no_free_slot`; nothing spills into another block. The QA M2 reset
-epoch is not part of the seed (it is new on every reset). Until TCL-010b the
-seed pre-creates the order, with a slot from the scenario RNG above, and
-InOperation adopts it.
+epoch is not part of the seed (it is new on every reset). Since TCL-010b the
+seed creates no orders, so every discharge order and its slot come from this
+planning step; a rerun of InOperation adopts the existing orders.
 Event ids, wall-clock timestamps and the snapshot checksum (it embeds
 `generated_at`) still differ per run; the canonical dump masks exactly those.
 Outbox delivery bookkeeping (`attempts`, `last_error`, `published_at`) is also
