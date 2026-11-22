@@ -239,6 +239,13 @@ class ContainerVisit(models.Model):
     )
     last_updated = models.DateTimeField(auto_now=True)
 
+    def get_status_display(self):
+        # D-032: display-label only. The stored enum value stays Preadvised
+        # (no migration, no status change at vessel arrival).
+        if self.status == self.PREADVISED:
+            return 'advised, on inbound vessel'
+        return dict(self.STATUS_CHOICES).get(self.status, self.status)
+
     def __str__(self):
         if self.container_number_id:
             return self.container_number.container_number

@@ -104,11 +104,17 @@ class VesselSlotColumnMixin:
 
 @admin.register(ContainerVisit)
 class ContainerVisitAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
-    list_display = ('__str__', 'container_number_display', 'vessel_slot', 'status', 'category', 'ib_carrier')
+    # status_display (not the raw field) so the changelist uses the D-032
+    # label without changing STATUS_CHOICES or adding a migration.
+    list_display = ('__str__', 'container_number_display', 'vessel_slot', 'status_display', 'category', 'ib_carrier')
     list_select_related = ('container_number', 'ib_carrier')
 
     def vessel_slot_container_visit(self, obj):
         return obj
+
+    @admin.display(description='Status', ordering='status')
+    def status_display(self, obj):
+        return obj.get_status_display()
 
     @admin.display(description='Container number', ordering='container_number')
     def container_number_display(self, obj):
@@ -118,7 +124,7 @@ class ContainerVisitAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
 @admin.register(Order)
 class OrderAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
     list_display = ('__str__', 'order_type', 'status', 'container_number_display', 'vessel_slot', 'work_queue')
-    list_select_related = ('container_number__ib_carrier', 'work_queue')
+    list_select_related = ('container_number__container_number', 'container_number__ib_carrier', 'work_queue')
 
     def vessel_slot_container_visit(self, obj):
         return obj.container_number

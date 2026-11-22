@@ -258,6 +258,31 @@ class DischargeListAccessTests(DemoScreenTestCase):
             self.client.get(reverse('vessel_visit_discharge_list', args=[999999, self.visit.pk])).status_code, 404,
         )
 
+    def test_404_for_non_terminal_location_type(self):
+        # QA review of #54, N2: a location whose location_type is not TL/ID is 404.
+        vessel = Location.objects.create(
+            name='Not A Terminal', location_type=Location.VL,
+            latitude=41.35, longitude=2.17,
+            map_origin_latitude=41.35, map_origin_longitude=2.17,
+        )
+        visit = CarrierVisit.objects.create(name='DEMO-ON-VL', location=vessel)
+        self.assertEqual(self.client.get(list_url(vessel, visit)).status_code, 404)
+
+    def test_unknown_location_is_404_before_capability_403(self):
+        # QA review of #54, N1: get_object_or_404 runs first, so an unknown
+        # location is 404 even without the view capability; another terminal is 403.
+        capabilities = {'can_view_terminal': False, 'can_edit_terminal': False, 'can_manage_berth_plan': False}
+        other = make_location('Other Access Terminal')
+        foreign = CarrierVisit.objects.create(name='DEMO-FOREIGN-ACCESS', location=other)
+        with mock.patch('minitos_core.views.terminal_capabilities', return_value=capabilities):
+            self.assertEqual(
+                self.client.get(
+                    reverse('vessel_visit_discharge_list', args=[999999, self.visit.pk])
+                ).status_code,
+                404,
+            )
+            self.assertEqual(self.client.get(list_url(other, foreign)).status_code, 403)
+
 
 class PanelDischargeListTests(DemoScreenTestCase):
     def test_panel_links_to_the_discharge_list_and_shows_the_received_time(self):
@@ -265,6 +290,9 @@ class PanelDischargeListTests(DemoScreenTestCase):
         html = self.client.get(reverse('vessel_visit_panel', args=[self.location.pk])).content.decode()
         self.assertIn(f'href="{list_url(self.location, self.visit)}">Discharge list (1)</a>', html)
         self.assertEqual(field_values(html, 'discharge-list-received'), ['2026-11-01 06:00'])
+        # SME pre-merge #54 point 7: same display label as S2 (D-024: ata = berthed).
+        self.assertIn('<b>Berthed</b>', html)
+        self.assertNotIn('<b>ATA</b>', html)
 
     def test_panel_shows_a_dash_without_a_received_time(self):
         self.visit.discharge_list_received_at = None
@@ -365,6 +393,33 @@ class AdminChangelistTests(DemoScreenTestCase):
         self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
         self.assertIn('<td class="field-vessel_slot">—</td>', html)
         self.assertIn('<td class="field-container_number_display">MSCU1234571</td>', html)
+        self.assertIn('<td class="field-status_display">advised, on inbound vessel</td>', html)
+
+    def test_changelist_slot_queries_do_not_grow_with_rows(self):
+        # QA review of #54, N4: one bulk slot lookup for the page; must not
+        # fall back to vessel_slot_for per row as the changelist grows.
+        cv_url = reverse('admin:minitos_core_containervisit_changelist')
+        order_url = reverse('admin:minitos_core_order_changelist')
+        Order.objects.create(
+            order_type=Order.MOVE_IN, container_number=self.container_visit, from_position=self.slot,
+        )
+        self.client.get(cv_url)
+        self.client.get(order_url)
+        with CaptureQueriesContext(connection) as cv_one:
+            self.assertEqual(self.client.get(cv_url).status_code, 200)
+        with CaptureQueriesContext(connection) as order_one:
+            self.assertEqual(self.client.get(order_url).status_code, 200)
+        for serial in range(3):
+            number = f'MSCU{223456 + serial:06d}'
+            full = number + str(iso6346_check_digit(number))
+            visit = self.make_container(full)
+            stow = f'03506{82 + 2 * serial}'
+            slot = self.make_slot(visit, stow, code=f'DEMO-V1.EXTRA.{stow}')
+            Order.objects.create(order_type=Order.MOVE_IN, container_number=visit, from_position=slot)
+        with self.assertNumQueries(len(cv_one.captured_queries)):
+            self.client.get(cv_url)
+        with self.assertNumQueries(len(order_one.captured_queries)):
+            self.client.get(order_url)
 
     def test_order_changelist_shows_number_and_vessel_slot(self):
         Order.objects.create(order_type=Order.MOVE_IN, container_number=self.container_visit, from_position=self.slot)
@@ -434,7 +489,7 @@ class SeededDischargeListTests(TestCase):
         # QA review of #54, S5: exact values, one row.
         self.assertEqual(len(field_values(html, 'container-number')), 1)
         self.assertEqual(field_values(html, 'container-number'), ['MSCU1234566'])
-        self.assertEqual(field_values(html, 'status'), ['Preadvised'])
+        self.assertEqual(field_values(html, 'status'), ['advised, on inbound vessel'])
         self.assertEqual(field_values(html, 'order-status'), ['Planned'])
         self.assertEqual(field_values(html, 'planned-yard-slot'), [order.to_position.code])
         # S4: S2 shows the slot planning used as the order's origin, V001.0330682.
@@ -446,7 +501,20 @@ class SeededDischargeListTests(TestCase):
         html = self.client.get(reverse('admin:minitos_core_containervisit_changelist')).content.decode()
         self.assertIn('<td class="field-container_number_display">MSCU1234566</td>', html)
         self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
+        self.assertIn('<td class="field-status_display">advised, on inbound vessel</td>', html)
         self.visit.status = CarrierVisit.IN_OPERATION
         self.visit.save()
         html = self.client.get(reverse('admin:minitos_core_order_changelist')).content.decode()
         self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
+
+
+class D032StatusLabelTests(TestCase):
+    """D-032: display label only; the stored enum value stays Preadvised."""
+
+    def test_display_label_and_stored_value(self):
+        self.assertEqual(ContainerVisit.PREADVISED, 'Preadvised')
+        visit = ContainerVisit(status=ContainerVisit.PREADVISED)
+        self.assertEqual(visit.get_status_display(), 'advised, on inbound vessel')
+        visit.status = ContainerVisit.ARRIVED
+        self.assertEqual(visit.get_status_display(), 'Arrived')
+        self.assertEqual(visit.status, ContainerVisit.ARRIVED)
