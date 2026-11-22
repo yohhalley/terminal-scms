@@ -16,7 +16,7 @@ extends SceneTree
 # asserted against SimTiming.hold_range(profile, "qc"), not the simulator's
 # own readback, and not hard-coded 10..30 s. A shorter realistic-profile
 # variant uses the same rule.
-#   godot --headless --path clients/godot-open-terminal -s res://tests/requires-TCL-014a/test_acceptance_d012_d013.gd
+#   ../../.github/scripts/run-godot-test.sh 600 tests/requires-TCL-014a/test_acceptance_d012_d013.gd
 
 const HeadlessSimulator = preload("res://source/headless/HeadlessSimulator.gd")
 const SimClock = preload("res://source/headless/SimClock.gd")

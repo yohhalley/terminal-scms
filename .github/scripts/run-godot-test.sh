@@ -9,25 +9,20 @@
 # user://simulation_runtime_state.json or user://sparkplug_session.cfg.
 # Godot 4.2 on Linux resolves user:// to
 # $XDG_DATA_HOME/godot/app_userdata/<project name>/ when use_custom_user_dir
-# is off (the default; this project does not set it). If the caller already
-# set XDG_DATA_HOME, that value is kept; otherwise a throwaway directory is
-# created and removed on exit. CI runners already start with a clean HOME,
-# but a per-run dir also isolates suites in the same job.
+# is off (the default; this project does not set it). Always creates a
+# throwaway XDG_DATA_HOME and removes it on exit, even if the caller already
+# set one (a desktop session may export the shared ~/.local/share). CI
+# runners already start with a clean HOME, but a per-run dir also isolates
+# suites in the same job.
 set -uo pipefail
 limit="$1"
 script="$2"
-log="$(mktemp)"
-xdg_created=
-if [ -z "${XDG_DATA_HOME:-}" ]; then
-  XDG_DATA_HOME="$(mktemp -d "${TMPDIR:-/tmp}/godot-userdata.XXXXXX")"
-  export XDG_DATA_HOME
-  xdg_created="$XDG_DATA_HOME"
-fi
+log="$(mktemp "${TMPDIR:-/tmp}/godot-test-log.XXXXXX")"
+XDG_DATA_HOME="$(mktemp -d "${TMPDIR:-/tmp}/godot-userdata.XXXXXX")"
+export XDG_DATA_HOME
 cleanup() {
   rm -f "$log"
-  if [ -n "${xdg_created:-}" ]; then
-    rm -rf "$xdg_created"
-  fi
+  rm -rf "$XDG_DATA_HOME"
 }
 trap cleanup EXIT
 
