@@ -230,8 +230,12 @@ def _seed_layout(location, types):
     )
     sync_yard_grid(grid)
 
+    # TCL-010c: hand-off lane codes agreed in the TCL-011 design (SME finding 7):
+    # BLOCK01-TL and QC01-L1. Their positions are ``<lane>.NN`` (BLOCK01-TL.01,
+    # QC01-L1.01). Godot derives the served block from the ``-TL`` suffix.
+    # The codes stay literal here: the e2e layout parser reads this source.
     block_lane = TransferInterface.objects.create(
-        asset=block, code=f'{EXCEPTION_BLOCK_NAME}.TL', name=f'{EXCEPTION_BLOCK_NAME} truck transfer lane',
+        asset=block, code=f'{EXCEPTION_BLOCK_NAME}-TL', name=f'{EXCEPTION_BLOCK_NAME} truck transfer lane',
         storage_grid=grid, axis=road_axis, road_axis=road_axis, access_policy=policy,
         interface_kind=TransferInterface.VEHICLE_LANE, side=TransferInterface.LEFT,
         geometry=_line(location, (100, 166), (190, 166)),
@@ -241,7 +245,7 @@ def _seed_layout(location, types):
     _handoff_edges(layout, road_axis, block_lane, policy)
 
     qc_lane = TransferInterface.objects.create(
-        asset=quay, code='QC01.LANE', name='QC01 truck lane under the crane',
+        asset=quay, code='QC01-L1', name='QC01 truck lane under the crane',
         axis=quay_axis, road_axis=road_axis, access_policy=policy,
         interface_kind=TransferInterface.VEHICLE_LANE, side=TransferInterface.LEFT,
         geometry=_line(location, (140, 240), (160, 240)),

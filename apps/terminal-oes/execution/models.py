@@ -184,6 +184,11 @@ class SimulationSession(models.Model):
     rtg_no_show_timeout_s = models.PositiveIntegerField(blank=True, null=True)
     leg_stall_timeout_s = models.PositiveIntegerField(blank=True, null=True)
     timing_profile = models.CharField(max_length=32, blank=True, null=True)
+    # TCL-034e / D-053: Sim/Timing/NoShowTimeoutEnabled from NBIRTH (env
+    # SIMULATOR_NO_SHOW_TIMEOUT_ENABLED on the simulator). NULL = not reported,
+    # read as on (the default). The *_no_show_timeout_s values above are stored
+    # as reported either way; they are not marked inactive when this is False.
+    no_show_timeout_enabled = models.BooleanField(blank=True, null=True)
     stale_message_count = models.PositiveIntegerField(default=0)
     last_node_birth_at = models.DateTimeField(blank=True, null=True)
     last_node_death_at = models.DateTimeField(blank=True, null=True)

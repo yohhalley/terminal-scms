@@ -74,10 +74,10 @@ The exit code is 0 only when every step passes.
     parse `SimTiming.gd`. Slack is `2 × Sim/FixedStepMs` (else
     `SIMULATOR_FIXED_STEP_MS`, else `SimClock.DEFAULT_STEP_MS`).
   - Formulas (Δ is the configured tick; slack is 2 ticks, e.g. 0.2 s at 100 ms):
-    - 3d: `max(TT drive from that TT's start to QC01.LANE.01, QC hold max) + 2Δ`
+    - 3d: `max(TT drive from that TT's start to QC01-L1.01, QC hold max) + 2Δ`
       (the deposit is `max(hold end, TT ready)`; QC hold is the NBIRTH
       value, i.e. cycle − simulated motion after TCL-034e);
-    - 4: `max(TT drive QC01.LANE.01 -> BLOCK01.TL.01 + 2Δ, (RTG leg_started − H1) + 2Δ + RTG positioning) + RTG hold max`.
+    - 4: `max(TT drive QC01-L1.01 -> BLOCK01-TL.01 + 2Δ, (RTG leg_started − H1) + 2Δ + RTG positioning) + RTG hold max`.
       Both branches carry 2Δ: with one tick, a late RTG (arrival branch
       active) measured exactly at the bound.
       Positioning is the profile value (fast 0 s, realistic 30 s after
