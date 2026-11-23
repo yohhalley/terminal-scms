@@ -139,7 +139,7 @@ def _block_lane(visit, layout):
         position = _first_lane_position(interface)
         if position is not None:
             return interface, position
-    _fail(visit, CODE_NO_BLOCK_LANE, 'no yard block truck transfer lane in the current layout')
+    _fail(visit, CODE_NO_BLOCK_LANE, 'no yard block truck lane in the current layout')
 
 
 def _equipment_types(visit):

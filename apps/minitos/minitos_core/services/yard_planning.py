@@ -5,8 +5,8 @@ vessel visit goes InOperation. This module owns three things:
 
 Which block
     The MVP import block is ``BLOCK01`` (``IMPORT_BLOCK_NAME``, the same block
-    as the D-013 exception block). If the current layout has a truck transfer
-    lane serving a grid named BLOCK01, that block is used, even when it is
+    as the D-013 exception block). If the current layout has a truck lane
+    serving a grid named BLOCK01, that block is used, even when it is
     full; a full BLOCK01 is an error, never a silent spill into another block.
     Only a layout with no BLOCK01 lane at all keeps TCL-010's rule (first
     block lane by code). Note (``prefer_import_block``): when any BLOCK01 lane

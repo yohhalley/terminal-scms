@@ -150,7 +150,7 @@ for index, (code, x_m, y_m) in enumerate([
         asset=block,
         code=f'{code}.TL',
         defaults={
-            'name': f'{code} truck transfer lane',
+            'name': f'{code} truck lane',
             'storage_grid': grid,
             'axis': road_axis,
             'access_policy': tt_policy,

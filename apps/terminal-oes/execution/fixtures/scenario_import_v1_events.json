@@ -69,7 +69,7 @@
       "from_position": 124,
       "id": 1,
       "priority": 10,
-      "released_at": "2026-11-22T11:26:57.304408+00:00",
+      "released_at": "2026-11-23T08:48:05.659635+00:00",
       "status": "released",
       "to_position": 79
      }
@@ -79,8 +79,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "8fb371d4-8114-4c94-960a-845d53a43b3e",
-    "occurred_at": "2026-11-22T11:26:57.304408+00:00",
+    "event_id": "e5715ca4-9da2-45a8-afcd-8d0350058e42",
+    "occurred_at": "2026-11-23T08:48:05.659635+00:00",
     "schema": "scms.order.released.v1",
     "site": {
      "code": "test-terminal",
@@ -104,7 +104,7 @@
      "layout_version_id": 1,
      "lifecycle_status": "published",
      "simulation_enabled": true,
-     "snapshot_checksum": "54f2ddfdbb2a583d96bcde8b75746b3cb006670669ba1a2f67cc770d96160a54",
+     "snapshot_checksum": "74af54dfed47e8ccf770403fce646b9820f088782bd2ff5cbd2709f5d7df0df3",
      "snapshot_path": "/minitos_core/sites/2ae1455e-25a2-575c-88f3-d4b918b0def1/execution-snapshot/?revision=1",
      "snapshot_schema": "scms.site.execution-snapshot.v1"
     },
@@ -113,8 +113,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "69d3f957-f9bb-4af3-a74b-ca32dae7ac42",
-    "occurred_at": "2026-11-22T11:26:57.269038+00:00",
+    "event_id": "bb9eb57c-2641-4097-9309-ca77792b2fc4",
+    "occurred_at": "2026-11-23T08:48:05.624532+00:00",
     "schema": "scms.site.configuration.published.v1",
     "site": {
      "code": "test-terminal",
@@ -138,8 +138,8 @@
      "id": "17c0e9ed-55cb-5728-a164-6687bf17944c",
      "name": "Terminal Velocity"
     },
-    "event_id": "c64f6ee2-0123-4760-9296-1e5908c141b1",
-    "occurred_at": "2026-11-22T11:26:56.828185+00:00",
+    "event_id": "f4118e3e-5aa3-406e-ad4a-bccf3d934c8e",
+    "occurred_at": "2026-11-23T08:48:05.195508+00:00",
     "schema": "scms.site.created.v1",
     "site": {
      "code": "test-terminal",
@@ -153,7 +153,7 @@
   }
  },
  "snapshot_document": {
-  "checksum": "54f2ddfdbb2a583d96bcde8b75746b3cb006670669ba1a2f67cc770d96160a54",
+  "checksum": "74af54dfed47e8ccf770403fce646b9820f088782bd2ff5cbd2709f5d7df0df3",
   "layout_version": 1,
   "payload": {
    "enterprise": {
@@ -179,7 +179,7 @@
       "name": "QC01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-22T11:26:57.039675+00:00",
+      "state_updated_at": "2026-11-23T08:48:05.391362+00:00",
       "working": false
      },
      {
@@ -197,7 +197,7 @@
       "name": "TT01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-22T11:26:57.089871+00:00",
+      "state_updated_at": "2026-11-23T08:48:05.442933+00:00",
       "working": false
      },
      {
@@ -215,7 +215,7 @@
       "name": "TT02",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-22T11:26:57.130272+00:00",
+      "state_updated_at": "2026-11-23T08:48:05.484823+00:00",
       "working": false
      },
      {
@@ -233,7 +233,7 @@
       "name": "RTG01",
       "powered_on": true,
       "rotation": 0.0,
-      "state_updated_at": "2026-11-22T11:26:57.169725+00:00",
+      "state_updated_at": "2026-11-23T08:48:05.526652+00:00",
       "working": false
      }
     ],
@@ -1766,7 +1766,7 @@
      }
     ]
    },
-   "generated_at": "2026-11-22T11:26:57.243148+00:00",
+   "generated_at": "2026-11-23T08:48:05.598071+00:00",
    "layout": {
     "access_policies": [
      {
@@ -2051,7 +2051,7 @@
       "lane_index": 1,
       "latitude": 17.95620220337164,
       "longitude": -102.16138622961347,
-      "name": "BLOCK01 truck transfer lane L1 / P1",
+      "name": "BLOCK01 truck lane L1 / P1",
       "position_index": 1,
       "sequence": 1,
       "transfer_interface_id": 1
@@ -2065,7 +2065,7 @@
       "lane_index": 1,
       "latitude": 17.95620220337164,
       "longitude": -102.16096129355313,
-      "name": "BLOCK01 truck transfer lane L1 / P2",
+      "name": "BLOCK01 truck lane L1 / P2",
       "position_index": 2,
       "sequence": 2,
       "transfer_interface_id": 1
@@ -5022,7 +5022,7 @@
        "position": 1
       },
       "longitude": -102.16138622961347,
-      "name": "BLOCK01 truck transfer lane L1 / P1",
+      "name": "BLOCK01 truck lane L1 / P1",
       "position_kind": "transfer_position",
       "stack_position_id": null
      },
@@ -5043,7 +5043,7 @@
        "position": 2
       },
       "longitude": -102.16096129355313,
-      "name": "BLOCK01 truck transfer lane L1 / P2",
+      "name": "BLOCK01 truck lane L1 / P2",
       "position_kind": "transfer_position",
       "stack_position_id": null
      },
@@ -7678,7 +7678,7 @@
        "aggregate_kind": "interface_position",
        "interface_id": 1
       },
-      "name": "BLOCK01 truck transfer lane L1 / P1",
+      "name": "BLOCK01 truck lane L1 / P1",
       "node_kind": "operational",
       "operational_position_id": 121,
       "point": {
@@ -7701,7 +7701,7 @@
        "aggregate_kind": "interface_position",
        "interface_id": 1
       },
-      "name": "BLOCK01 truck transfer lane L1 / P2",
+      "name": "BLOCK01 truck lane L1 / P2",
       "node_kind": "operational",
       "operational_position_id": 122,
       "point": {
@@ -7894,7 +7894,7 @@
       "lateral_offset_m": 0.0,
       "longitudinal_offset_m": 0.0,
       "metadata": {},
-      "name": "BLOCK01 truck transfer lane",
+      "name": "BLOCK01 truck lane",
       "position_reference": "fixed",
       "position_spacing_m": 6.5,
       "reference_che_id": null,
@@ -7949,16 +7949,16 @@
     ],
     "version": {
      "based_on_id": null,
-     "created_at": "2026-11-22T11:26:56.830130+00:00",
+     "created_at": "2026-11-23T08:48:05.197506+00:00",
      "created_by_id": null,
      "id": 1,
      "is_current": true,
      "location_id": 1,
      "name": "Working layout",
      "notes": "",
-     "published_at": "2026-11-22T11:26:57.239253+00:00",
+     "published_at": "2026-11-23T08:48:05.594048+00:00",
      "status": "published",
-     "updated_at": "2026-11-22T11:26:57.239311+00:00",
+     "updated_at": "2026-11-23T08:48:05.594104+00:00",
      "version": 1
     }
    },
