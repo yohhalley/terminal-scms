@@ -59,6 +59,8 @@ x-oes: &oes
     SIMULATOR_START_EPOCH_MS: ${SIMULATOR_START_EPOCH_MS:-1792886400000}
     # TCL-034: realistic (D-039, the demo) unless .env says fast; OES forwards it.
     SIMULATOR_TIMING_PROFILE: ${SIMULATOR_TIMING_PROFILE:-realistic}
+    # TCL-034e / D-053: no-show timeout switch, on unless .env says false; OES forwards it.
+    SIMULATOR_NO_SHOW_TIMEOUT_ENABLED: ${SIMULATOR_NO_SHOW_TIMEOUT_ENABLED:-true}
     RUN_MIGRATIONS: "true"
   depends_on:
     oes-db:
@@ -205,6 +207,7 @@ services:
       OES_URL: http://terminal-oes:8000
       SIMULATOR_DEFAULT_SPEED_MPS: ${SIMULATOR_DEFAULT_SPEED_MPS:-4.0}
       SIMULATOR_TIMING_PROFILE: ${SIMULATOR_TIMING_PROFILE:-realistic}
+      SIMULATOR_NO_SHOW_TIMEOUT_ENABLED: ${SIMULATOR_NO_SHOW_TIMEOUT_ENABLED:-true}
     depends_on:
       hivemq:
         condition: service_healthy

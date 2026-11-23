@@ -436,7 +436,7 @@ class ImportV1ReleaseStepTests(TestCase):
         )
         # QC and RTG legs have no route edges (S2 will give them crane modes).
         self.assertEqual([leg['movement_mode'] for leg in legs], ['', 'road', ''])
-        self.assertEqual(legs[1]['destination_position_code'], 'BLOCK01.TL.01')
+        self.assertEqual(legs[1]['destination_position_code'], 'BLOCK01-TL.01')
         self.assertIn('order 1 is released', out.getvalue())
 
     def test_release_without_planned_orders_fails_clearly(self):
@@ -492,7 +492,7 @@ class ImportV1UnroutableSeedTests(TestCase):
         with mock.patch.object(
             import_v1, '_shortest_path', side_effect=ValidationError('No route found.'),
         ):
-            with self.assertRaisesMessage(ValidationError, 'no road route from QC01.LANE'):
+            with self.assertRaisesMessage(ValidationError, 'no road route from QC01-L1.01 to BLOCK01-TL.01'):
                 reset_scenario('import_v1')
         self.assertEqual(canonical_checksum(canonical_dump()), self.before)
 
