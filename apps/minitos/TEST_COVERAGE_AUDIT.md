@@ -206,6 +206,13 @@ Substantive automated coverage exists for:
   stacks without floating containers; a fully stacked BLOCK01 refuses
   InOperation with `discharge_no_free_slot`; two resets (also followed by
   planning) give an identical canonical dump.
+- TCL-010c lane codes (`test_tcl010c_lane_rename.py`, 4 tests): `import_v1`
+  seeds the hand-off lanes as `QC01-L1` and `BLOCK01-TL` (positions
+  `QC01-L1.01`, `BLOCK01-TL.01/.02`, `logical_address['interface']`) with no
+  old `QC01.LANE` / `BLOCK01.TL` code or name left. Data migration 0049 is run
+  with the historical models: backwards restores the old codes, forwards
+  returns the exact seeded canonical dump; it skips an interface whose asset
+  already has the target code, and is a no-op without the lanes.
 - Multi-Site release contracts: v2 Enterprise/Site topic identity is the
   default; opt-in legacy dual publication reuses the same event ID. The removed
   MiniTOS simulator account tests reflect that headless Godot now bootstraps only

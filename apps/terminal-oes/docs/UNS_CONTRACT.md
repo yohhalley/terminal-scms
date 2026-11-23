@@ -109,7 +109,11 @@ file preserves active commands and recent CHE state across process restart.
   `EQUIPMENT_COMMAND_TTL_SIM_SECONDS` (default 600). OES also sends it to the
   simulator as `SIMULATOR_COMMAND_TTL_S` in the claim environment. OES stores
   the NBIRTH timing params Godot ran with: `Sim/Timing/{Tt,Qc,Rtg}NoShowTimeoutS`,
-  `Sim/Timing/LegStallTimeoutS` and `Sim/Timing/Profile` (TCL-034).
+  `Sim/Timing/LegStallTimeoutS` and `Sim/Timing/Profile` (TCL-034), and the
+  no-show switch `Sim/Timing/NoShowTimeoutEnabled` (Boolean, TCL-034e / D-053;
+  env `SIMULATOR_NO_SHOW_TIMEOUT_ENABLED`, default `true`). A missing or
+  non-Boolean switch is stored as NULL and read as on. The timeout values are
+  stored as reported whether the switch is on or off.
 - **Paired dispatch (T-006).** A hand-off pair shares `Command/HandoffId` and
   carries `Command/HandoffRole` (`giver`/`receiver`), `Command/CounterpartCheId`
   and `Command/TransferPositionId`. A QC giver gets `Command/Type=qc_discharge`.
@@ -142,10 +146,21 @@ file preserves active commands and recent CHE state across process restart.
   `detail` `"no <QC|TT|RTG> within <N> s"`. The absent type is the
   counterpart of the waiter; N is that type's session timeout
   (`Sim/Timing/{Qc,Tt,Rtg}NoShowTimeoutS`, else the matching
-  `SIMULATOR_*_NO_SHOW_TIMEOUT_S`, else 300). Remaining live legs are
+  `SIMULATOR_*_NO_SHOW_TIMEOUT_S`, else 300). While the session's
+  `Sim/Timing/NoShowTimeoutEnabled` is `false`, Godot sends no
+  `handoff_timed_out` (the CHEs keep waiting and `waiting_for_handoff` is
+  still reported); if one arrives anyway, OES applies it as below and logs a
+  WARNING. The 10-minute leg stall (`Sim/Timing/LegStallTimeoutS`,
+  `failed`/`SIMULATOR_FAILURE`) does not depend on the switch and still ends
+  the job when it is off (D-060). Remaining live legs are
   cancelled (`Command/Reason` = the same code) and the order ends complete
-  by exception (D-017). A late or duplicate report on a hand-off already in
-  `exception` or `cancelled` is an INFORMATIONAL no-op; a report after
+  by exception (D-017). A CHE that keeps waiting re-reports
+  `handoff_timed_out` every timeout period (D-059), each with a new
+  `Command/Result/Id`; OES raises the exception once, and a late or
+  duplicate report on a hand-off already in `exception` or `cancelled` (same
+  side, any time later, also after the order has completed by exception) is
+  an INFORMATIONAL no-op: no second `handoff_exception`, no cancel, no
+  conflict flag. A report after
   `transferred` is a contract breach (WARNING, `handoff_not_pending`,
   flagged on the hand-off) and does not undo the transfer. A Godot `failed`
   result with `Command/Result/Reason` `SIMULATOR_FAILURE` is a stall

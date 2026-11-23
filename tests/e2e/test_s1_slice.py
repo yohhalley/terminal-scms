@@ -508,7 +508,7 @@ class D050BoundsTests(unittest.TestCase):
         self.assertAlmostEqual(b.bound_4_s(), 19.736150207170596 + 0.2 + 5.0, places=5)
         self.assertIn("RTG hold <= 5 s", b.formula_4())
         self.assertIn("RTG positioning 0 s", b.formula_4())
-        self.assertIn("QC01.LANE.01->BLOCK01.TL.01", b.formula_4())
+        self.assertIn("QC01-L1.01->BLOCK01-TL.01", b.formula_4())
         self.assertNotIn("gantry", b.formula_4())
         self.assertNotIn("≤", b.formula_4())
         self.assertNotIn("→", b.formula_4())

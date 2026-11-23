@@ -277,7 +277,7 @@ def assert_layout_speed_is_default(text: str) -> None:
 
 
 def parse_import_v1_layout(text: str) -> tuple[dict[str, Point], Point, Point]:
-    """CHE start points, QC01.LANE.01 and BLOCK01.TL.01 in local metres."""
+    """CHE start points, QC01-L1.01 and BLOCK01-TL.01 in local metres."""
     starts: dict[str, Point] = {}
     for match in re.finditer(
         r"\('((?:TT|QC|RTG)\d+)',\s*'[^']+',\s*([0-9.]+),\s*([0-9.]+),",
@@ -288,13 +288,13 @@ def parse_import_v1_layout(text: str) -> tuple[dict[str, Point], Point, Point]:
         raise ValueError(f"import_v1.py: missing TT start points, found {sorted(starts)}")
 
     qc = re.search(
-        r"code='QC01\.LANE'.*?_line\(\s*location,\s*\(([-\d.]+),\s*([-\d.]+)\)\s*,\s*\(([-\d.]+),\s*([-\d.]+)\)\s*\).*?"
+        r"code='QC01-L1'.*?_line\(\s*location,\s*\(([-\d.]+),\s*([-\d.]+)\)\s*,\s*\(([-\d.]+),\s*([-\d.]+)\)\s*\).*?"
         r"sync_interface_positions\(\s*qc_lane,\s*(\d+)\s*\)",
         text,
         re.S,
     )
     if not qc:
-        raise ValueError("import_v1.py: could not parse QC01.LANE geometry and position count")
+        raise ValueError("import_v1.py: could not parse QC01-L1 geometry and position count")
     qc_lane = point_along_line(
         Point(float(qc.group(1)), float(qc.group(2))),
         Point(float(qc.group(3)), float(qc.group(4))),
@@ -303,13 +303,13 @@ def parse_import_v1_layout(text: str) -> tuple[dict[str, Point], Point, Point]:
     )
 
     block = re.search(
-        r"code=f'\{EXCEPTION_BLOCK_NAME\}\.TL'.*?_line\(\s*location,\s*\(([-\d.]+),\s*([-\d.]+)\)\s*,\s*\(([-\d.]+),\s*([-\d.]+)\)\s*\).*?"
+        r"code=f'\{EXCEPTION_BLOCK_NAME\}-TL'.*?_line\(\s*location,\s*\(([-\d.]+),\s*([-\d.]+)\)\s*,\s*\(([-\d.]+),\s*([-\d.]+)\)\s*\).*?"
         r"sync_interface_positions\(\s*block_lane,\s*(\d+)\s*\)",
         text,
         re.S,
     )
     if not block:
-        raise ValueError("import_v1.py: could not parse BLOCK01.TL geometry and position count")
+        raise ValueError("import_v1.py: could not parse BLOCK01-TL geometry and position count")
     block_tl = point_along_line(
         Point(float(block.group(1)), float(block.group(2))),
         Point(float(block.group(3)), float(block.group(4))),
@@ -432,7 +432,7 @@ class PhysicalBounds:
             arrival_note = f"{arrival_s:g} s"
         position_term = arrival_s + self.tick_s + self.rtg_positioning_s
         return (
-            f"max(QC01.LANE.01->BLOCK01.TL.01 drive {dist:.1f} m / {self.speed_mps:g} m/s "
+            f"max(QC01-L1.01->BLOCK01-TL.01 drive {dist:.1f} m / {self.speed_mps:g} m/s "
             f"= {drive_s:.3f} s + {_fmt_ticks(TICKS_OF_SLACK, self.step_ms)}, "
             f"(RTG leg_started - H1) {arrival_note} + {_fmt_ticks(1, self.step_ms)} "
             f"+ RTG positioning {self.rtg_positioning_s:g} s = {position_term:.3f} s) "
@@ -459,8 +459,8 @@ class PhysicalBounds:
             (
                 f"D-050 bounds ({self.profile} profile, {self.speed_mps:g} m/s, "
                 f"time_scale {self.time_scale:g}, tick {self.step_ms} ms): "
-                f"QC01.LANE.01=({self.qc_lane.x:g},{self.qc_lane.y:g}), "
-                f"BLOCK01.TL.01=({self.block_tl.x:g},{self.block_tl.y:g}), "
+                f"QC01-L1.01=({self.qc_lane.x:g},{self.qc_lane.y:g}), "
+                f"BLOCK01-TL.01=({self.block_tl.x:g},{self.block_tl.y:g}), "
                 f"TT01=({tt01.x:g},{tt01.y:g}), TT02=({tt02.x:g},{tt02.y:g}); "
                 f"QC hold {self.qc_hold[0]:g}..{self.qc_hold[1]:g} s, "
                 f"RTG hold {self.rtg_hold[0]:g}..{self.rtg_hold[1]:g} s, "
