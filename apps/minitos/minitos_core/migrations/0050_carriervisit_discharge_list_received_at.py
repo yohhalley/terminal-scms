@@ -2,7 +2,7 @@
 # the time the terminal received the vessel call's discharge list. Nullable, no
 # data migration: existing visits show "—" until a value is set (the import_v1
 # seed sets one). Depends on the single minitos_core leaf on main
-# (0048_scenario_seed_singleton, #50).
+# (0049_tcl010c_lane_code_rename, #53).
 
 from django.db import migrations, models
 
@@ -10,7 +10,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('minitos_core', '0048_scenario_seed_singleton'),
+        ('minitos_core', '0049_tcl010c_lane_code_rename'),
     ]
 
     operations = [
