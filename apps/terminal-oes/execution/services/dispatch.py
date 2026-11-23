@@ -321,6 +321,55 @@ def _base_metrics(command, assignment, session, order, equipment, expires_at_sim
     ]
 
 
+def snapshot_lane_code(site, position_id):
+    """Code of the transfer lane (MiniTOS ``TransferInterface``) that holds
+    operational position ``position_id`` in the Site snapshot OES projected,
+    else None. Read from the position's ``logical_address['interface']``,
+    else through ``interface_positions`` -> ``transfer_interfaces``."""
+    if position_id is None:
+        return None
+    layout = (site.snapshot_payload or {}).get("layout") or {}
+    position = next(
+        (row for row in layout.get("operational_positions") or ()
+         if isinstance(row, dict) and row.get("id") == position_id),
+        None,
+    )
+    if position is None:
+        return None
+    address = position.get("logical_address")
+    code = str(address.get("interface") or "").strip() if isinstance(address, dict) else ""
+    if code:
+        return code
+    slot = next(
+        (row for row in layout.get("interface_positions") or ()
+         if isinstance(row, dict) and row.get("id") == position.get("interface_position_id")),
+        None,
+    )
+    if slot is None:
+        return None
+    lane = next(
+        (row for row in layout.get("transfer_interfaces") or ()
+         if isinstance(row, dict) and row.get("id") == slot.get("transfer_interface_id")),
+        None,
+    )
+    return (str(lane.get("code") or "").strip() or None) if lane else None
+
+
+def transfer_position_code(handoff):
+    """BL-53c: ``Command/TransferPositionCode`` of a hand-off: the code of the
+    transfer lane its transfer position belongs to (``QC01-L1`` for H1,
+    ``BLOCK01-TL`` for H2), from the Site snapshot the simulator was
+    bootstrapped with.
+
+    It is the lane code, not the position code (``BLOCK01-TL.01``), because
+    Godot reads it that way: ``lane_block_code`` takes the served block from a
+    code that *ends* in ``-TL`` (HeadlessSimulator.gd, and its unit test sends
+    ``BLOCK01-TL``). ``transfer_position_id`` (the giver leg's destination,
+    else the receiver leg's source) still names the exact position. None if
+    the snapshot does not know the position or its lane."""
+    return snapshot_lane_code(handoff.order.site, handoff.transfer_position_id)
+
+
 def _handoff_data(handoff, role, counterpart):
     if handoff is None:
         return {}
@@ -329,6 +378,7 @@ def _handoff_data(handoff, role, counterpart):
         "handoff_role": role,
         "counterpart_che_id": counterpart.tos_che_id,
         "transfer_position_id": handoff.transfer_position_id,
+        "transfer_position_code": transfer_position_code(handoff),
     }
 
 
@@ -345,6 +395,13 @@ def _handoff_metrics(data):
             "name": "Command/TransferPositionId",
             "type": "Int64",
             "value": data["transfer_position_id"],
+        })
+    if data.get("transfer_position_code"):
+        # BL-53c: Godot's RTG block check reads the lane code from here.
+        metrics.append({
+            "name": "Command/TransferPositionCode",
+            "type": "String",
+            "value": data["transfer_position_code"],
         })
     return metrics
 

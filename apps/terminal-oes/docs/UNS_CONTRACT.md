@@ -119,6 +119,20 @@ file preserves active commands and recent CHE state across process restart.
   and `Command/TransferPositionId`. A QC giver gets `Command/Type=qc_discharge`.
   The TT->RTG hand-off (H2) is dispatched only after H1 has transferred (Q18):
   the TT gets `assign_handoff` (giver) and the RTG `execute_order_leg` (receiver).
+  Both sides of each hand-off also carry `Command/TransferPositionCode`
+  (String, BL-53c). This is the code of the **transfer lane** that the transfer
+  position belongs to, not the position code: `QC01-L1` for H1 and
+  `BLOCK01-TL` for H2. `Command/TransferPositionId` still names the exact
+  position (e.g. `BLOCK01-TL.01`). OES reads the lane from the Site snapshot
+  (`logical_address.interface` of the operational position, else its interface
+  position's transfer interface). It omits the metric when the snapshot does not
+  know the position or its lane, and omits both metrics when there is no
+  transfer position. Godot's RTG block check (D-011) takes the block from a
+  code ending in `-TL` (`BLOCK01-TL` -> `BLOCK01`). It compares that block with
+  `block_code` on the bootstrap CHE. Since BL-53c the OES simulation bootstrap
+  sets `equipment_state[].block_code` for a CHE whose MiniTOS `current_asset`
+  is a yard block (import_v1: RTG01 -> `BLOCK01`), so the check runs. A
+  mismatch fails the RTG leg with `rtg_block_mismatch`.
 - **Destination.** Every leg DCMD with a destination carries
   `Command/DestinationPositionId` (Int64, MiniTOS operational position),
   `Command/DestinationPositionCode` (String, its readable code, e.g. a block
