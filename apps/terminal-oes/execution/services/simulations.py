@@ -33,7 +33,37 @@ def _equipment_snapshot(site):
         "is_in_maintenance", "latitude", "longitude", "rotation",
         "fuel_level", "energy_level", "speed_mps",
     ]
-    return list(EquipmentState.objects.filter(site=site).order_by("tos_che_id").values(*fields))
+    rows = list(EquipmentState.objects.filter(site=site).order_by("tos_che_id").values(*fields))
+    blocks = che_block_codes(site.snapshot_payload)
+    for row in rows:
+        block = blocks.get(row["tos_che_id"])
+        if block:
+            row["block_code"] = block
+    return rows
+
+
+def che_block_codes(snapshot):
+    """BL-53c: ``{tos_che_id: block code}`` for CHEs whose MiniTOS
+    ``current_asset`` is a yard block in the Site snapshot (RTG01 -> BLOCK01
+    in import_v1, D-011: one RTG per block). Godot's RTG block check
+    (``_rtg_block_code``) reads ``block_code`` from the bootstrap CHE and
+    compares it with the block of Command/TransferPositionCode; without it the
+    check is skipped."""
+    snapshot = snapshot or {}
+    assets = {
+        row.get("id"): row
+        for row in ((snapshot.get("layout") or {}).get("assets") or ())
+        if isinstance(row, dict)
+    }
+    blocks = {}
+    for che in (snapshot.get("equipment") or {}).get("ches") or ():
+        if not isinstance(che, dict):
+            continue
+        asset = assets.get(che.get("current_asset_id")) or {}
+        code = str(asset.get("code") or "").strip()
+        if asset.get("asset_kind") == "yard_block" and code:
+            blocks[che.get("id")] = code
+    return blocks
 
 
 def _frozen_projection(site):

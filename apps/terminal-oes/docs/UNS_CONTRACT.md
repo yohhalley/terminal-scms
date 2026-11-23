@@ -119,6 +119,35 @@ file preserves active commands and recent CHE state across process restart.
   and `Command/TransferPositionId`. A QC giver gets `Command/Type=qc_discharge`.
   The TT->RTG hand-off (H2) is dispatched only after H1 has transferred (Q18):
   the TT gets `assign_handoff` (giver) and the RTG `execute_order_leg` (receiver).
+  Both sides of each hand-off also carry `Command/TransferPositionCode`
+  (String, BL-53c). **Despite its name, this metric carries the transfer LANE
+  code, NOT the position code:**
+  - The value is the code of the transfer lane (MiniTOS `TransferInterface`)
+    that the hand-off position belongs to. It ends in `-L1` for a QC lane or
+    `-TL` for a block truck lane: `QC01-L1` for H1, `BLOCK01-TL` for H2.
+    It is never a position code such as `QC01-L1.01` or `BLOCK01-TL.01`.
+  - `Command/TransferPositionId` (Int64) names the exact position: the MiniTOS
+    operational position id, i.e. the giver leg's destination, else the
+    receiver leg's source. That position's own code (e.g. `BLOCK01-TL.01`) is
+    not sent in this metric.
+  - OES takes the lane from the Site snapshot: the operational position's
+    `logical_address.interface`, else its interface position's transfer
+    interface. `Command/TransferPositionCode` is **omitted** when the lane is
+    unknown (the snapshot does not have the position or its lane);
+    `Command/TransferPositionId` is still sent then. Both are omitted when the
+    hand-off has no transfer position.
+  - Why a lane code: Godot's RTG block check (D-011, `rtg_block_mismatch`)
+    takes the block from a code that ends in `-TL` (`BLOCK01-TL` ->
+    `BLOCK01`). A position code would switch the check off.
+- **Start-up (bootstrap) CHE field `block_code` (BL-53c).** The OES simulation
+  bootstrap (`scms.oes.simulation-bootstrap.v1`, fetched by Godot at session
+  start) sets `equipment_state[].block_code` (String) for a CHE whose MiniTOS
+  `current_asset` is a yard block, e.g. RTG01 -> `BLOCK01` in import_v1. It is
+  absent for every other CHE (QC, TT). Godot merges it into its CHE record and
+  uses it as the block the RTG serves in the RTG block check. The check compares
+  `block_code` with the block of `Command/TransferPositionCode` on the RTG's
+  receiver leg, and fails the leg with `rtg_block_mismatch` if they differ. It
+  is skipped if either is missing.
 - **Destination.** Every leg DCMD with a destination carries
   `Command/DestinationPositionId` (Int64, MiniTOS operational position),
   `Command/DestinationPositionCode` (String, its readable code, e.g. a block
