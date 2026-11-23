@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 
 from .models import (
     AccessPolicy, Battery, BerthSegment, BusinessProcess,
@@ -20,7 +20,6 @@ from .services.vessel_slots import vessel_slot_for, vessel_slots_for
 
 admin.site.register(ISOType)
 admin.site.register(ContainerOwner)
-admin.site.register(ContainerUnit)
 admin.site.register(Location)
 admin.site.register(Enterprise)
 admin.site.register(Site)
@@ -106,7 +105,10 @@ class VesselSlotColumnMixin:
 class ContainerVisitAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
     # status_display (not the raw field) so the changelist uses the D-032
     # label without changing STATUS_CHOICES or adding a migration.
-    list_display = ('__str__', 'container_number_display', 'vessel_slot', 'status_display', 'category', 'ib_carrier')
+    list_display = (
+        '__str__', 'container_number_display', 'check_digit', 'vessel_slot', 'status_display', 'category',
+        'ib_carrier',
+    )
     list_select_related = ('container_number', 'ib_carrier')
 
     def vessel_slot_container_visit(self, obj):
@@ -119,6 +121,11 @@ class ContainerVisitAdmin(VesselSlotColumnMixin, admin.ModelAdmin):
     @admin.display(description='Container number', ordering='container_number')
     def container_number_display(self, obj):
         return demo_display.format_container_number(obj.container_number_id)
+
+    @admin.display(description='Check digit')
+    def check_digit(self, obj):
+        # D-077: a wrong ISO 6346 check digit only warns, never rejects.
+        return demo_display.check_digit_warning(obj.container_number_id) or ''
 
 
 @admin.register(Order)
@@ -149,3 +156,20 @@ class CarrierVisitAdmin(admin.ModelAdmin):
     @admin.display(description='Discharge list received', ordering='discharge_list_received_at')
     def discharge_list_received(self, obj):
         return demo_display.format_local_time(obj.discharge_list_received_at, obj.location, with_zone=True)
+
+
+@admin.register(ContainerUnit)
+class ContainerUnitAdmin(admin.ModelAdmin):
+    """D-077: a wrong ISO 6346 check digit is a warning on entry, never a rejection."""
+
+    list_display = ('container_number', 'check_digit', 'iso_type', 'owner', 'is_in_terminal')
+
+    @admin.display(description='Check digit')
+    def check_digit(self, obj):
+        return demo_display.check_digit_warning(obj.container_number) or ''
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        warning = demo_display.check_digit_warning(obj.container_number)
+        if warning:
+            messages.warning(request, f'{obj.container_number}: {warning} Saved anyway.')

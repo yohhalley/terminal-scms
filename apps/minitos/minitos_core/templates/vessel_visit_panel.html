@@ -34,6 +34,7 @@
         .empty { padding: 60px 20px; color: var(--muted); text-align: center; }
         .order-note { margin-top: 12px; color: var(--muted); font-size: 12px; }
         .cargo a { color: var(--teal); font-weight: 650; }
+        .zone { color: var(--muted); font-size: 11px; }
         @media (max-width: 900px) {
             .visit-header { display: none; }
             .visit-row { grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -52,7 +53,7 @@
         <div class="heading">
             <div>
                 <h1>Vessel Visits</h1>
-                <p>{{ location.name }} · times in {{ timezone_name }}</p>
+                <p>{{ location.name }} · times in {{ timezone_name }} (terminal local time)</p>
             </div>
         </div>
         {% if panel_error %}<div class="notice error" role="alert">{{ panel_error }}</div>{% endif %}
@@ -67,17 +68,17 @@
                     </div>
                     <div><span class="status" data-status="{{ row.visit.status }}">{{ row.visit.get_status_display }}</span></div>
                     <div class="times">
-                        <div><b>ETA</b> {{ row.visit.eta|demo_time:location }}</div>
-                        <div><b>ETD</b> {{ row.visit.etd|demo_time:location }}</div>
+                        <div><b>ETA</b> {{ row.visit.eta|demo_time:location }} <span class="zone" data-field="timezone">{{ timezone_name }}</span></div>
+                        <div><b>ETD</b> {{ row.visit.etd|demo_time:location }} <span class="zone" data-field="timezone">{{ timezone_name }}</span></div>
                     </div>
                     <div class="times">
-                        <div><b>Berthed</b> <span data-field="ata">{{ row.visit.ata|demo_time:location }}</span></div>
-                        <div><b>ATD</b> <span data-field="atd">{{ row.visit.atd|demo_time:location }}</span></div>
+                        <div><b>Berthed</b> <span data-field="ata">{{ row.visit.ata|demo_time:location }}</span> <span class="zone" data-field="timezone">{{ timezone_name }}</span></div>
+                        <div><b>ATD</b> <span data-field="atd">{{ row.visit.atd|demo_time:location }}</span> <span class="zone" data-field="timezone">{{ timezone_name }}</span></div>
                     </div>
                     <div class="cargo">
                         <div>{{ row.visit.inbound_container_count }} inbound</div>
                         <div>{{ row.visit.discharge_order_count }} discharge order{{ row.visit.discharge_order_count|pluralize }}</div>
-                        <div>Discharge list received <span data-field="discharge-list-received">{{ row.visit.discharge_list_received_at|demo_time:location }}</span></div>
+                        <div>Discharge list received <span data-field="discharge-list-received">{{ row.visit.discharge_list_received_at|demo_time:location }}</span> <span class="zone" data-field="timezone">{{ timezone_name }}</span></div>
                         <div><a data-link="discharge-list" href="{% url 'vessel_visit_discharge_list' location.id row.visit.id %}">Discharge list ({{ row.visit.inbound_container_count }})</a></div>
                     </div>
                     <div class="actions">

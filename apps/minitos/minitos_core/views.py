@@ -284,9 +284,13 @@ def _discharge_list_rows(visit):
     for container_visit in container_visits:
         unit = container_visit.container_number
         order = container_visit.discharge_orders[0] if container_visit.discharge_orders else None
+        stow = slots.get(container_visit.pk)
         rows.append({
+            'sort_key': demo_display.stowage_sort_key(stow),
             'container_visit': container_visit,
             'container_number': demo_display.format_container_number(container_visit.container_number_id),
+            'check_digit_warning': demo_display.check_digit_warning(container_visit.container_number_id),
+            'weight': demo_display.format_weight(container_visit.weight),
             'iso_type': (unit.iso_type.iso_type if unit and unit.iso_type_id else demo_display.MISSING_VALUE),
             'vessel_slot': demo_display.format_vessel_slot(slots.get(container_visit.pk)),
             'has_vessel_slot': slots.get(container_visit.pk) is not None,
@@ -295,6 +299,9 @@ def _discharge_list_rows(visit):
             'order_status': order.get_status_display() if order else demo_display.MISSING_VALUE,
             'planned_yard_slot': order.to_position.code if order and order.to_position_id else demo_display.MISSING_VALUE,
         })
+    # D-077: stowage order (deck before hold, top tier first); the query's
+    # container-number order breaks ties (sorted() is stable).
+    rows.sort(key=lambda row: row['sort_key'])
     return rows
 
 

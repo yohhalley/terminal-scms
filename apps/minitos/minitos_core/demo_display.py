@@ -1,30 +1,31 @@
-"""Display placeholders for the demo screens (D-041, D-031; TCL-demo-screens).
+"""Display rules for the demo screens (D-041, D-031, D-032; decided by D-077).
 
-Each choice still waiting on Yael (board 7, card "Demo screens: container
-number, vessel slot, 'discharge list received' time") is one constant here, so
-an answer is a one-line change. Used by the discharge list page, the vessel
-visit panel and the Django admin changelists.
+Used by the discharge list page (S2), the vessel visit panel and the Django
+admin changelists (S3). Yael answered the board-7 demo-screens card on
+22 Nov 2026 (D-077); each rule is still one constant or function here.
 
-- CONTAINER_NUMBER_FORMAT (card Q2): 'plain' -> ``MSCU1234566``;
-  'spaced' -> ``MSCU 123456 6`` (check digit set apart).
-- VESSEL_SLOT_FORMAT (card Q7): 'compact' -> ``0330682`` (BBBRRTT);
-  'spelled' -> ``Bay 033 · Row 06 · Tier 82``.
-- TIME_DISPLAY_ZONE (card Q5): 'terminal' -> the terminal's
-  ``Location.timezone`` (the Test Terminal is America/Mexico_City), the same
-  as the vessel visit panel; 'UTC' -> UTC. Screens always name the zone.
-- MISSING_VALUE (card Q6): what a missing container number, vessel slot or
-  time shows (every time cell on S2, the vessel visit panel and the admin).
-- TIME_FORMAT: the ``strftime`` format of every time on S2, the vessel visit
-  panel (ETA/ETD/ATA/ATD and the received time) and the admin columns. Templates
-  use it through ``{{ value|demo_time:location }}`` (templatetags/demo_display_tags.py).
+- CONTAINER_NUMBER_FORMAT: 'plain', one string (``MSCU1234566``). D-077 Q5.
+- VESSEL_SLOT_FORMAT: 'compact' bay-row-tier, the stored ISO 9711 BBBRRTT
+  (``0330682`` = Bay 033 · Row 06 · Tier 82, never "Bay 03 / Row 30"). D-077 Q5
+  says a compact bay-row-tier view is good and notes that in practice the bay
+  usually needs only 2 digits (6 characters). We keep the 7-digit code as
+  stored; dropping the leading bay digit is an open question for Yael.
+- TIME_DISPLAY_ZONE: 'terminal', the terminal's ``Location.timezone``, and
+  every displayed time is labelled with the zone (D-077 Q4: "show terminal
+  local time (ensure this is clear at all times)").
+- MISSING_VALUE: ``-`` for missing info (D-077: 'default "-" for missing info').
+- TIME_FORMAT: the ``strftime`` format of every time on S2, the panel and the
+  admin. Templates use ``{{ value|demo_time:location }}`` and the zone label.
+- stowage_sort_key: discharge list rows in stowage order, deck before hold,
+  top tier first (D-077, agreeing with the SME). See the function.
+- check_digit_warning: a wrong ISO 6346 check digit only warns, never
+  rejects (D-077).
+- format_weight: weight in tonnes; seeded defaults are in
+  ``scenarios/import_v1.py`` (D-077 Q6).
 
-The compact slot ``0330682`` reads Bay 033 · Row 06 · Tier 82 (3-digit bay,
-2-digit row, 2-digit tier), never "Bay 03 / Row 30".
-
-The other two placeholders are not display choices: one received time per
-vessel call is the model choice (``CarrierVisit.discharge_list_received_at``,
-card Q4), and the seeded 48 h lead before berthing is
-``scenarios/import_v1.py::DISCHARGE_LIST_LEAD_TIME`` (card Q3 / spec Q27).
+One received time per vessel call (``CarrierVisit.discharge_list_received_at``,
+D-077 Q3) and the seeded 48 h lead (``import_v1.DISCHARGE_LIST_LEAD_TIME``,
+D-077 Q2) are not display choices.
 """
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -32,7 +33,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 CONTAINER_NUMBER_FORMAT = 'plain'
 VESSEL_SLOT_FORMAT = 'compact'
 TIME_DISPLAY_ZONE = 'terminal'
-MISSING_VALUE = '—'
+MISSING_VALUE = '-'
 TIME_FORMAT = '%Y-%m-%d %H:%M'
 
 
@@ -70,3 +71,48 @@ def format_local_time(value, location, *, with_zone=False):
         zone_name, zone = 'UTC', ZoneInfo('UTC')
     text = value.astimezone(zone).strftime(TIME_FORMAT)
     return f'{text} {zone_name}' if with_zone else text
+
+
+# A tier of 80 or more is on deck (ISO 9711: deck tiers from 82, hold from 02).
+DECK_TIER_FROM = 80
+
+
+def stowage_sort_key(stow):
+    """Sort key for a BBBRRTT stow code: stowage order (D-077).
+
+    Per bay (ascending), deck before hold, top tier first; then row ascending
+    as a stable tie-break (D-077 doesn't set the row order; D-079's "row
+    nearest the quay first" is planning's rule and needs the quay side).
+    Rows without a real slot come last.
+    """
+    if not stow or len(stow) != 7 or not stow.isdigit():
+        return (1, 0, 0, 0, 0)
+    bay, row, tier = int(stow[:3]), int(stow[3:5]), int(stow[5:])
+    return (0, bay, 0 if tier >= DECK_TIER_FROM else 1, -tier, row)
+
+
+def check_digit_warning(number):
+    """A warning text if ``number``'s ISO 6346 check digit looks wrong, else ``None``.
+
+    D-077: "wrong ISO check digit should not be a problem for now. If anything
+    I would add a warning that the digit might be wrong but not reject it."
+    Nothing calls this to reject a save. A number that isn't 4 letters plus 7
+    digits can't be checked and gets the same warning.
+    """
+    if not number:
+        return None
+    from .scenarios.base import iso6346_check_digit
+
+    number = str(number).upper()
+    if len(number) != 11 or not number[:4].isalpha() or not number[4:].isdigit():
+        return 'ISO 6346 check digit may be wrong (not 4 letters and 7 digits).'
+    if str(iso6346_check_digit(number[:10])) != number[10]:
+        return f'ISO 6346 check digit may be wrong (expected {iso6346_check_digit(number[:10])}).'
+    return None
+
+
+def format_weight(weight_kg):
+    """``18.4 t`` from kilograms; 0 or empty is missing (the field defaults to 0)."""
+    if not weight_kg:
+        return MISSING_VALUE
+    return f'{weight_kg / 1000:.1f} t'

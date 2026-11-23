@@ -73,9 +73,27 @@ SCENARIO_EPOCH = datetime.fromtimestamp(SIMULATOR_START_EPOCH_MS / 1000, tz=dt_t
 # even bays denote 40' slots (SME review of #26, BL-26b).
 VESSEL_BAY, VESSEL_ROW, VESSEL_FIRST_TIER = 33, 6, 82
 # D-031 demo screens: the seeded "discharge list received" time is this lead
-# before the vessel berths (``ata`` = SCENARIO_EPOCH), one time per vessel call.
-# Placeholder until Yael answers board-7 card Q3 / spec Q27 (SME: 24-72 h).
+# before berthing (the seed's ``eta`` = ``ata`` = SCENARIO_EPOCH), one time per
+# vessel call. 48 h: board-7 card Q2/Q3, answered "OK" by Yael (D-077).
 DISCHARGE_LIST_LEAD_TIME = timedelta(hours=48)
+# D-077 Q6 default weights (kg): an empty box weighs its tare, roughly 2 t for
+# a 20' and 4 t for a 40'; a full (FCL) box gets a seeded random gross weight
+# of 10-25 t "for now". D-077 names no 45' tare; it uses the 40' value here.
+EMPTY_WEIGHT_KG = {ISOType.L20: 2000, ISOType.L40: 4000, ISOType.L45: 4000}
+FCL_WEIGHT_KG_RANGE = (10000, 25000)
+WEIGHT_STEP_KG = 100
+
+
+def default_weight_kg(length, *, full, rng):
+    """D-077 default weight for a seeded box: tare if empty, else 10-25 t from ``rng``.
+
+    An empty box draws nothing from ``rng``, so mixing empties in doesn't
+    shift the other seeded values.
+    """
+    if not full:
+        return EMPTY_WEIGHT_KG[length]
+    low, high = FCL_WEIGHT_KG_RANGE
+    return rng.randrange(low, high + 1, WEIGHT_STEP_KG)
 
 
 def _coordinate(location, x_m, y_m):
@@ -350,7 +368,8 @@ def _seed_discharge(location, types, site_layout, rng, containers):
         serial + 1 if serial >= FIRST_SERIAL else serial
         for serial in rng.sample(range(100000, 999999), containers - 1)
     ]
-    weights = [rng.randrange(8000, 28001, 100) for _ in range(containers)]
+    # D-077 Q6: the seeded imports are full (FCL) 20' boxes.
+    weights = [default_weight_kg(iso_type.length, full=True, rng=rng) for _ in range(containers)]
 
     container_visits = []
     for index in range(containers):

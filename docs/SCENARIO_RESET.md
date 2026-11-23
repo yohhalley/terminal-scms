@@ -183,14 +183,17 @@ Demo order: `make scenario-reset` -> `make scenario-step STEP=visit-in-operation
 
 Determinism: auto ids restart at 1, Enterprise/Site ids are uuid5 under the
 fixed namespace `7c0e5b1a-6d1e-4c55-9a2b-0000000000c6`, and extra container
-serials and weights come from `random.Random(SEED)` (default `1`). Yard slots
+serials and weights come from `random.Random(SEED)` (default `1`). Weights
+follow D-077: the seeded full (FCL) imports draw 10–25 t in 100 kg steps; an
+empty box would get its tare (about 2 t for a 20', 4 t for a 40') without an RNG
+draw (`import_v1.default_weight_kg`). Yard slots
 are drawn at InOperation by discharge planning with its own seeded RNG, so the
 same visit gets the same slots on a rerun (D-016).
 
 Seed and clock (spec K7): `SEED` defaults to 1, the same as `SIMULATOR_SEED`, and
 `make scenario-reset SEED=n` sets both the MiniTOS scenario RNG and the simulator
 seed (OES forwards `SIMULATOR_SEED` to the runner). Seeded business times (visit
-ETA/ATA/ETD, and the D-031 "discharge list received" time, 48 h before ATA:
+ETA/ATA/ETD, and the D-031 "discharge list received" time, 48 h before berthing per D-077:
 `import_v1.DISCHARGE_LIST_LEAD_TIME`) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
 1792886400000, 2026-10-25 00:00 UTC, so the vessel's ATA is sim time 0. A plain
 `make up` recreates `terminal-oes` with `.env`'s `SIMULATOR_SEED` (default 1);

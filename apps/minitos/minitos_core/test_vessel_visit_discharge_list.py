@@ -147,8 +147,9 @@ class DischargeListPageTests(DemoScreenTestCase):
         response = self.client.get(list_url(self.location, self.visit))
         self.assertEqual(response.status_code, 200)
         html = response.content.decode()
-        self.assertEqual(field_values(html, 'container-number'), ['MSCU1234566', 'MSCU1234571'])
-        self.assertEqual(field_values(html, 'vessel-slot'), ['0330682', '0330684'])
+        # D-077 stowage order: tier 84 above tier 82 comes first.
+        self.assertEqual(field_values(html, 'container-number'), ['MSCU1234571', 'MSCU1234566'])
+        self.assertEqual(field_values(html, 'vessel-slot'), ['0330684', '0330682'])
         self.assertEqual(field_values(html, 'iso-type'), ['22G1', '22G1'])
         self.assertEqual(field_values(html, 'container-count'), ['2'])
         self.assertIn('TV DEMO · 007I', html)
@@ -158,7 +159,7 @@ class DischargeListPageTests(DemoScreenTestCase):
         self.location.save()
         html = self.client.get(list_url(self.location, self.visit)).content.decode()
         self.assertEqual(field_values(html, 'discharge-list-received'), ['2026-11-01 00:00'])
-        self.assertEqual(field_values(html, 'timezone'), ['America/Mexico_City'])
+        self.assertEqual(field_values(html, 'timezone'), ['America/Mexico_City'] * 2)
         self.assertEqual(field_values(html, 'ata'), ['2026-11-03 00:00'])
         self.assertIn('times in America/Mexico_City', html)
         self.assertIn('Berthed', html)
@@ -173,12 +174,12 @@ class DischargeListPageTests(DemoScreenTestCase):
         response = self.client.get(list_url(self.location, self.visit))
         self.assertEqual(response.status_code, 200)
         html = response.content.decode()
-        self.assertEqual(field_values(html, 'discharge-list-received'), ['—'])
-        self.assertEqual(field_values(html, 'ata'), ['—'])
-        self.assertEqual(field_values(html, 'vessel-slot'), ['—', '—'])
-        self.assertEqual(field_values(html, 'container-number')[-1], '—')
+        self.assertEqual(field_values(html, 'discharge-list-received'), ['-'])
+        self.assertEqual(field_values(html, 'ata'), ['-'])
+        self.assertEqual(field_values(html, 'vessel-slot'), ['-', '-'])
+        self.assertEqual(field_values(html, 'container-number')[-1], '-')
         self.assertIn('title="no stowage slot"', html)
-        self.assertEqual(field_values(html, 'order-status'), ['—', '—'])
+        self.assertEqual(field_values(html, 'order-status'), ['-', '-'])
 
     def test_discharge_order_and_yard_slot_are_shown(self):
         container_visit = self.make_container('MSCU1234566')
@@ -298,7 +299,7 @@ class PanelDischargeListTests(DemoScreenTestCase):
         self.visit.discharge_list_received_at = None
         self.visit.save()
         html = self.client.get(reverse('vessel_visit_panel', args=[self.location.pk])).content.decode()
-        self.assertEqual(field_values(html, 'discharge-list-received'), ['—'])
+        self.assertEqual(field_values(html, 'discharge-list-received'), ['-'])
 
     def test_panel_received_time_in_a_non_utc_terminal(self):
         self.location.timezone = 'America/Mexico_City'
@@ -314,8 +315,8 @@ class PlaceholderConstantTests(TestCase):
     def test_defaults(self):
         self.assertEqual(demo_display.format_container_number('MSCU1234566'), 'MSCU1234566')
         self.assertEqual(demo_display.format_vessel_slot('0330682'), '0330682')
-        self.assertEqual(demo_display.format_vessel_slot(None), '—')
-        self.assertEqual(demo_display.format_container_number(None), '—')
+        self.assertEqual(demo_display.format_vessel_slot(None), '-')
+        self.assertEqual(demo_display.format_container_number(None), '-')
         self.assertEqual(import_v1.DISCHARGE_LIST_LEAD_TIME, timedelta(hours=48))
 
     def test_alternatives(self):
@@ -372,7 +373,7 @@ class PlaceholderSwitchRenderTests(DemoScreenTestCase):
         self.assertEqual(field_values(panel, 'discharge-list-received'), ['n/a'])
         self.assertIn('<b>ETA</b> n/a', panel)
         self.assertIn('<b>ETD</b> n/a', panel)
-        self.assertNotIn('—', s2 + panel)
+        self.assertIsNone(re.search(r'>\s*-\s*<', s2 + panel))
 
 
 class AdminChangelistTests(DemoScreenTestCase):
@@ -391,7 +392,7 @@ class AdminChangelistTests(DemoScreenTestCase):
         self.assertIn('Container number', html)
         self.assertIn('Vessel slot', html)
         self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
-        self.assertIn('<td class="field-vessel_slot">—</td>', html)
+        self.assertIn('<td class="field-vessel_slot">-</td>', html)
         self.assertIn('<td class="field-container_number_display">MSCU1234571</td>', html)
         self.assertIn('<td class="field-status_display">advised, on inbound vessel</td>', html)
 
@@ -427,7 +428,7 @@ class AdminChangelistTests(DemoScreenTestCase):
         html = self.client.get(reverse('admin:minitos_core_order_changelist')).content.decode()
         self.assertIn('<td class="field-container_number_display">MSCU1234566</td>', html)
         self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
-        self.assertIn('<td class="field-container_number_display">—</td>', html)
+        self.assertIn('<td class="field-container_number_display">-</td>', html)
 
     def test_carrier_visit_changelist_shows_the_received_time_with_zone(self):
         self.location.timezone = 'America/Mexico_City'
@@ -443,7 +444,7 @@ class AdminChangelistTests(DemoScreenTestCase):
         self.visit.ata = None
         self.visit.save()
         html = self.client.get(reverse('admin:minitos_core_carriervisit_changelist')).content.decode()
-        self.assertIn('<td class="field-ata_display">—</td>', html)
+        self.assertIn('<td class="field-ata_display">-</td>', html)
 
     def test_change_forms_still_render(self):
         for name, obj in (('containervisit', self.container_visit), ('carriervisit', self.visit)):
@@ -476,9 +477,9 @@ class SeededDischargeListTests(TestCase):
         self.assertEqual(field_values(html, 'vessel-slot'), ['0330682'])
         # 2026-10-25 00:00 UTC - 48 h, in America/Mexico_City (UTC-6).
         self.assertEqual(field_values(html, 'discharge-list-received'), ['2026-10-22 18:00'])
-        self.assertEqual(field_values(html, 'timezone'), ['America/Mexico_City'])
-        self.assertEqual(field_values(html, 'order-status'), ['—'])
-        self.assertEqual(field_values(html, 'planned-yard-slot'), ['—'])
+        self.assertEqual(field_values(html, 'timezone'), ['America/Mexico_City'] * 2)
+        self.assertEqual(field_values(html, 'order-status'), ['-'])
+        self.assertEqual(field_values(html, 'planned-yard-slot'), ['-'])
         seeded_slot = OperationalPosition.objects.get(position_kind=OperationalPosition.VESSEL_SLOT)
         self.assertEqual(seeded_slot.code, 'V001.0330682')
         self.assertEqual(seeded_slot.logical_address['stow'], '0330682')
@@ -518,3 +519,158 @@ class D032StatusLabelTests(TestCase):
         visit.status = ContainerVisit.ARRIVED
         self.assertEqual(visit.get_status_display(), 'Arrived')
         self.assertEqual(visit.status, ContainerVisit.ARRIVED)
+
+
+class D077DecisionTests(DemoScreenTestCase):
+    """D-077 (Yael's answers on the demo-screens card), one test per rule."""
+
+    def s2(self):
+        return self.client.get(list_url(self.location, self.visit)).content.decode()
+
+    def test_times_are_terminal_local_and_every_time_is_labelled_with_the_zone(self):
+        self.location.timezone = 'America/Mexico_City'
+        self.location.save()
+        self.visit.eta = datetime(2026, 11, 3, 5, 0, tzinfo=UTC)
+        self.visit.etd = self.visit.atd = None
+        self.visit.save()
+        s2 = self.s2()
+        self.assertEqual(field_values(s2, 'discharge-list-received'), ['2026-11-01 00:00'])
+        self.assertEqual(field_values(s2, 'timezone'), ['America/Mexico_City', 'America/Mexico_City'])
+        self.assertIn('times in America/Mexico_City (terminal local time)', s2)
+        panel = self.client.get(reverse('vessel_visit_panel', args=[self.location.pk])).content.decode()
+        # ETA, ETD, Berthed, ATD and the received time each carry the zone.
+        self.assertEqual(field_values(panel, 'timezone'), ['America/Mexico_City'] * 5)
+        self.assertIn('<b>ETA</b> 2026-11-02 23:00 <span class="zone" data-field="timezone">America/Mexico_City</span>', panel)
+        self.assertIn('times in America/Mexico_City (terminal local time)', panel)
+
+    def test_container_number_is_one_string(self):
+        self.make_container('MSCU1234566')
+        self.assertEqual(demo_display.CONTAINER_NUMBER_FORMAT, 'plain')
+        self.assertEqual(field_values(self.s2(), 'container-number'), ['MSCU1234566'])
+
+    def test_vessel_slot_is_compact_bay_row_tier(self):
+        self.make_slot(self.make_container('MSCU1234566'), '0330682')
+        self.assertEqual(demo_display.VESSEL_SLOT_FORMAT, 'compact')
+        self.assertEqual(field_values(self.s2(), 'vessel-slot'), ['0330682'])
+
+    def test_missing_info_is_a_hyphen(self):
+        self.assertEqual(demo_display.MISSING_VALUE, '-')
+        self.visit.discharge_list_received_at = None
+        self.visit.save()
+        ContainerVisit.objects.create(ib_carrier=self.visit, location=self.location)
+        html = self.s2()
+        for field in ('discharge-list-received', 'container-number', 'vessel-slot', 'weight', 'order-status'):
+            self.assertEqual(field_values(html, field), ['-'], field)
+        self.assertNotIn('—', html)
+
+    def test_weight_column_in_tonnes(self):
+        self.make_container('MSCU1234566', weight=18400)
+        self.assertEqual(field_values(self.s2(), 'weight'), ['18.4 t'])
+        self.assertIn('<th>Weight</th>', self.s2())
+
+    def test_rows_in_stowage_order_deck_before_hold_top_tier_first(self):
+        cases = [
+            ('MSCU1234566', '0350684'),  # bay 35 deck
+            ('MSCU1234571', '0330204'),  # bay 33 hold tier 04
+            ('MSCU1234587', '0330682'),  # bay 33 deck tier 82
+            ('MSCU1234592', '0330686'),  # bay 33 deck tier 86
+            ('MSCU1234608', '0330206'),  # bay 33 hold tier 06
+            ('MSCU1234613', None),       # no slot: last
+        ]
+        for number, stow in cases:
+            visit = self.make_container(number)
+            if stow:
+                self.make_slot(visit, stow)
+        self.assertEqual(
+            field_values(self.s2(), 'vessel-slot'), ['0330686', '0330682', '0330206', '0330204', '0350684', '-'],
+        )
+
+    def test_stowage_sort_key(self):
+        key = demo_display.stowage_sort_key
+        self.assertLess(key('0330682'), key('0330206'))  # deck before hold
+        self.assertLess(key('0330684'), key('0330682'))  # top tier first
+        self.assertLess(key('0330282'), key('0330482'))  # then row
+        self.assertLess(key('0350206'), key(None))
+        self.assertEqual(key('bad'), key(None))
+
+    def test_wrong_check_digit_warns_on_s2_but_is_shown(self):
+        self.make_container('MSCU1234565')  # valid digit is 6
+        self.make_container('MSCU1234566')
+        response = self.client.get(list_url(self.location, self.visit))
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        self.assertEqual(field_values(html, 'container-number'), ['MSCU1234565', 'MSCU1234566'])
+        self.assertEqual(
+            field_values(html, 'check-digit-warning'), ['ISO 6346 check digit may be wrong (expected 6).'],
+        )
+
+    def test_check_digit_warning_helper(self):
+        warning = demo_display.check_digit_warning
+        self.assertIsNone(warning('MSCU1234566'))
+        self.assertIsNone(warning(None))
+        self.assertIn('expected 6', warning('MSCU1234565'))
+        self.assertIn('not 4 letters and 7 digits', warning('MSCU12345'))
+
+    def test_admin_entry_with_a_wrong_check_digit_saves_with_a_warning(self):
+        admin_user = User.objects.create_superuser(username='d077-admin', password='test-password')
+        self.client.force_login(admin_user)
+        response = self.client.post(reverse('admin:minitos_core_containerunit_add'), {
+            'container_number': 'MSCU7654320', 'owner': self.owner.pk, 'iso_type': self.iso_type.pk,
+            'is_active': 'on',
+        }, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(ContainerUnit.objects.filter(pk='MSCU7654320').exists())
+        messages = [str(message) for message in response.context['messages']]
+        self.assertTrue(any('check digit may be wrong' in message for message in messages), messages)
+        changelist = self.client.get(reverse('admin:minitos_core_containerunit_changelist')).content.decode()
+        self.assertIn('check digit may be wrong', changelist)
+
+    def test_admin_entry_with_a_valid_check_digit_has_no_warning(self):
+        admin_user = User.objects.create_superuser(username='d077-admin2', password='test-password')
+        self.client.force_login(admin_user)
+        response = self.client.post(reverse('admin:minitos_core_containerunit_add'), {
+            'container_number': 'MSCU1234566', 'owner': self.owner.pk, 'iso_type': self.iso_type.pk,
+            'is_active': 'on',
+        }, follow=True)
+        messages = [str(message) for message in response.context['messages']]
+        self.assertFalse(any('check digit' in message for message in messages), messages)
+
+    def test_container_visit_changelist_warns_on_a_wrong_check_digit(self):
+        admin_user = User.objects.create_superuser(username='d077-admin3', password='test-password')
+        self.client.force_login(admin_user)
+        self.make_container('MSCU1234565')
+        html = self.client.get(reverse('admin:minitos_core_containervisit_changelist')).content.decode()
+        self.assertIn('<td class="field-check_digit">ISO 6346 check digit may be wrong (expected 6).</td>', html)
+
+
+class D077SeedWeightTests(TestCase):
+    """D-077 Q6 default weights in the import_v1 seed (deterministic RNG)."""
+
+    def test_default_weight_rules(self):
+        import random as random_module
+        rng = random_module.Random(1)
+        self.assertEqual(import_v1.default_weight_kg(ISOType.L20, full=False, rng=rng), 2000)
+        self.assertEqual(import_v1.default_weight_kg(ISOType.L40, full=False, rng=rng), 4000)
+        self.assertEqual(rng.getstate(), random_module.Random(1).getstate())  # empties draw nothing
+        draws = [import_v1.default_weight_kg(ISOType.L20, full=True, rng=rng) for _ in range(200)]
+        self.assertTrue(all(10000 <= weight <= 25000 for weight in draws))
+        self.assertEqual(draws, [
+            import_v1.default_weight_kg(ISOType.L20, full=True, rng=rng2)
+            for rng2 in [random_module.Random(1)] for _ in range(200)
+        ])
+
+    def test_seeded_fcl_weights_are_10_to_25_t_and_stable(self):
+        first = [visit.weight for visit in reset_scenario('import_v1', containers=5)['container_visits']]
+        again = [visit.weight for visit in reset_scenario('import_v1', containers=5)['container_visits']]
+        self.assertEqual(first, again)
+        self.assertTrue(all(10000 <= weight <= 25000 for weight in first), first)
+
+    def test_seeded_rows_in_stowage_order(self):
+        reset_scenario('import_v1', containers=3)
+        visit = CarrierVisit.objects.get()
+        user = User.objects.create_user(username='d077-seed', password='test-password')
+        self.client.force_login(user)
+        html = self.client.get(list_url(visit.location, visit)).content.decode()
+        # One row, tiers 82, 84, 86 on deck: top tier first.
+        self.assertEqual(field_values(html, 'vessel-slot'), ['0330686', '0330684', '0330682'])
+        self.assertTrue(all(value.endswith(' t') for value in field_values(html, 'weight')))
