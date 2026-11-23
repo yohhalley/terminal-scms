@@ -153,18 +153,23 @@ file preserves active commands and recent CHE state across process restart.
   applies it as below and logs a WARNING. The 10-minute leg stall
   (`Sim/Timing/LegStallTimeoutS`, `failed`/`SIMULATOR_FAILURE`) does not
   depend on the switch and still ends the job when it is off (D-060). With
-  the switch on, hand-off waits (W1 to W4) pause the stall clock; the clock
-  still runs in motion and work states (including RTG `gantry_to_bay`
-  positioning). Each waiting period starts its own no-show clock.
-  Remaining live legs are cancelled (`Command/Reason` = the same code) and
-  the order ends complete by exception (D-017). A CHE that keeps waiting
+  the switch off, the stall clock keeps running in open hand-off waits;
+  after `LegStallTimeoutS` only the waiting leg fails with
+  `SIMULATOR_FAILURE`, and the counterpart keeps its leg until OES cancels
+  it. Remaining live legs are cancelled (`Command/Reason` = the same code)
+  and the order ends complete by exception (D-017). With the switch on,
+  hand-off waits (W1 to W4) pause the stall clock; the clock still runs in
+  motion and work states (including RTG `gantry_to_bay` positioning). Each
+  waiting period starts its own no-show clock. A CHE that keeps waiting
   re-reports `handoff_timed_out` every timeout period (D-059) until the
   wait ends (OES cancel of the waiting leg, or, once built, a D-056 skip),
-  each with a new `Command/Result/Id`; OES raises the exception once, and a
-  late or duplicate report on a hand-off already in `exception` or
-  `cancelled` (same side, any time later, also after the order has completed
-  by exception) is an INFORMATIONAL no-op: no second `handoff_exception`, no
-  cancel, no conflict flag. A report after
+  each with a new `Command/Result/Id`. One CHE reports per `HandoffId`
+  (the giver on a same-tick tie); its repeats use the same command id as
+  its first report (for the TT at H2, the `assign_handoff` id). OES raises
+  the exception once, and a late or duplicate report on a hand-off already
+  in `exception` or `cancelled` (same side, any time later, also after the
+  order has completed by exception) is an INFORMATIONAL no-op: no second
+  `handoff_exception`, no cancel, no conflict flag. A report after
   `transferred` is a contract breach (WARNING, `handoff_not_pending`,
   flagged on the hand-off) and does not undo the transfer. A Godot `failed`
   result with `Command/Result/Reason` `SIMULATOR_FAILURE` is a stall
@@ -182,7 +187,7 @@ file preserves active commands and recent CHE state across process restart.
   `detail` is optional free text for the consumer (the schema requires it on
   both exception events). A rejected result is stored with a reason and
   logged, never rolled back into the DDATA.
-- **RTG positioning (TCL-034e, D-058).** Godot publishes NBIRTH
+- **RTG positioning (TCL-034e, D-058, `Contract/Version` `tcl-002.4`).** Godot publishes NBIRTH
   `Sim/Timing/RtgPositioningS` (`Int64`, whole seconds of sim time). There
   is no env key; the value comes from the timing profile only: `realistic`
   30 (`SimTiming.REALISTIC_RTG_POSITIONING_S`), `fast` 0. From its command

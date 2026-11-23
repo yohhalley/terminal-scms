@@ -153,7 +153,7 @@ the real failures. When a bug is fixed the test reports "unexpected success":
 remove its marker in the same change.
 
 
-## Sparkplug timing: `Sim/Timing/RtgPositioningS` (TCL-034e, D-058)
+## Sparkplug timing: `Sim/Timing/RtgPositioningS` (TCL-034e, D-058, `Contract/Version` `tcl-002.4`)
 
 Godot publishes this NBIRTH metric as `Int64` (whole seconds of sim time).
 The value comes from the timing profile only; there is no env key:
@@ -168,7 +168,11 @@ MiniTOS does not consume it. See `apps/terminal-oes/docs/UNS_CONTRACT.md`.
 
 With the no-show switch on, hand-off waits (W1 to W4) pause the stall
 clock; each waiting period starts its own no-show clock. With the switch
-off, the stall clock is the backstop in open hand-off waits (D-060). A
-CHE that keeps waiting re-reports `handoff_timed_out` every timeout
-period until the wait ends (OES cancel of the waiting leg, or, once
-built, a D-056 skip) (D-059).
+off, the stall clock keeps running in open hand-off waits (D-060); after
+`LegStallTimeoutS` only the waiting leg fails with `SIMULATOR_FAILURE`,
+and the counterpart keeps its leg until OES cancels it. A CHE that keeps
+waiting re-reports `handoff_timed_out` every timeout period until the
+wait ends (OES cancel of the waiting leg, or, once built, a D-056 skip)
+(D-059). One CHE reports per `HandoffId` (the giver on a same-tick tie);
+its repeats use the same command id as its first report (for the TT at
+H2, the `assign_handoff` id).
