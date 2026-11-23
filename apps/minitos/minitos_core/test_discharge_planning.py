@@ -77,9 +77,14 @@ class CreatesOrdersTests(DischargePlanningTestBase):
 
         orders = list(self.discharge_orders())
         self.assertEqual(self.visit.status, CarrierVisit.IN_OPERATION)
+        # BL-34a (D-079): the seed stows box n at tier 82 + 2n, so the last
+        # box is on top and is planned (and prioritised) first.
         self.assertEqual(
             [order.container_number_id for order in orders],
-            [cv.pk for cv in self.containers_on_visit],
+            [cv.pk for cv in reversed(self.containers_on_visit)],
+        )
+        self.assertEqual(
+            [order.priority for order in orders], sorted(order.priority for order in orders),
         )
         for order in orders:
             self.assertEqual(order.status, Order.PLANNED)
@@ -176,7 +181,7 @@ class CreatesOrdersTests(DischargePlanningTestBase):
 
         self.assertEqual(
             [order.container_number_id for order in self.discharge_orders()],
-            [cv.pk for cv in self.containers_on_visit[1:]],
+            [cv.pk for cv in reversed(self.containers_on_visit[1:])],  # top tier first (BL-34a)
         )
 
     def test_no_free_slot_refuses_in_operation_with_a_clear_error(self):

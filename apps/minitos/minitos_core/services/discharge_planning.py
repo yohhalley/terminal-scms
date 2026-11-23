@@ -14,6 +14,11 @@ them as hand-off boundaries (``dispatch.is_handoff_boundary``); only leg 3 ends
 on a yard slot (``destination_inventory_position_id`` set in the release
 payload).
 
+BL-34a (D-079): containers are planned, and get rising priorities, in
+discharge sequence by vessel slot (``vessel_slot_discharge_key``): deck before
+hold, top tier first, within a tier the row nearest the quay first. Release
+and OES dispatch take the lowest priority first, so they follow it too.
+
 Idempotent: a container that already has a live discharge (MOVE_IN) order is
 adopted, not planned again. Since TCL-010b the import_v1 seed creates no
 orders, so on the demo path every order is created here ("1 created, 0
@@ -85,10 +90,111 @@ def default_rng(visit):
     return yard_planning.slot_rng(visit)
 
 
+# BL-34a (D-079): default discharge sequence for the demo (configurable in a
+# real TOS, post-MVP). ISO 9711 vessel slots are BBBRRTT: hold tiers are
+# 02, 04, ... from the tank top; deck tiers start at 72 or 82. Rows are 00 on
+# the centre line, even rows (02, 04, ...) outwards to port, odd rows
+# (01, 03, ...) outwards to starboard.
+DECK_FIRST_TIER = 50
+SIDE_PORT = 'port'
+SIDE_STARBOARD = 'starboard'
+# ASSUMPTION (BL-34a): the model has no "side alongside" for a visit, so the
+# vessel is taken to berth port side to the quay (the seeded import_v1 box
+# sits in row 06, port side). Make this a visit or site setting when a real
+# berthing side exists.
+DEFAULT_SIDE_ALONGSIDE = SIDE_PORT
+
+
+def row_distance_from_quay(row, side_alongside=DEFAULT_SIDE_ALONGSIDE):
+    """Rank of ISO 9711 vessel ``row`` by distance from the quay: 0 is the row
+    nearest the quay, higher is farther out.
+
+    With the vessel port side alongside, the outermost port row (the highest
+    even row) is nearest the quay, then the even rows inwards to 02, then the
+    centre row 00, then the odd rows outwards to starboard (01, 03, ...).
+    Starboard side alongside is the mirror image. Ranks can be negative; only
+    their order matters."""
+    row = int(row)
+    # Signed athwartship offset from the centre line, positive to port.
+    if row == 0:
+        offset = 0
+    elif row % 2 == 0:
+        offset = row // 2
+    else:
+        offset = -((row + 1) // 2)
+    return -offset if side_alongside == SIDE_PORT else offset
+
+
+def is_deck_tier(tier):
+    """ISO 9711: deck tiers are numbered from 72/82 up, hold tiers from 02."""
+    return int(tier) >= DECK_FIRST_TIER
+
+
+def _slot_bay_row_tier(slot):
+    """(bay, row, tier) of a vessel slot, from its logical address (the
+    ``bay``/``row``/``tier`` keys, or the BBBRRTT ``stow`` string); None for a
+    placeholder slot with no stowage."""
+    if slot is None:
+        return None
+    address = slot.logical_address or {}
+    try:
+        if all(address.get(key) is not None for key in ('bay', 'row', 'tier')):
+            return int(address['bay']), int(address['row']), int(address['tier'])
+        stow = str(address.get('stow') or '')
+        if len(stow) in (6, 7) and stow.isdigit():
+            return int(stow[:-4]), int(stow[-4:-2]), int(stow[-2:])
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def vessel_slot_discharge_key(slot, side_alongside=DEFAULT_SIDE_ALONGSIDE):
+    """Sort key for the discharge sequence of a vessel slot (BL-34a, D-079):
+
+    1. deck before hold;
+    2. top tier first (tier descending), so a tier is cleared before the one
+       below it;
+    3. within a tier, the row nearest the quay first, then the next row out
+       (``row_distance_from_quay``);
+    4. bay ascending as a stable tie-break.
+
+    A slot with no stowage (placeholder) sorts after every real slot."""
+    bay_row_tier = _slot_bay_row_tier(slot)
+    if bay_row_tier is None:
+        return (1,)
+    bay, row, tier = bay_row_tier
+    return (0, 0 if is_deck_tier(tier) else 1, -tier, row_distance_from_quay(row, side_alongside), bay)
+
+
+def _vessel_slots_by_container(visit, container_visits):
+    """Vessel slot (OperationalPosition) per container visit pk, from the
+    terminal's current layout (the slot ``_vessel_slot`` will use)."""
+    layout = visit.location.layout_versions.filter(is_current=True).first() if visit.location_id else None
+    if layout is None:
+        return {}
+    slots = OperationalPosition.objects.filter(
+        layout_version=layout, position_kind=OperationalPosition.VESSEL_SLOT,
+        logical_address__container_visit_id__in=[cv.pk for cv in container_visits],
+    ).order_by('pk')
+    by_container = {}
+    for slot in slots:
+        by_container.setdefault((slot.logical_address or {}).get('container_visit_id'), slot)
+    return by_container
+
+
 def discharge_container_visits(visit):
-    return ContainerVisit.objects.filter(
+    """Container visits still on ``visit``, as a list in discharge sequence
+    (``vessel_slot_discharge_key``, BL-34a / D-079); pk breaks ties. Planning
+    gives priorities in this order, so release and OES dispatch (both by
+    priority) follow it too."""
+    container_visits = list(ContainerVisit.objects.filter(
         ib_carrier=visit, category__in=DISCHARGE_CATEGORIES, status__in=ON_VESSEL_STATUSES,
-    ).select_related('container_number__iso_type').order_by('pk')
+    ).select_related('container_number__iso_type').order_by('pk'))
+    slots = _vessel_slots_by_container(visit, container_visits)
+    return sorted(
+        container_visits,
+        key=lambda cv: (vessel_slot_discharge_key(slots.get(cv.pk)), cv.pk),
+    )
 
 
 def existing_discharge_order(container_visit):
@@ -315,7 +421,8 @@ def plan_visit_discharge(visit, rng=None):
     """Create (or adopt) the discharge order of every container on ``visit``.
 
     Returns a list of PlannedDischarge, one per discharge container, in
-    container-visit order. Raises DischargePlanningError (nothing is written)
+    discharge sequence (BL-34a: ``vessel_slot_discharge_key``); new orders
+    get rising priorities in that sequence. Raises DischargePlanningError (nothing is written)
     if any container cannot be planned.
     """
     visit = CarrierVisit.objects.select_for_update().get(pk=visit.pk)

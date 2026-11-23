@@ -177,6 +177,16 @@ If `simulation_stop` times out, check `make logs-runner`; as a last resort run
   slot chosen by planning). The step prints "N created, 0 adopted"; a rerun
   adopts. `release-discharge` before InOperation fails with "run the
   visit-in-operation step first".
+- **Discharge sequence (BL-34a, D-079).** Planning orders the boxes by vessel
+  slot and gives rising priorities in that order: deck before hold, top tier
+  first, and within a tier the row nearest the quay first, then the next row
+  out, until the tier is cleared; then the tier below. `release-discharge` and
+  OES dispatch take the lowest priority first, so with `CONTAINERS=3` the box
+  in `0330686` goes first and `MSCU1234566` (`0330682`, bottom) last. The
+  vessel is assumed to berth port side alongside (no berthing side in the
+  model yet), so the highest even (port) row is nearest the quay, then the
+  even rows inwards, row 00, then the odd (starboard) rows outwards
+  (`discharge_planning.row_distance_from_quay`).
 
 Demo order: `make scenario-reset` -> `make scenario-step STEP=visit-in-operation`
 -> `make scenario-step STEP=release-discharge` -> `dispatch-next`.
