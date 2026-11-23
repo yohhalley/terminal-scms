@@ -243,6 +243,15 @@ ahead and expect the same dump, so a new wall-clock field fails the test until i
 is added to the list with a reason; shifting `eta`, `ata` or `etd` by three
 days must change the checksum.
 
+## Migrating a database in place (no reset)
+
+A database that is migrated instead of reset gets the TCL-010c lane codes
+(`QC01-L1`, `BLOCK01-TL`) from data migration 0049 on the live layout rows and,
+since BL-53a, from 0051 in every published site snapshot, with the checksum
+recomputed. A not-yet-delivered `configuration.published` event gets the new
+checksum too. An OES projection that already synced that revision keeps the old
+codes until the next publish; `make scenario-reset` republishes.
+
 ## Event fixture for terminal-oes
 
 `apps/terminal-oes/execution/fixtures/scenario_import_v1_events.json` holds the

@@ -213,6 +213,14 @@ Substantive automated coverage exists for:
   with the historical models: backwards restores the old codes, forwards
   returns the exact seeded canonical dump; it skips an interface whose asset
   already has the target code, and is a no-op without the lanes.
+- BL-53a published snapshot lane codes (`test_bl53a_snapshot_lane_codes.py`,
+  6 tests): data migration 0051 applies the 0049 rename to published
+  `SiteConfigurationSnapshot` payloads. A pre-rename snapshot ends with the new
+  codes, a checksum from `site_sync.snapshot_checksum`, and the same `layout`
+  the publisher builds from the renamed rows; its undelivered published event
+  gets the new checksum, delivered events are left alone; backwards restores
+  the original payload and checksum; an already-new snapshot, a clashing target
+  code and no snapshots are no-ops.
 - Multi-Site release contracts: v2 Enterprise/Site topic identity is the
   default; opt-in legacy dual publication reuses the same event ID. The removed
   MiniTOS simulator account tests reflect that headless Godot now bootstraps only

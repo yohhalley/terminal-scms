@@ -6,7 +6,8 @@ demo steps 1-9):
 * Location "Test Terminal", Enterprise ``terminal-velocity``, Site ``test-terminal``;
 * one quay (QUAY-01 / BERTH-01 with bollards), one yard block (BLOCK01, the
   no-show exception block), one road (ROAD-01) and two truck hand-off lanes
-  (QC01 lane under the crane, BLOCK01 transfer lane);
+  (QC01-L1, the QC01 truck lane under the crane, and BLOCK01-TL, the BLOCK01
+  truck lane);
 * CHEs QC01 (STS), TT01, TT02 (TT) and RTG01 (RTG);
 * vessel visit V001 (Arrived) with ``containers`` (default 1, max 5)
   pre-advised 20' import containers, each with its vessel slot.
@@ -235,7 +236,7 @@ def _seed_layout(location, types):
     # QC01-L1.01). Godot derives the served block from the ``-TL`` suffix.
     # The codes stay literal here: the e2e layout parser reads this source.
     block_lane = TransferInterface.objects.create(
-        asset=block, code=f'{EXCEPTION_BLOCK_NAME}-TL', name=f'{EXCEPTION_BLOCK_NAME} truck transfer lane',
+        asset=block, code=f'{EXCEPTION_BLOCK_NAME}-TL', name=f'{EXCEPTION_BLOCK_NAME} truck lane',
         storage_grid=grid, axis=road_axis, road_axis=road_axis, access_policy=policy,
         interface_kind=TransferInterface.VEHICLE_LANE, side=TransferInterface.LEFT,
         geometry=_line(location, (100, 166), (190, 166)),
