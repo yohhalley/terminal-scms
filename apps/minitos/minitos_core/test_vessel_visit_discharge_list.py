@@ -585,7 +585,15 @@ class D077DecisionTests(DemoScreenTestCase):
     def test_weight_column_in_tonnes(self):
         self.make_container('MSCU1234566', weight=18400)
         self.assertEqual(field_values(self.s2(), 'weight'), ['18.4 t'])
-        self.assertIn('<th>Weight</th>', self.s2())
+        html = self.s2()
+        # SME BL-54e: labelled as an estimate, with a tooltip; never VGM.
+        self.assertIn(
+            '<th title="Scenario default, not a declared or verified weight: an empty box shows its tare, '
+            'a full box a seeded default gross weight." data-field="weight-header">Weight (t, est.)</th>',
+            html,
+        )
+        self.assertNotIn('<th>Weight</th>', html)
+        self.assertNotIn('VGM', html)
 
     def test_rows_in_stowage_order_deck_before_hold_top_tier_first(self):
         cases = [

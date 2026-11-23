@@ -46,7 +46,7 @@
         </section>
         <table aria-label="Discharge list">
             <thead>
-                <tr><th>Container number</th><th>Size-type</th><th>Weight</th><th>Vessel slot</th><th>Status</th><th>Discharge order</th><th>Planned yard slot</th><th>Current CHE</th></tr>
+                <tr><th>Container number</th><th>Size-type</th><th title="{{ weight_note }}" data-field="weight-header">{{ weight_header }}</th><th>Vessel slot</th><th>Status</th><th>Discharge order</th><th>Planned yard slot</th><th>Current CHE</th></tr>
             </thead>
             <tbody>
             {% for row in rows %}

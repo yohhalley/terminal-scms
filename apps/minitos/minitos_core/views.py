@@ -323,6 +323,8 @@ def vessel_visit_discharge_list_view(request, location_id, visit_id):
         'visit': visit,
         'timezone_name': demo_display.display_timezone_name(location),
         'missing': demo_display.MISSING_VALUE,
+        'weight_header': demo_display.WEIGHT_HEADER,
+        'weight_note': demo_display.WEIGHT_NOTE,
         'rows': _discharge_list_rows(visit),
     })
 

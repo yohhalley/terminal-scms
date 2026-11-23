@@ -147,6 +147,14 @@ def check_digit_warning(number):
     return None
 
 
+# SME BL-54e: the S2 weight is a scenario default, labelled as an estimate.
+WEIGHT_HEADER = 'Weight (t, est.)'
+WEIGHT_NOTE = (
+    'Scenario default, not a declared or verified weight: an empty box shows its tare, '
+    'a full box a seeded default gross weight.'
+)
+
+
 def format_weight(weight_kg):
     """``18.4 t`` from kilograms; 0 or empty is missing (the field defaults to 0)."""
     if not weight_kg:
