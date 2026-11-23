@@ -193,7 +193,7 @@ same visit gets the same slots on a rerun (D-016).
 Seed and clock (spec K7): `SEED` defaults to 1, the same as `SIMULATOR_SEED`, and
 `make scenario-reset SEED=n` sets both the MiniTOS scenario RNG and the simulator
 seed (OES forwards `SIMULATOR_SEED` to the runner). Seeded business times (visit
-ETA/ATA/ETD, and the D-031 "discharge list received" time, 48 h before berthing per D-077:
+ETA/ATA/ETD, and the D-031 "discharge list received" time, 48 h before ETA per D-077 (counted from ETA, not ATA):
 `import_v1.DISCHARGE_LIST_LEAD_TIME`) are on the simulator clock: `SIMULATOR_START_EPOCH_MS`
 1792886400000, 2026-10-25 00:00 UTC, so the vessel's ATA is sim time 0. A plain
 `make up` recreates `terminal-oes` with `.env`'s `SIMULATOR_SEED` (default 1);

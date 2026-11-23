@@ -252,8 +252,10 @@ and received time in the same display zone), and the import_v1
 seed before and after InOperation.
 D-077 (`D077DecisionTests`, `D077SeedWeightTests`) covers terminal local time
 with the zone on every displayed time, the single-string container number, the
-compact slot, "-" for missing info, the weight column, stowage row order (deck
-before hold, top tier first), the ISO 6346 check-digit warning on S2 and in the
+6-character BBRRTT slot display (3-digit bay above 99; stored code unchanged),
+"-" for missing info, the weight column, stowage row order (deck before hold,
+top tier first, then the row nearest the quay per D-079 with the `QUAY_SIDE`
+default), the 48 h lead counted from ETA, the ISO 6346 check-digit warning on S2 and in the
 admin (entry saves with a warning, never rejects), and the seeded FCL weights.
 
 Not yet directly covered:

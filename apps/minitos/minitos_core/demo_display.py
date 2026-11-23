@@ -5,19 +5,20 @@ admin changelists (S3). Yael answered the board-7 demo-screens card on
 22 Nov 2026 (D-077); each rule is still one constant or function here.
 
 - CONTAINER_NUMBER_FORMAT: 'plain', one string (``MSCU1234566``). D-077 Q5.
-- VESSEL_SLOT_FORMAT: 'compact' bay-row-tier, the stored ISO 9711 BBBRRTT
-  (``0330682`` = Bay 033 · Row 06 · Tier 82, never "Bay 03 / Row 30"). D-077 Q5
-  says a compact bay-row-tier view is good and notes that in practice the bay
-  usually needs only 2 digits (6 characters). We keep the 7-digit code as
-  stored; dropping the leading bay digit is an open question for Yael.
+- VESSEL_SLOT_FORMAT: 'compact' bay-row-tier, shown as 6 characters BBRRTT
+  (``330682`` = Bay 33 · Row 06 · Tier 82) with a 2-digit bay; a bay above 99
+  keeps 3 digits (D-077 Q5, TL 23 Nov). Display only: the stored slot code and
+  ``logical_address.stow`` stay the 7-digit ISO 9711 BBBRRTT (``0330682``).
 - TIME_DISPLAY_ZONE: 'terminal', the terminal's ``Location.timezone``, and
   every displayed time is labelled with the zone (D-077 Q4: "show terminal
   local time (ensure this is clear at all times)").
 - MISSING_VALUE: ``-`` for missing info (D-077: 'default "-" for missing info').
 - TIME_FORMAT: the ``strftime`` format of every time on S2, the panel and the
   admin. Templates use ``{{ value|demo_time:location }}`` and the zone label.
-- stowage_sort_key: discharge list rows in stowage order, deck before hold,
-  top tier first (D-077, agreeing with the SME). See the function.
+- stowage_sort_key: discharge list rows in stowage order: per bay, deck before
+  hold, top tier first (D-077), and within a tier the row nearest the quay
+  first (D-079). "Nearest the quay" is ``row_quay_distance`` with the
+  berthing side ``QUAY_SIDE``.
 - check_digit_warning: a wrong ISO 6346 check digit only warns, never
   rejects (D-077).
 - format_weight: weight in tonnes; seeded defaults are in
@@ -47,11 +48,21 @@ def format_container_number(number):
 
 
 def format_vessel_slot(stow):
+    """Display a stored 7-digit BBBRRTT stow code.
+
+    'compact': BBRRTT, 6 characters with a 2-digit bay (``0330682`` ->
+    ``330682``); a bay above 99 keeps 3 digits (``1010682``). 'spelled':
+    ``Bay 33 · Row 06 · Tier 82``. Anything that isn't 7 digits is shown as is.
+    """
     if not stow:
         return MISSING_VALUE
-    if VESSEL_SLOT_FORMAT == 'spelled' and len(stow) == 7:
-        return f'Bay {stow[:3]} · Row {stow[3:5]} · Tier {stow[5:]}'
-    return stow
+    if len(stow) != 7 or not stow.isdigit():
+        return stow
+    bay = int(stow[:3])
+    bay_text = f'{bay:02d}' if bay <= 99 else f'{bay:03d}'
+    if VESSEL_SLOT_FORMAT == 'spelled':
+        return f'Bay {bay_text} · Row {stow[3:5]} · Tier {stow[5:]}'
+    return f'{bay_text}{stow[3:]}'
 
 
 def display_timezone_name(location):
@@ -76,19 +87,44 @@ def format_local_time(value, location, *, with_zone=False):
 # A tier of 80 or more is on deck (ISO 9711: deck tiers from 82, hold from 02).
 DECK_TIER_FROM = 80
 
+# D-079: within a tier, discharge the row nearest the quay first. Which rows
+# are nearest depends on the vessel side alongside the quay. No model or seed
+# field records it yet, so this is a documented default (TL, 23 Nov 2026):
+# 'port' = port side alongside; 'starboard' = starboard side alongside.
+QUAY_SIDE = 'port'
+
+
+def row_quay_distance(row, quay_side=None):
+    """Rank of a row by distance from the quay (0 = nearest), D-079.
+
+    ISO 9711 row numbering: 00 on the centre line, even rows to port (02, 04,
+    ... outwards), odd rows to starboard (01, 03, ... outwards). With the port
+    side alongside the outermost even row is nearest the quay and the outermost
+    odd row is farthest; with the starboard side alongside it is the reverse.
+    The value only orders rows; it is not a distance in metres.
+    """
+    side = quay_side or QUAY_SIDE
+    # Position across the vessel, port negative, starboard positive.
+    if row == 0:
+        across = 0
+    elif row % 2 == 0:
+        across = -(row // 2)
+    else:
+        across = (row + 1) // 2
+    return across if side == 'port' else -across
+
 
 def stowage_sort_key(stow):
-    """Sort key for a BBBRRTT stow code: stowage order (D-077).
+    """Sort key for a BBBRRTT stow code: stowage / discharge order.
 
-    Per bay (ascending), deck before hold, top tier first; then row ascending
-    as a stable tie-break (D-077 doesn't set the row order; D-079's "row
-    nearest the quay first" is planning's rule and needs the quay side).
+    Per bay (ascending), deck before hold, top tier first (D-077), then within
+    the tier the row nearest the quay first (D-079, ``row_quay_distance``).
     Rows without a real slot come last.
     """
     if not stow or len(stow) != 7 or not stow.isdigit():
         return (1, 0, 0, 0, 0)
     bay, row, tier = int(stow[:3]), int(stow[3:5]), int(stow[5:])
-    return (0, bay, 0 if tier >= DECK_TIER_FROM else 1, -tier, row)
+    return (0, bay, 0 if tier >= DECK_TIER_FROM else 1, -tier, row_quay_distance(row))
 
 
 def check_digit_warning(number):

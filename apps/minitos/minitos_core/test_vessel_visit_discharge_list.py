@@ -149,7 +149,7 @@ class DischargeListPageTests(DemoScreenTestCase):
         html = response.content.decode()
         # D-077 stowage order: tier 84 above tier 82 comes first.
         self.assertEqual(field_values(html, 'container-number'), ['MSCU1234571', 'MSCU1234566'])
-        self.assertEqual(field_values(html, 'vessel-slot'), ['0330684', '0330682'])
+        self.assertEqual(field_values(html, 'vessel-slot'), ['330684', '330682'])
         self.assertEqual(field_values(html, 'iso-type'), ['22G1', '22G1'])
         self.assertEqual(field_values(html, 'container-count'), ['2'])
         self.assertIn('TV DEMO · 007I', html)
@@ -197,7 +197,7 @@ class DischargeListPageTests(DemoScreenTestCase):
         self.assertEqual(field_values(html, 'planned-yard-slot'), ['BLOCK01.01.01.1'])
         self.assertIn('<th>Planned yard slot</th>', html)
         self.assertNotIn('<th>Yard slot</th>', html)
-        self.assertEqual(field_values(html, 'vessel-slot'), ['0330682'])
+        self.assertEqual(field_values(html, 'vessel-slot'), ['330682'])
 
     def test_empty_visit(self):
         html = self.client.get(list_url(self.location, self.visit)).content.decode()
@@ -314,7 +314,7 @@ class PlaceholderConstantTests(TestCase):
 
     def test_defaults(self):
         self.assertEqual(demo_display.format_container_number('MSCU1234566'), 'MSCU1234566')
-        self.assertEqual(demo_display.format_vessel_slot('0330682'), '0330682')
+        self.assertEqual(demo_display.format_vessel_slot('0330682'), '330682')
         self.assertEqual(demo_display.format_vessel_slot(None), '-')
         self.assertEqual(demo_display.format_container_number(None), '-')
         self.assertEqual(import_v1.DISCHARGE_LIST_LEAD_TIME, timedelta(hours=48))
@@ -323,7 +323,7 @@ class PlaceholderConstantTests(TestCase):
         with mock.patch.object(demo_display, 'CONTAINER_NUMBER_FORMAT', 'spaced'):
             self.assertEqual(demo_display.format_container_number('MSCU1234566'), 'MSCU 123456 6')
         with mock.patch.object(demo_display, 'VESSEL_SLOT_FORMAT', 'spelled'):
-            self.assertEqual(demo_display.format_vessel_slot('0330682'), 'Bay 033 · Row 06 · Tier 82')
+            self.assertEqual(demo_display.format_vessel_slot('0330682'), 'Bay 33 · Row 06 · Tier 82')
         location = Location(name='x', timezone='America/Mexico_City')
         value = datetime(2026, 10, 23, 0, 0, tzinfo=UTC)
         self.assertEqual(
@@ -391,7 +391,7 @@ class AdminChangelistTests(DemoScreenTestCase):
         html = response.content.decode()
         self.assertIn('Container number', html)
         self.assertIn('Vessel slot', html)
-        self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
+        self.assertIn('<td class="field-vessel_slot">330682</td>', html)
         self.assertIn('<td class="field-vessel_slot">-</td>', html)
         self.assertIn('<td class="field-container_number_display">MSCU1234571</td>', html)
         self.assertIn('<td class="field-status_display">advised, on inbound vessel</td>', html)
@@ -427,7 +427,7 @@ class AdminChangelistTests(DemoScreenTestCase):
         Order.objects.create(order_type=Order.HOUSEKEEPING)
         html = self.client.get(reverse('admin:minitos_core_order_changelist')).content.decode()
         self.assertIn('<td class="field-container_number_display">MSCU1234566</td>', html)
-        self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
+        self.assertIn('<td class="field-vessel_slot">330682</td>', html)
         self.assertIn('<td class="field-container_number_display">-</td>', html)
 
     def test_carrier_visit_changelist_shows_the_received_time_with_zone(self):
@@ -462,7 +462,10 @@ class SeededDischargeListTests(TestCase):
         self.user = User.objects.create_superuser(username='demo-seed', password='test-password')
         self.client.force_login(self.user)
 
-    def test_seeded_received_time_is_48h_before_berthing(self):
+    def test_seeded_received_time_is_48h_before_eta(self):
+        # TL, 23 Nov 2026: the lead counts from ETA (planning view); ATA = ETA in the seed.
+        self.assertEqual(self.visit.discharge_list_received_at, self.visit.eta - import_v1.DISCHARGE_LIST_LEAD_TIME)
+        self.assertEqual(self.visit.eta, import_v1.VESSEL_ETA)
         self.assertEqual(self.visit.ata, import_v1.SCENARIO_EPOCH)
         self.assertEqual(self.visit.discharge_list_received_at, import_v1.SCENARIO_EPOCH - timedelta(hours=48))
         self.assertLess(self.visit.discharge_list_received_at, self.visit.ata)
@@ -474,7 +477,7 @@ class SeededDischargeListTests(TestCase):
         self.assertEqual(numbers, ['MSCU1234566'])
         for number in numbers:
             self.assertEqual(str(iso6346_check_digit(number[:10])), number[10])
-        self.assertEqual(field_values(html, 'vessel-slot'), ['0330682'])
+        self.assertEqual(field_values(html, 'vessel-slot'), ['330682'])
         # 2026-10-25 00:00 UTC - 48 h, in America/Mexico_City (UTC-6).
         self.assertEqual(field_values(html, 'discharge-list-received'), ['2026-10-22 18:00'])
         self.assertEqual(field_values(html, 'timezone'), ['America/Mexico_City'] * 2)
@@ -495,18 +498,21 @@ class SeededDischargeListTests(TestCase):
         self.assertEqual(field_values(html, 'planned-yard-slot'), [order.to_position.code])
         # S4: S2 shows the slot planning used as the order's origin, V001.0330682.
         self.assertEqual(order.from_position.code, 'V001.0330682')
-        self.assertEqual(field_values(html, 'vessel-slot'), [order.from_position.logical_address['stow']])
-        self.assertEqual(field_values(html, 'vessel-slot'), ['0330682'])
+        self.assertEqual(
+            field_values(html, 'vessel-slot'),
+            [demo_display.format_vessel_slot(order.from_position.logical_address['stow'])],
+        )
+        self.assertEqual(field_values(html, 'vessel-slot'), ['330682'])
 
     def test_seeded_admin_changelists(self):
         html = self.client.get(reverse('admin:minitos_core_containervisit_changelist')).content.decode()
         self.assertIn('<td class="field-container_number_display">MSCU1234566</td>', html)
-        self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
+        self.assertIn('<td class="field-vessel_slot">330682</td>', html)
         self.assertIn('<td class="field-status_display">advised, on inbound vessel</td>', html)
         self.visit.status = CarrierVisit.IN_OPERATION
         self.visit.save()
         html = self.client.get(reverse('admin:minitos_core_order_changelist')).content.decode()
-        self.assertIn('<td class="field-vessel_slot">0330682</td>', html)
+        self.assertIn('<td class="field-vessel_slot">330682</td>', html)
 
 
 class D032StatusLabelTests(TestCase):
@@ -548,10 +554,23 @@ class D077DecisionTests(DemoScreenTestCase):
         self.assertEqual(demo_display.CONTAINER_NUMBER_FORMAT, 'plain')
         self.assertEqual(field_values(self.s2(), 'container-number'), ['MSCU1234566'])
 
+    def test_vessel_slot_shows_6_characters_bay_above_99_keeps_3(self):
+        fmt = demo_display.format_vessel_slot
+        self.assertEqual(fmt('0330682'), '330682')
+        self.assertEqual(fmt('0010282'), '010282')
+        self.assertEqual(fmt('0990682'), '990682')
+        self.assertEqual(fmt('1010682'), '1010682')
+        self.assertEqual(fmt('33-06-82'), '33-06-82')
+        visit = self.make_container('MSCU1234566')
+        position = self.make_slot(visit, '0330682')
+        self.assertEqual(field_values(self.s2(), 'vessel-slot'), ['330682'])
+        position.refresh_from_db()
+        self.assertEqual(position.logical_address['stow'], '0330682')  # stored code unchanged
+
     def test_vessel_slot_is_compact_bay_row_tier(self):
         self.make_slot(self.make_container('MSCU1234566'), '0330682')
         self.assertEqual(demo_display.VESSEL_SLOT_FORMAT, 'compact')
-        self.assertEqual(field_values(self.s2(), 'vessel-slot'), ['0330682'])
+        self.assertEqual(field_values(self.s2(), 'vessel-slot'), ['330682'])
 
     def test_missing_info_is_a_hyphen(self):
         self.assertEqual(demo_display.MISSING_VALUE, '-')
@@ -582,14 +601,39 @@ class D077DecisionTests(DemoScreenTestCase):
             if stow:
                 self.make_slot(visit, stow)
         self.assertEqual(
-            field_values(self.s2(), 'vessel-slot'), ['0330686', '0330682', '0330206', '0330204', '0350684', '-'],
+            field_values(self.s2(), 'vessel-slot'), ['330686', '330682', '330206', '330204', '350684', '-'],
         )
+
+    def test_row_quay_distance_port_and_starboard(self):
+        rank = demo_display.row_quay_distance
+        rows = [0, 1, 2, 3, 4, 5, 6]
+        self.assertEqual(demo_display.QUAY_SIDE, 'port')
+        # Port side alongside: outermost port row first, outermost starboard row last.
+        self.assertEqual(sorted(rows, key=rank), [6, 4, 2, 0, 1, 3, 5])
+        self.assertEqual(sorted(rows, key=lambda row: rank(row, 'starboard')), [5, 3, 1, 0, 2, 4, 6])
+        with mock.patch.object(demo_display, 'QUAY_SIDE', 'starboard'):
+            self.assertEqual(sorted(rows, key=rank), [5, 3, 1, 0, 2, 4, 6])
+
+    def test_rows_within_a_tier_nearest_the_quay_first(self):
+        # D-079: top tier first, then nearest the quay, then the tier below.
+        for number, stow in [
+            ('MSCU1234566', '0330182'), ('MSCU1234571', '0330082'), ('MSCU1234587', '0330282'),
+            ('MSCU1234592', '0330684'), ('MSCU1234608', '0330482'), ('MSCU1234613', '0330584'),
+        ]:
+            self.make_slot(self.make_container(number), stow)
+        self.assertEqual(
+            field_values(self.s2(), 'vessel-slot'), ['330684', '330584', '330482', '330282', '330082', '330182'],
+        )
+        with mock.patch.object(demo_display, 'QUAY_SIDE', 'starboard'):
+            self.assertEqual(
+                field_values(self.s2(), 'vessel-slot'), ['330584', '330684', '330182', '330082', '330282', '330482'],
+            )
 
     def test_stowage_sort_key(self):
         key = demo_display.stowage_sort_key
         self.assertLess(key('0330682'), key('0330206'))  # deck before hold
         self.assertLess(key('0330684'), key('0330682'))  # top tier first
-        self.assertLess(key('0330282'), key('0330482'))  # then row
+        self.assertLess(key('0330482'), key('0330282'))  # then the row nearest the quay (port default)
         self.assertLess(key('0350206'), key(None))
         self.assertEqual(key('bad'), key(None))
 
@@ -672,5 +716,5 @@ class D077SeedWeightTests(TestCase):
         self.client.force_login(user)
         html = self.client.get(list_url(visit.location, visit)).content.decode()
         # One row, tiers 82, 84, 86 on deck: top tier first.
-        self.assertEqual(field_values(html, 'vessel-slot'), ['0330686', '0330684', '0330682'])
+        self.assertEqual(field_values(html, 'vessel-slot'), ['330686', '330684', '330682'])
         self.assertTrue(all(value.endswith(' t') for value in field_values(html, 'weight')))

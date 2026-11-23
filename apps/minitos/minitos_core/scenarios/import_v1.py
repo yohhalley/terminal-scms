@@ -73,9 +73,12 @@ SCENARIO_EPOCH = datetime.fromtimestamp(SIMULATOR_START_EPOCH_MS / 1000, tz=dt_t
 # even bays denote 40' slots (SME review of #26, BL-26b).
 VESSEL_BAY, VESSEL_ROW, VESSEL_FIRST_TIER = 33, 6, 82
 # D-031 demo screens: the seeded "discharge list received" time is this lead
-# before berthing (the seed's ``eta`` = ``ata`` = SCENARIO_EPOCH), one time per
-# vessel call. 48 h: board-7 card Q2/Q3, answered "OK" by Yael (D-077).
+# before the vessel's ETA, one time per vessel call. 48 h: board-7 card Q2/Q3,
+# answered "OK" by Yael (D-077). Counted from ETA, not ATA (TL, 23 Nov 2026):
+# the list is a planning input and ATA doesn't exist before arrival. In the
+# seed ETA = ATA = SCENARIO_EPOCH, so the seeded instant is unchanged.
 DISCHARGE_LIST_LEAD_TIME = timedelta(hours=48)
+VESSEL_ETA = SCENARIO_EPOCH
 # D-077 Q6 default weights (kg): an empty box weighs its tare, roughly 2 t for
 # a 20' and 4 t for a 40'; a full (FCL) box gets a seeded random gross weight
 # of 10-25 t "for now". D-077 names no 45' tare; it uses the 40' value here.
@@ -346,8 +349,8 @@ def _seed_discharge(location, types, site_layout, rng, containers):
         name=VISIT_NAME, visit_type=CarrierVisit.VESSEL, status=CarrierVisit.ARRIVED,
         location=location, vessel_name='TV PIONEER', voyage_number='001I',
         carrier='Terminal Velocity Line', berth='BERTH-01', planned_berth=site_layout['berth'],
-        eta=SCENARIO_EPOCH, ata=SCENARIO_EPOCH, etd=SCENARIO_EPOCH + timedelta(hours=12),
-        discharge_list_received_at=SCENARIO_EPOCH - DISCHARGE_LIST_LEAD_TIME,
+        eta=VESSEL_ETA, ata=SCENARIO_EPOCH, etd=SCENARIO_EPOCH + timedelta(hours=12),
+        discharge_list_received_at=VESSEL_ETA - DISCHARGE_LIST_LEAD_TIME,
         moves_in=containers, moves_import=containers, total_moves=containers,
         primary_equipment_type=types['STS'],
     )
