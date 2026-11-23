@@ -57,6 +57,10 @@ DISPATCH_EQUIPMENT_INVALID = "equipment_invalid"
 # TL TCL-028: the failure_reason / leg_failed ``reason`` of a failed leg whose
 # result carries no Command/Result/Reason (missing, null or blank).
 DEFAULT_FAILURE_REASON = "UNSPECIFIED"
+# D-049 (Yael, 2026-11-15): once the box is on a truck (the QC -> TT hand-off
+# has transferred custody), an operator cancel is refused and the order
+# completes as planned. MiniTOS applies the same rule (same code).
+CANCEL_REFUSED_IN_TRANSIT = "cancel_refused_in_transit"
 # QA M1: a request body that fails validation (HTTP 400, with DRF ``errors``).
 DISPATCH_INVALID_REQUEST = "invalid_request"
 # TL review S-1: a leg is in flight, but its session is stopped or offline, so
@@ -793,6 +797,15 @@ def apply_command_event(
 
     failed = event == "failed"
     cancelled = event == "cancelled"
+    if cancelled and notify_che and order.handoffs.filter(status=Handoff.TRANSFERRED).exists():
+        # D-049: only the operator API sets notify_che. A ``cancelled`` result
+        # from the CHE itself answers a cancel DCMD OES already sent, so it is
+        # not refused here.
+        raise ValidationError(
+            "The container is already on a truck; a cancel is refused and the "
+            "order completes as planned (D-049).",
+            code=CANCEL_REFUSED_IN_TRANSIT,
+        )
     # §3.2c: the code is kept as sent (not stripped); only a missing, null or
     # blank code on a failure becomes the default.
     reason = "" if reason is None else str(reason)
