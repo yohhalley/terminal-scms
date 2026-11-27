@@ -239,6 +239,13 @@ class ContainerVisit(models.Model):
     )
     last_updated = models.DateTimeField(auto_now=True)
 
+    def get_status_display(self):
+        # D-032: display-label only. The stored enum value stays Preadvised
+        # (no migration, no status change at vessel arrival).
+        if self.status == self.PREADVISED:
+            return 'advised, on inbound vessel'
+        return dict(self.STATUS_CHOICES).get(self.status, self.status)
+
     def __str__(self):
         if self.container_number_id:
             return self.container_number.container_number
@@ -2644,6 +2651,13 @@ class CarrierVisit(models.Model):
     etd = models.DateTimeField(blank=True, null=True)
     ata = models.DateTimeField(blank=True, null=True)
     atd = models.DateTimeField(blank=True, null=True)
+    # D-031 (demo screens, TCL-demo-screens): when the terminal received the
+    # line's discharge list for this vessel call. One time per call (D-077 Q3);
+    # the import_v1 seed sets it 48 h before ``eta`` (counted from ETA, not ATA;
+    # import_v1.DISCHARGE_LIST_LEAD_TIME). Shown as "Discharge list received" on
+    # the vessel visit panel and the discharge list page; blank means unknown
+    # and shows demo_display.MISSING_VALUE ("-").
+    discharge_list_received_at = models.DateTimeField(blank=True, null=True)
     vessel_name = models.CharField(max_length=50, blank=True, null=True)
     voyage_number = models.CharField(max_length=20, blank=True, null=True)
     carrier = models.CharField(max_length=50, blank=True, null=True)

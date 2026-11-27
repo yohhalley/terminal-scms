@@ -237,6 +237,26 @@ covers list rendering (status, eta/etd, ata/atd in the terminal timezone),
 buttons per status from the D-025 rules, CSRF-protected transition POSTs,
 server-side refusal of backward/skipped/unknown statuses, and the
 InOperation save path that TCL-010 discharge planning hooks into.
+The demo screens (D-041, D-031; `test_vessel_visit_discharge_list.py`) cover
+the read-only discharge list page (container number, vessel slot via
+`logical_address.container_visit_id` in the current layout, as planning,
+discharge order and planned yard slot, '-' for missing values, terminal-time
+"Discharge list received" and "Berthed" with the zone named, login and
+`can_view_terminal`/404 scoping, GET/HEAD-only, query count independent of the
+number of containers), the panel's link and received time, the
+`services/vessel_slots.py` helper (real slot, planning placeholder, malformed
+stow, other position kinds, non-current layouts), the `demo_display.py`
+placeholder switches rendered through S2, the panel and the admin, the
+ContainerVisit/Order/CarrierVisit admin changelist columns (CarrierVisit `ata`
+and received time in the same display zone), and the import_v1
+seed before and after InOperation.
+D-077 (`D077DecisionTests`, `D077SeedWeightTests`) covers terminal local time
+with the zone on every displayed time, the single-string container number, the
+6-character BBRRTT slot display (3-digit bay above 99; stored code unchanged),
+"-" for missing info, the weight column, stowage row order (deck before hold,
+top tier first, then the row nearest the quay per D-079 with the `QUAY_SIDE`
+default), the 48 h lead counted from ETA, the ISO 6346 check-digit warning on S2 and in the
+admin (entry saves with a warning, never rejects), and the seeded FCL weights.
 
 Not yet directly covered:
 

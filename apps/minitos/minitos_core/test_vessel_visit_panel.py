@@ -84,7 +84,7 @@ class PanelListTests(PanelTestCase):
         self.assertIn('data-status="Arrived"', arrived)
         self.assertIn("MSC Demo", arrived)
         self.assertIn('<span data-field="ata">2026-11-02 08:30</span>', arrived)
-        self.assertIn('<span data-field="atd">—</span>', arrived)
+        self.assertIn('<span data-field="atd">-</span>', arrived)
         departed = row_html(html, "TCL009-D")
         self.assertIn('data-status="Departed"', departed)
         self.assertIn('<span data-field="atd">2026-11-01 18:45</span>', departed)
@@ -319,7 +319,7 @@ class SeededDemoPanelTests(TestCase):
         html = self.client.get(panel_url(self.location)).content.decode()
         row = row_html(html, self.visit.name)
         self.assertIn('data-status="Arrived"', row)
-        self.assertNotIn('<span data-field="ata">—</span>', row)
+        self.assertNotIn('<span data-field="ata">-</span>', row)
         self.assertIn("1 inbound", row)
         self.assertEqual(offered_statuses(html, self.visit.name), ["InOperation"])
 

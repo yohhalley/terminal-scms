@@ -233,3 +233,8 @@ Legacy REST fields remain compatible but are no longer CHE columns:
 - OEE Availability and Performance can be calculated from state intervals and
   handling cycles. Quality currently means successful versus failed/aborted
   handling cycles; this is a MiniTOS operational interpretation.
+- `CarrierVisit.discharge_list_received_at` (D-031 demo screens, 21 Nov 2026)
+  is a MiniTOS extension: the time the terminal received the line's discharge
+  list for one vessel call (one value per call, D-077 Q3). It is a display fact only, independent of the
+  visit status and of `ata` (time berthed, D-024); no TIC4.0 subject was mapped
+  to it, and this entry was not checked against the live TIC4.0 publication.
