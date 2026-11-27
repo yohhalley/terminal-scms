@@ -240,7 +240,7 @@ InOperation save path that TCL-010 discharge planning hooks into.
 The demo screens (D-041, D-031; `test_vessel_visit_discharge_list.py`) cover
 the read-only discharge list page (container number, vessel slot via
 `logical_address.container_visit_id` in the current layout, as planning,
-discharge order and planned yard slot, "—" for missing values, terminal-time
+discharge order and planned yard slot, '-' for missing values, terminal-time
 "Discharge list received" and "Berthed" with the zone named, login and
 `can_view_terminal`/404 scoping, GET/HEAD-only, query count independent of the
 number of containers), the panel's link and received time, the

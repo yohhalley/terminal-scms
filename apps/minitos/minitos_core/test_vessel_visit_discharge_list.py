@@ -703,6 +703,7 @@ class D077SeedWeightTests(TestCase):
         rng = random_module.Random(1)
         self.assertEqual(import_v1.default_weight_kg(ISOType.L20, full=False, rng=rng), 2000)
         self.assertEqual(import_v1.default_weight_kg(ISOType.L40, full=False, rng=rng), 4000)
+        self.assertEqual(import_v1.default_weight_kg(ISOType.L45, full=False, rng=rng), 4000)
         self.assertEqual(rng.getstate(), random_module.Random(1).getstate())  # empties draw nothing
         draws = [import_v1.default_weight_kg(ISOType.L20, full=True, rng=rng) for _ in range(200)]
         self.assertTrue(all(10000 <= weight <= 25000 for weight in draws))
