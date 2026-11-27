@@ -328,14 +328,19 @@ func _test_d012b_same_seed_same_holds_other_seed_differs():
 	var pairs := 20
 	var same_ok := 0
 	var differ := 0
+	# TCL-037 N5: one sequence per seed is shared by both checks. Each seed i is
+	# run twice (repeat check) and compared with the sequence of seed i+1
+	# (differ check): 21 + 20 sequences instead of 3 per pair (60), 20 repeat and
+	# 20 differ comparisons as before.
+	var first: Array = _hold_sequence(1000)
 	for i in range(pairs):
-		var seed_a = 1000 + i
-		var seed_b = 5000 + i
-		var first = _hold_sequence(seed_a)
-		if first == _hold_sequence(seed_a):
+		var next_seed = 1000 + i + 1
+		var next_seq: Array = _hold_sequence(next_seed)
+		if first == _hold_sequence(1000 + i):
 			same_ok += 1
-		if first != _hold_sequence(seed_b):
+		if first != next_seq:
 			differ += 1
+		first = next_seq
 	_assert(same_ok == pairs, "D-012b: same seed must repeat the hold sequence (%d/%d)" % [same_ok, pairs])
 	# P(two independent 8-hold sequences match) is small even for a 2..5 s range.
 	_assert(differ == pairs, "D-012b: a different seed must change the sequence (%d/%d)" % [differ, pairs])
