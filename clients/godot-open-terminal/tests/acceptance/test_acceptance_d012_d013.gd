@@ -16,7 +16,7 @@ extends SceneTree
 # asserted against SimTiming.hold_range(profile, "qc"), not the simulator's
 # own readback, and not hard-coded 10..30 s. A shorter realistic-profile
 # variant uses the same rule.
-#   godot --headless --path clients/godot-open-terminal -s res://tests/requires-TCL-014a/test_acceptance_d012_d013.gd
+#   godot --headless --path clients/godot-open-terminal -s res://tests/acceptance/test_acceptance_d012_d013.gd
 
 const HeadlessSimulator = preload("res://source/headless/HeadlessSimulator.gd")
 const SimClock = preload("res://source/headless/SimClock.gd")
@@ -34,6 +34,10 @@ const FAST_PROFILE := SimTiming.PROFILE_FAST
 const REALISTIC_PROFILE := SimTiming.PROFILE_REALISTIC
 ## Sim-time deadline (Sim/TimeMs units) far beyond every test run.
 const COMMAND_EXPIRES_AT_SIM_MS := 86400000
+## Floor used when deriving the "once in this period" window (TCL-037 S1):
+## window = period − max(hold spread, this) − this. Keeps the run, which is
+## budgeted from the *max* hold, just short of the legal D-059 repeat.
+const NO_SHOW_ONCE_MIN_MARGIN_S := 5
 
 var _failed := false
 var _counter := 0
@@ -70,7 +74,7 @@ func _initialize():
 	_test_d012b_same_seed_same_holds_other_seed_differs()
 	_test_d012c_late_tt_deposit_waits_no_drop_no_failure()
 	_test_d012d_tt_waiting_deposit_at_appear_plus_hold()
-	_test_d013_no_show_reports_exception_once()
+	_test_d013_no_show_reports_exception_once_per_period()
 	_test_d013_tt_just_before_timeout_gets_container()
 	_test_realistic_profile_holds_follow_configured_bounds()
 	for line in _summary:
@@ -149,6 +153,92 @@ func _steps_for_no_show(simulator, extra_steps := 20) -> int:
 	var hold_s = int(_hold_bounds(simulator)[1])
 	var timeout_s = int(simulator._tt_no_show_timeout_s)
 	return int(((hold_s + timeout_s) * 1000) / simulator._clock.step_ms) + extra_steps
+
+
+## Seconds after the first handoff_timed_out for the "once in this period" check
+## (TCL-037 S1). Derived from the *configured* time-out (`_tt_no_show_timeout_s`,
+## which D-059 / D-078 use as the repeat period), not from `no_show_repeat_ms`
+## (that would shrink the window to a buggy period and hide the bug). The run
+## is budgeted from the max hold, so the time actually watched after the first
+## report is this window plus (max hold − actual hold). The margin keeps that
+## end just short of the legal first repeat.
+func _once_window_s(simulator) -> int:
+	var period_s = int(simulator._tt_no_show_timeout_s)
+	var bounds = _hold_bounds(simulator)
+	var spread_s = int(bounds[1]) - int(bounds[0])
+	return period_s - maxi(spread_s, NO_SHOW_ONCE_MIN_MARGIN_S) - NO_SHOW_ONCE_MIN_MARGIN_S
+
+
+## Steps from t=0 to max-hold + time-out + the once-window. The default +20
+## slack in `_steps_for_no_show` is intentionally omitted: the window already
+## defines the end, and restoring the 20 would push a short-hold run closer to
+## (or past) the legal D-059 repeat.
+func _steps_for_no_show_window(simulator) -> int:
+	return _steps_for_no_show(simulator, int(_once_window_s(simulator) * 1000 / simulator._clock.step_ms))
+
+
+## "Once in this period" is only meaningful if the window really ran past the
+## first time-out and stopped short of the legal D-059 repeat.
+func _assert_once_window(simulator, results: Array, qc: String, label: String):
+	var window_s = _once_window_s(simulator)
+	var period_ms = _no_show_ms(simulator)
+	var hold_end = _find(results, qc, "waiting_for_handoff")
+	var first = _find(results, qc, "handoff_timed_out")
+	var window_end_ms = int(hold_end.get("Sim/TimeMs", 0)) + period_ms + window_s * 1000
+	_assert(window_s > 0 and window_s * 1000 < period_ms, "%s: once-window %d s must be shorter than the D-059 repeat period %d ms" % [label, window_s, period_ms])
+	_assert(simulator._clock.now_ms >= window_end_ms, "%s: sim ran to %d ms, past time-out + %d s window (%d ms)" % [label, simulator._clock.now_ms, window_s, window_end_ms])
+	var first_ms = int(first.get("Sim/TimeMs", 0))
+	_assert(simulator._clock.now_ms < first_ms + period_ms, "%s: once-window ended at %d ms, before the legal repeat at %d ms" % [label, simulator._clock.now_ms, first_ms + period_ms])
+
+
+func _find_all(results: Array, device: String, event: String) -> Array:
+	var out: Array = []
+	for item in results:
+		if item.device == device and str(item.m["Command/Result/Event"]) == event:
+			out.append(item.m)
+	return out
+
+
+## Shared by the fast and realistic arms (TCL-037 S1/S2). After the command is
+## sent: watch until just before the legal repeat and assert one report; then
+## step to just past first + period and assert exactly one more, at the
+## expected time (tick tolerance), same Command/Id, new Result/Id.
+func _check_no_show_once_per_period(simulator, qc: String, label: String) -> Dictionary:
+	var period_ms = _no_show_ms(simulator)
+	var window_s = _once_window_s(simulator)
+	_steps(simulator, _steps_for_no_show_window(simulator), false)
+	var results = _results(simulator)
+	var appear = _find(results, qc, "container_picked_up")
+	var hold_end = _find(results, qc, "waiting_for_handoff")
+	var reports = _find_all(results, qc, "handoff_timed_out")
+	var events = _events(results, qc)
+	_assert(not reports.is_empty(), "%s: a no-show is reported as an exception: %s" % [label, events])
+	_assert(reports.size() == 1 and not events.has("failed"), "%s: reported once per %d s period, over the %d s window before the D-059 repeat: %s" % [label, int(period_ms / 1000), window_s, events])
+	_assert_once_window(simulator, results, qc, label)
+	_assert(not events.has("container_dropped"), "%s: the QC does not emit container_dropped" % label)
+	var first = reports[0]
+	var t = int(first.get("Sim/TimeMs", -1))
+	var from_appear = t - int(appear.get("Sim/TimeMs", 0))
+	var from_hold_end = t - int(hold_end.get("Sim/TimeMs", 0))
+	_assert(from_hold_end == period_ms, "%s: first time-out at configured %d ms from hold end (got %d ms; from appear %d ms)" % [label, period_ms, from_hold_end, from_appear])
+	# Positive control: just past first + period, the D-059 repeat must arrive.
+	var tick_ms = int(simulator._clock.step_ms)
+	var repeat_at_ms = t + period_ms
+	while simulator._clock.now_ms < repeat_at_ms + tick_ms:
+		_steps(simulator, 1, false)
+	results = _results(simulator)
+	events = _events(results, qc)
+	reports = _find_all(results, qc, "handoff_timed_out")
+	_assert(reports.size() == 2 and not events.has("failed"), "%s: D-059 repeat arrives, exactly one more, just past +%d ms: %s" % [label, period_ms, events])
+	var second = reports[1]
+	_assert(str(second.get("Command/Result/CommandId", "")) == str(first.get("Command/Result/CommandId", "")) and not str(first.get("Command/Result/CommandId", "")).is_empty(), "%s: repeat has the same Command/Id" % label)
+	_assert(str(second.get("Command/Result/Id", "")) != str(first.get("Command/Result/Id", "")) and not str(second.get("Command/Result/Id", "")).is_empty(), "%s: repeat has a new Command/Result/Id" % label)
+	var gap = int(second.get("Sim/TimeMs", -1)) - t
+	_assert(absi(gap - period_ms) <= tick_ms, "%s: repeat at first + period (%d ms, tick %d ms); got gap %d ms" % [label, period_ms, tick_ms, gap])
+	return {
+		"first": first, "second": second, "from_appear": from_appear,
+		"from_hold_end": from_hold_end, "window_s": window_s, "t": t,
+	}
 
 
 func _cmd(che_id: int, extra: Dictionary) -> Dictionary:
@@ -307,16 +397,21 @@ func _test_d012b_same_seed_same_holds_other_seed_differs():
 	var pairs := 20
 	var same_ok := 0
 	var differ := 0
+	# TCL-037 N5: one sequence per seed is shared by both checks. Each seed i is
+	# run twice (repeat check) and compared with the sequence of seed i+1
+	# (differ check): 21 + 20 sequences instead of 3 per pair (60), 20 repeat and
+	# 20 differ comparisons as before.
+	var first: Array = _hold_sequence(1000)
 	for i in range(pairs):
-		var seed_a = 1000 + i
-		var seed_b = 5000 + i
-		var first = _hold_sequence(seed_a)
-		if first == _hold_sequence(seed_a):
+		var next_seed = 1000 + i + 1
+		var next_seq: Array = _hold_sequence(next_seed)
+		if first == _hold_sequence(1000 + i):
 			same_ok += 1
-		if first != _hold_sequence(seed_b):
+		if first != next_seq:
 			differ += 1
+		first = next_seq
 	_assert(same_ok == pairs, "D-012b: same seed must repeat the hold sequence (%d/%d)" % [same_ok, pairs])
-	# P(two independent 8-hold sequences match) is small even for a 2..5 s range.
+	# P(two adjacent-seed 8-hold sequences match) is small even for a 2..5 s range.
 	_assert(differ == pairs, "D-012b: a different seed must change the sequence (%d/%d)" % [differ, pairs])
 	_summary.append("D012b: same seed repeated %d/%d, different seed differed %d/%d (K=8)" % [same_ok, pairs, differ, pairs])
 
@@ -390,29 +485,18 @@ func _test_d012d_tt_waiting_deposit_at_appear_plus_hold():
 
 # --- D-013 ----------------------------------------------------------------------
 
-func _test_d013_no_show_reports_exception_once():
+func _test_d013_no_show_reports_exception_once_per_period():
 	var simulator = _sim(11, QC_LAT - 0.0036)
 	var qc = _qc_device(simulator)
-	var timeout_ms = _no_show_ms(simulator)
 	_send(simulator, QC_ID, _qc(3000))  # no TT command: the TT never shows
-	_steps(simulator, _steps_for_no_show(simulator), false)
-	var results = _results(simulator)
-	var appear = _find(results, qc, "container_picked_up")
-	var hold_end = _find(results, qc, "waiting_for_handoff")
-	var timed_out = _find(results, qc, "handoff_timed_out")
-	var events = _events(results, qc)
-	_assert(not timed_out.is_empty(), "D-013: a no-show is reported as an exception: %s" % [events])
-	_assert(events.count("handoff_timed_out") == 1 and not events.has("failed"), "D-013: reported once, not as failed")
-	_assert(not events.has("container_dropped"), "D-013: the QC does not emit container_dropped")
-	var t = int(timed_out.get("Sim/TimeMs", -1))
-	var from_appear = t - int(appear.get("Sim/TimeMs", 0))
-	var from_hold_end = t - int(hold_end.get("Sim/TimeMs", 0))
 	# D-013 (Tech Lead reading) / D-053: the no-show clock starts at the end of
 	# the D-012 hold (waiting_for_handoff), not when the container appears.
-	_assert(from_hold_end == timeout_ms, "D-013: time-out at configured %d ms sim time from hold end (got %d ms; from appear %d ms)" % [timeout_ms, from_hold_end, from_appear])
-	_assert(str(timed_out.get("Command/Result/HandoffId", "")) == _handoff(3000), "D-013: exception names the hand-off")
-	_summary.append("D013-1: handoff_timed_out at %d ms = appear+%d ms = hold end+%d ms; QC keeps container %d; yard-block move is OES/MiniTOS (not in Godot)" % [
-		t, from_appear, from_hold_end, int(timed_out.get("Carrying/ContainerVisitId", -1))])
+	# D-059 / D-078: the QC reports again every time-out period.
+	var check = _check_no_show_once_per_period(simulator, qc, "D-013")
+	_assert(str(check["first"].get("Command/Result/HandoffId", "")) == _handoff(3000), "D-013: exception names the hand-off")
+	_summary.append("D013-1: first handoff_timed_out at %d ms = appear+%d ms = hold end+%d ms; once-window %d s; D-059 repeat at %d ms; QC keeps container %d; yard-block move is OES/MiniTOS (not in Godot)" % [
+		check["t"], check["from_appear"], check["from_hold_end"], check["window_s"],
+		int(check["second"].get("Sim/TimeMs", -1)), int(check["first"].get("Carrying/ContainerVisitId", -1))])
 	_free(simulator)
 
 
@@ -475,19 +559,11 @@ func _test_realistic_profile_holds_follow_configured_bounds():
 
 	simulator = _sim(11, QC_LAT, REALISTIC_PROFILE)
 	qc = _qc_device(simulator)
-	var timeout_ms = _no_show_ms(simulator)
 	_send(simulator, QC_ID, _qc(3000))
-	_steps(simulator, _steps_for_no_show(simulator), false)
-	results = _results(simulator)
-	appear = _find(results, qc, "container_picked_up")
-	var hold_end = _find(results, qc, "waiting_for_handoff")
-	var timed_out = _find(results, qc, "handoff_timed_out")
-	var events = _events(results, qc)
-	_assert(events.count("handoff_timed_out") == 1 and not events.has("failed"), "realistic: no-show reported once: %s" % [events])
-	var from_appear = int(timed_out.get("Sim/TimeMs", -1)) - int(appear.get("Sim/TimeMs", 0))
-	var from_hold_end = int(timed_out.get("Sim/TimeMs", -1)) - int(hold_end.get("Sim/TimeMs", 0))
 	# D-013 / D-053: the no-show clock starts at hold end, not appear.
-	_assert(from_hold_end == timeout_ms, "realistic: time-out at configured %d ms from hold end (got %d ms; from appear %d ms)" % [timeout_ms, from_hold_end, from_appear])
+	# D-059 / D-078: the QC reports again every time-out period.
+	var check = _check_no_show_once_per_period(simulator, qc, "realistic")
+	var from_hold_end = int(check["from_hold_end"])
 	_free(simulator)
 
 	var values = seen.keys()
