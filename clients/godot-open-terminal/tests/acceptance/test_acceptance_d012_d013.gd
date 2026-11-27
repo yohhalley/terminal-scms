@@ -145,10 +145,31 @@ func _steps_for_hold(simulator, extra_steps := 20) -> int:
 	return int((max_s * 1000) / simulator._clock.step_ms) + extra_steps
 
 
+## Sim seconds a no-show is watched after its first handoff_timed_out for "reported
+## once" (TCL-037 N4; was 2 s). It must stay below the D-059 repeat period (the
+## time-out, 300 s by default): the simulator legitimately reports again at
+## first report + period, so a longer window would not be "once".
+const NO_SHOW_ONCE_WINDOW_S := 60
+
+
 func _steps_for_no_show(simulator, extra_steps := 20) -> int:
 	var hold_s = int(_hold_bounds(simulator)[1])
 	var timeout_s = int(simulator._tt_no_show_timeout_s)
 	return int(((hold_s + timeout_s) * 1000) / simulator._clock.step_ms) + extra_steps
+
+
+## Steps to run for a no-show: up to the time-out plus NO_SHOW_ONCE_WINDOW_S.
+func _steps_for_no_show_window(simulator) -> int:
+	return _steps_for_no_show(simulator, int(NO_SHOW_ONCE_WINDOW_S * 1000 / simulator._clock.step_ms))
+
+
+## "Reported once" is only meaningful if the window really ran past the time-out
+## and is shorter than the D-059 repeat period (= the time-out).
+func _assert_once_window(simulator, results: Array, qc: String, label: String):
+	var hold_end = _find(results, qc, "waiting_for_handoff")
+	var window_end_ms = int(hold_end.get("Sim/TimeMs", 0)) + _no_show_ms(simulator) + NO_SHOW_ONCE_WINDOW_S * 1000
+	_assert(NO_SHOW_ONCE_WINDOW_S * 1000 < _no_show_ms(simulator), "%s: once-window %d s must be shorter than the D-059 repeat period %d ms" % [label, NO_SHOW_ONCE_WINDOW_S, _no_show_ms(simulator)])
+	_assert(simulator._clock.now_ms >= window_end_ms, "%s: sim ran to %d ms, past time-out + %d s window (%d ms)" % [label, simulator._clock.now_ms, NO_SHOW_ONCE_WINDOW_S, window_end_ms])
 
 
 func _cmd(che_id: int, extra: Dictionary) -> Dictionary:
@@ -395,14 +416,15 @@ func _test_d013_no_show_reports_exception_once():
 	var qc = _qc_device(simulator)
 	var timeout_ms = _no_show_ms(simulator)
 	_send(simulator, QC_ID, _qc(3000))  # no TT command: the TT never shows
-	_steps(simulator, _steps_for_no_show(simulator), false)
+	_steps(simulator, _steps_for_no_show_window(simulator), false)
 	var results = _results(simulator)
 	var appear = _find(results, qc, "container_picked_up")
 	var hold_end = _find(results, qc, "waiting_for_handoff")
 	var timed_out = _find(results, qc, "handoff_timed_out")
 	var events = _events(results, qc)
 	_assert(not timed_out.is_empty(), "D-013: a no-show is reported as an exception: %s" % [events])
-	_assert(events.count("handoff_timed_out") == 1 and not events.has("failed"), "D-013: reported once, not as failed")
+	_assert(events.count("handoff_timed_out") == 1 and not events.has("failed"), "D-013: reported once, not as failed, over %d s past the time-out" % NO_SHOW_ONCE_WINDOW_S)
+	_assert_once_window(simulator, results, qc, "D-013")
 	_assert(not events.has("container_dropped"), "D-013: the QC does not emit container_dropped")
 	var t = int(timed_out.get("Sim/TimeMs", -1))
 	var from_appear = t - int(appear.get("Sim/TimeMs", 0))
@@ -477,13 +499,14 @@ func _test_realistic_profile_holds_follow_configured_bounds():
 	qc = _qc_device(simulator)
 	var timeout_ms = _no_show_ms(simulator)
 	_send(simulator, QC_ID, _qc(3000))
-	_steps(simulator, _steps_for_no_show(simulator), false)
+	_steps(simulator, _steps_for_no_show_window(simulator), false)
 	results = _results(simulator)
 	appear = _find(results, qc, "container_picked_up")
 	var hold_end = _find(results, qc, "waiting_for_handoff")
 	var timed_out = _find(results, qc, "handoff_timed_out")
 	var events = _events(results, qc)
-	_assert(events.count("handoff_timed_out") == 1 and not events.has("failed"), "realistic: no-show reported once: %s" % [events])
+	_assert(events.count("handoff_timed_out") == 1 and not events.has("failed"), "realistic: no-show reported once over %d s past the time-out: %s" % [NO_SHOW_ONCE_WINDOW_S, events])
+	_assert_once_window(simulator, results, qc, "realistic")
 	var from_appear = int(timed_out.get("Sim/TimeMs", -1)) - int(appear.get("Sim/TimeMs", 0))
 	var from_hold_end = int(timed_out.get("Sim/TimeMs", -1)) - int(hold_end.get("Sim/TimeMs", 0))
 	# D-013 / D-053: the no-show clock starts at hold end, not appear.
