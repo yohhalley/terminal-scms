@@ -265,7 +265,7 @@ Evidence: `handoffs.py::no_show_detail`, `apply_handoff_timed_out` and `order_ex
   - MiniTOS `test_handoff_execution.py` (AC3.5, 3.8) [PR #13]
   - contract tests `test_contract_execution_events.py` / `test_contract_handoff_events.py` in both services (AC3.4 shape) [PR #14]
   - Godot `test_headless_sim.gd` (`_test_qc_state_machine_*`, `_test_sim_qc_tt_*_end_to_end`, `_test_sim_replay_same_seed`; AC3.6 per service) [PR #15]
-  - D-012/D-013 acceptance in `tests/requires-TCL-014a/test_acceptance_d012_d013.gd` [PR #14], now wired into `make test-godot` and the `godot` CI job [PR #45, TCL-037].
+  - D-012/D-013 acceptance in `tests/acceptance/test_acceptance_d012_d013.gd` [PR #14], now wired into `make test-godot` and the `godot` CI job [PR #45, TCL-037].
 - **Missing:**
   - (a) A cross-service run (compose: MiniTOS + OES + HiveMQ + Godot) asserting AC3.4/3.5 on the real broker. That's TCL-007, S2.
   - (b) The released payload of a real 3-leg discharge order built by MiniTOS. The tests build the legs by hand.
@@ -352,14 +352,14 @@ These issue-level requirements apply after step 9:
 | AC3.1 released payload | `test_released_payload_carries_*` [#13] | `order.released.v1` schema + goldens; a real 3-leg discharge order (TCL-006/TCL-010) |
 | AC3.2–3.4, 3.7–3.9 | OES `test_handoffs.py` [#13]; contract tests [#14] | Broker-level run |
 | AC3.5 custody | MiniTOS `test_handoff_execution.py` [#13]; `test_acceptance_rules.py` [#14] | Whole-sequence consumer test |
-| AC3.6 hold | Godot `test_headless_sim.gd` [#15]; `requires-TCL-014a/test_acceptance_d012_d013.gd` [#14; wired in #45, TCL-037] | — |
+| AC3.6 hold | Godot `test_headless_sim.gd` [#15]; `acceptance/test_acceptance_d012_d013.gd` [#14; wired in #45, TCL-037] | — |
 | AC3.8a–e no-show | OES, MiniTOS [#13]; Godot [#15]; golden [#14] | Cross-service |
 | AC4.1–4.4 | OES happy path [#13]; goldens [#14]; Godot TCL-014b [#17] | MiniTOS whole-sequence; cross-service |
 | AC4.5 RTG slot | Godot TCL-014b [#17] | Broker-level; O12 guard (S2) |
 | AC3.8f, R3 KPIs | — | KPI tests once KPIs exist (S3–S4, D-038, D-042) |
 | AC3.10 custody at QC → TT | — | MiniTOS test (container status rework, D-033) |
 | AC3.11, AC4.9 timing limits | — | TCL-007 CI e2e: ≤5 s wall-clock for reaction steps; sim-time layout bounds for 3d and 4 (D-037, D-050, TCL-007b) |
-| AC3.12–3.14 waiting for TT, twistlocks, timing profile | AC3.14: Godot `test_headless_sim.gd` (`_test_timing_profiles_and_precedence`, `_test_timing_margins_both_profiles` [#33]; `_test_rtg_positioning_before_w4_d058` [#47]); `requires-TCL-014a/test_acceptance_d012_d013.gd` fast and realistic arms [#45, #47] | OES view (D-028/D-040); telemetry (D-029). CI runs `fast` only. |
+| AC3.12–3.14 waiting for TT, twistlocks, timing profile | AC3.14: Godot `test_headless_sim.gd` (`_test_timing_profiles_and_precedence`, `_test_timing_margins_both_profiles` [#33]; `_test_rtg_positioning_before_w4_d058` [#47]); `acceptance/test_acceptance_d012_d013.gd` fast and realistic arms [#45, #47] | OES view (D-028/D-040); telemetry (D-029). CI runs `fast` only. |
 | AC4.7–4.8 block no-show, time-out parameter | — | Godot + OES tests (Sim params task, D-027) |
 | AC1.5, AC4.6 rerun | OES `test_handoffs.py::test_d016_same_seed_same_states_in_the_same_order` [#13]; `execution/test_acceptance_rules.py::test_d016_rerun_produces_same_state_sequence_not_same_messages` [#14] | Full stack (needs TCL-006) |
 | Steps 5–9 | — | TCL-003b, 018, 024, 022b |

@@ -116,7 +116,7 @@ test-godot: build-simulator
 	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
 		godot --headless --path /app -s res://tests/unit/test_cancel_regression.gd
 	$(COMPOSE) --profile simulation run --rm --no-deps godot-simulator \
-		godot --headless --path /app -s res://tests/requires-TCL-014a/test_acceptance_d012_d013.gd
+		godot --headless --path /app -s res://tests/acceptance/test_acceptance_d012_d013.gd
 
 run-simulator-runner: init build-simulator
 	set -a; . ./.env; set +a; python3 apps/simulator-runner/runner.py

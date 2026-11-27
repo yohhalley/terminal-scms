@@ -133,7 +133,7 @@ jobs:
       - name: test_cancel_regression.gd
         run: ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_cancel_regression.gd
       - name: test_acceptance_d012_d013.gd
-        run: ../../.github/scripts/run-godot-test.sh 600 tests/requires-TCL-014a/test_acceptance_d012_d013.gd
+        run: ../../.github/scripts/run-godot-test.sh 600 tests/acceptance/test_acceptance_d012_d013.gd
 
   # Optional: live MQTT lifecycle against HiveMQ CE (same image as compose.yaml).
   # It does not block the workflow; promote it once it has proven stable.
