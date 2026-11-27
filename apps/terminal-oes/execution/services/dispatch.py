@@ -604,18 +604,21 @@ def _mark_dispatched(order, operation, equipment):
     finalize_outbox_event(event)
 
 
-def _active_session(order):
-    session = SimulationSession.objects.select_for_update().filter(
-        site=order.site,
+def _lock_active_session(site_id):
+    """Lock and return the Site's connected, running session, or ``None``.
+
+    Lock hierarchy (OES deadlock fix): the ``SimulationSession`` row is always
+    locked *before* any order, operation, command or CHE row, the same way the
+    Sparkplug ingest (``process_sparkplug_message``) takes it first. Locking the
+    order first and the session second deadlocked against a concurrent DDATA
+    result for the same order (ABBA on ``execution_simulationsession``).
+    """
+    return SimulationSession.objects.select_for_update().filter(
+        site_id=site_id,
         desired_state=SimulationSession.RUNNING_DESIRED,
         actual_state=SimulationSession.RUNNING,
         node_connected=True,
     ).first()
-    if session is None:
-        raise ValidationError(
-            "The Site has no connected, running Sparkplug simulation.", code=DISPATCH_NO_SIMULATION,
-        )
-    return session
 
 
 @transaction.atomic
@@ -626,13 +629,20 @@ def dispatch_next_operation(order_id, *, equipment_id=None):
     receiving leg; both DCMDs carry the same HandoffId and each other's CHE.
     Q18: the TT→RTG hand-off is dispatched only after QC→TT has transferred.
     """
+    # Lock order: session, then order (see ``_lock_active_session``). The Site is
+    # read without a lock; an order never changes Site.
+    site_id = ExecutionOrder.objects.only("site_id").get(pk=order_id).site_id
+    session = _lock_active_session(site_id)
     order = ExecutionOrder.objects.select_for_update().get(pk=order_id)
     if order.status not in {ExecutionOrder.RELEASED, ExecutionOrder.IN_PROGRESS}:
         raise ValidationError(
             "Only released or active orders can be dispatched.", code=DISPATCH_ORDER_NOT_RELEASED,
         )
     first, receiver_operation, chained = _plan_dispatch(order)
-    session = _active_session(order)
+    if session is None:
+        raise ValidationError(
+            "The Site has no connected, running Sparkplug simulation.", code=DISPATCH_NO_SIMULATION,
+        )
 
     if chained:
         giver = first.assignment.equipment
