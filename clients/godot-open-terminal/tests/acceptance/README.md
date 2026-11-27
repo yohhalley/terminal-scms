@@ -12,11 +12,23 @@ deposit event is `handoff_completed`; device ids are MiniTOS CHE names
 
 Wired into `make test-godot` and the `godot` CI job (fast profile, no broker).
 
-## Run time (TCL-037 N5)
+D-059 / D-078: a no-show is reported once per time-out period (default 300 s),
+not once only. The suite derives an "once in this period" window from the
+configured time-out (period − max(hold spread, 5 s) − 5 s; 290 s at the
+default 300 s) and then asserts that the first D-059 repeat arrives just past
+first report + period, in both the fast and the realistic arm.
 
-About 20 s locally (23.8 s before D-012b was trimmed; CI took 36 s at #45).
-D-012a (250 sim runs, 7 s) and D-012b (328 sim runs, 9 s) take most of it; one
-sim run costs about 25 ms, mostly stepping. D-012a keeps all 250 samples because
-it is the distribution check (both bounds must occur). "Reported once" watches
-60 s of sim time past the no-show time-out, which adds about 0.1 s in total; it
-must stay below the D-059 repeat period, which is the time-out (300 s by default).
+## Run time
+
+Local, Godot 4.2.1, fast profile, via `run-godot-test.sh`, after the S1
+window and positive-control change (3 runs): 20.7 s, 20.4 s, 20.0 s.
+Breakdown from a timed run in the same session: D-012a 7.0 s (250 sim runs),
+D-012b 9.4 s (328 sim runs), D-013 once-per-period 0.39 s, realistic variant
+1.64 s (includes hold samples and an early-TT check). The widened window plus
+the positive control added 0.16 s to the fast no-show arm and 0.26 s to the
+realistic variant versus the 60 s window at `45ca577` (still well under 1 s
+each).
+
+CI, at `45ca577` (60 s window, before S1): run 45968480338, godot job
+140402812674, acceptance step 32 s. That figure is not a measurement of the
+widened window.
