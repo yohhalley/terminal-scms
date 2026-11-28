@@ -5,7 +5,7 @@ extends SceneTree
 ## MQTT packet-id wrap. TCL-014b: TT -> RTG at BLOCK01-TL, RTG stack to a dummy
 ## slot (full QC -> TT -> RTG chain). Runs without a broker or OES.
 ##
-##   godot --headless --path . --script tests/unit/test_headless_sim.gd
+##   ../../.github/scripts/run-godot-test.sh 600 tests/unit/test_headless_sim.gd
 
 const HeadlessSimulator = preload("res://source/headless/HeadlessSimulator.gd")
 const SimClock = preload("res://source/headless/SimClock.gd")
