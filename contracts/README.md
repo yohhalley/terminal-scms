@@ -93,7 +93,10 @@ QC->TT and TT->RTG (T-006) and `handoff_exception` with reason
 supersedes `NO_TT_TIMEOUT`). That golden is a W1 (QC waits for the TT). Any waiter
 may report `handoff_timed_out` (QC or TT at H1, TT or RTG at H2); the `detail`
 names the absent type (`no <QC|TT|RTG> within <N> s`) and N is that type's
-session timeout. `data.handoff_id` is also ignored when comparing (derived from the
+session timeout. An RTG report (W4) cannot be due until after
+`Sim/Timing/RtgPositioningS` of positioning has ended (D-058). A CHE that
+keeps waiting re-reports `handoff_timed_out` every timeout period until the
+wait ends (D-059). `data.handoff_id` is also ignored when comparing (derived from the
 session pk). Producer test `execution/test_contract_handoff_events.py`, consumer
 test `minitos_core/test_contract_handoff_events.py`; both skip until TCL-003a is
 merged. The schema requires `handoff_id`, `from_che_id`, `to_che_id` (and the
@@ -148,3 +151,28 @@ Regenerate after an intended producer change, then review the diff:
 Known-bug tests are marked `expectedFailure`; set `SCMS_CONTRACT_STRICT=1` to see
 the real failures. When a bug is fixed the test reports "unexpected success":
 remove its marker in the same change.
+
+
+## Sparkplug timing: `Sim/Timing/RtgPositioningS` (TCL-034e, D-058, `Contract/Version` `tcl-002.4`)
+
+Godot publishes this NBIRTH metric as `Int64` (whole seconds of sim time).
+The value comes from the timing profile only; there is no env key:
+`realistic` 30 (`SimTiming.REALISTIC_RTG_POSITIONING_S`), `fast` 0. From
+its command the RTG stays in `gantry_to_bay` for this long and cannot pick;
+the RTG no-show clock (W4) starts when positioning ends and the RTG is
+ready to pick (D-052). `Sim/Timing/RtgHold{Min,Max}S` is the hold after
+the pick (on `realistic`, 60 s cycle − 30 s positioning = 30 s). The
+execution-event goldens above do not carry this metric (it is Sparkplug,
+not an OES→MiniTOS envelope). OES does not persist it on the session;
+MiniTOS does not consume it. See `apps/terminal-oes/docs/UNS_CONTRACT.md`.
+
+With the no-show switch on, hand-off waits (W1 to W4) pause the stall
+clock; each waiting period starts its own no-show clock. With the switch
+off, the stall clock keeps running in open hand-off waits (D-060); after
+`LegStallTimeoutS` only the waiting leg fails with `SIMULATOR_FAILURE`,
+and the counterpart keeps its leg until OES cancels it. A CHE that keeps
+waiting re-reports `handoff_timed_out` every timeout period until the
+wait ends (OES cancel of the waiting leg, or, once built, a D-056 skip)
+(D-059). One CHE reports per `HandoffId` (the giver on a same-tick tie);
+its repeats use the same command id as its first report (for the TT at
+H2, the `assign_handoff` id).
