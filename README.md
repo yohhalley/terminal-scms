@@ -77,9 +77,26 @@ Useful commands:
 make help
 make logs
 make test
+make test-godot   # pins SIMULATOR_TIMING_PROFILE=fast; uses GODOT_BIN or Docker
 make migrations
 make down
 ```
+
+`make test-godot` runs the same headless Godot suites as the `godot` CI job,
+through `.github/scripts/run-godot-test.sh`, with `SIMULATOR_TIMING_PROFILE=fast`
+pinned so a realistic value from `.env.example`, `compose.yaml`, or the
+environment cannot leak in. This does not change the live-demo default
+(`realistic` in `.env.example` and `compose.yaml`).
+
+- If `GODOT_BIN` is set to a Godot 4.2.1 headless binary (absolute, or
+  relative to the repo root), the suites run on the host the way CI does,
+  with a throwaway `HOME` and `XDG_DATA_HOME`.
+- If `GODOT_BIN` is unset, the same suites run inside the `godot-simulator`
+  Compose image (`make build-simulator`, then `docker compose --profile
+  simulation run --rm --no-deps`), so a local Godot install is not required.
+  The fast profile is passed with `-e` so `compose.yaml` and `.env` cannot
+  override it. This Docker path is not yet verified here; it will be run in
+  the weekly Saturday 12:00 "Yael tests" window on the cloud server (D-065).
 
 Create administrator accounts separately for the MiniTOS admin and protected
 OES operations console. Normal core startup intentionally creates no Godot
